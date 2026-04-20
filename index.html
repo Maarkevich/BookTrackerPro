@@ -2,295 +2,324 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Book Tracker PWA</title>
   <link rel="manifest" href="manifest.json">
+  <!-- Библиотека для сканирования штрих-кодов -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
-    :root { --bg: #0f1117; --surface: #1a1d26; --primary: #4CAF50; --text: #ffffff; --text-sec: #aaa; }
-    body { margin: 0; font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 20px; }
-    header { padding: 15px; display: flex; align-items: center; justify-content: space-between; background: var(--surface); position: sticky; top: 0; z-index: 50; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-    .btn { background: none; border: none; color: var(--text); font-size: 20px; cursor: pointer; padding: 5px; }
-    .btn-add { background: var(--primary); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 24px; }
-    #sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: var(--surface); transition: 0.3s; z-index: 100; padding-top: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.3); overflow-y: auto; }
-    #sidebar.active { left: 0; }
-    #overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 90; }
-    #overlay.active { display: block; }
+    :root { --bg: #0f1117; --surface: #1a1d26; --primary: #4CAF50; --text: #fff; --text2: #888; --border: #333; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 20px; }
     
-    .profile-section { padding: 20px; display: flex; align-items: center; border-bottom: 1px solid #333; margin-bottom: 20px; cursor: pointer; }
-    .avatar-wrap { position: relative; margin-right: 15px; }
-    .avatar { width: 60px; height: 60px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary); background: #333; }
-    .edit-icon { position: absolute; bottom: 0; right: 0; background: var(--primary); width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; border: 2px solid var(--surface); }
-    .user-text h3 { margin: 0; font-size: 18px; }
-    .user-text span { font-size: 12px; color: var(--text-sec); }
-    
-    .sidebar-section { padding: 0 20px; margin-bottom: 20px; }
-    .sidebar-section h3 { margin: 0 0 10px; font-size: 13px; color: var(--text-sec); text-transform: uppercase; letter-spacing: 1px; }
-    .toggle-item { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; cursor: pointer; font-size: 14px; color: var(--text); }
-    .toggle-item input { width: auto; margin: 0; accent-color: var(--primary); transform: scale(1.1); }
-    
-    .container { padding: 15px; }
-    .stats-container { display: flex; gap: 15px; margin: 0 15px 20px; padding: 15px; background: var(--surface); border-radius: 10px; transition: all 0.3s ease; }
-    .stats-container.hidden { display: none; }
-    .stat-box { flex: 1; text-align: center; font-size: 13px; color: var(--text-sec); }
-    .stat-box span { display: block; font-size: 20px; color: var(--text); font-weight: bold; margin-top: 5px; }
-    
-    .book-card { background: var(--surface); border-radius: 8px; padding: 10px; margin-bottom: 15px; display: flex; gap: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .book-cover { width: 80px; height: 110px; border-radius: 4px; object-fit: cover; background: #252830; }
+    /* Шапка */
+    header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface); position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+    header span { font-weight: 600; font-size: 18px; }
+    .btn { background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; padding: 4px; }
+    .add-btn { background: var(--primary); width: 36px; height: 36px; border-radius: 50%; color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+
+    /* Боковое меню */
+    #sidebar { position: fixed; top: 0; left: -100%; width: 280px; height: 100%; background: var(--surface); transition: 0.3s; z-index: 20; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; }
+    #sidebar.open { left: 0; }
+    #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 15; display: none; }
+    #overlay.open { display: block; }
+
+    /* Профиль в меню */
+    .profile { display: flex; align-items: center; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 15px; }
+    .avatar-wrap { position: relative; cursor: pointer; }
+    .avatar { width: 48px; height: 48px; border-radius: 50%; background: #2a2d36; object-fit: cover; border: 2px solid var(--primary); }
+    .avatar-badge { position: absolute; bottom: 0; right: 0; background: var(--primary); width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; border: 2px solid var(--surface); }
+    .profile-text h2 { margin: 0; font-size: 16px; cursor: pointer; }
+    .profile-text span { font-size: 12px; color: var(--text2); }
+
+    /* Вкладки */
+    .tabs { display: flex; gap: 8px; margin-bottom: 15px; }
+    .tab { flex: 1; text-align: center; padding: 10px; background: #222; border-radius: 8px; cursor: pointer; font-size: 14px; transition: 0.2s; }
+    .tab.active { background: var(--primary); color: #fff; font-weight: 500; }
+
+    /* Настройки */
+    .settings { margin-top: 10px; }
+    .settings h3 { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 10px; }
+    .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .toggle-row input { accent-color: var(--primary); transform: scale(1.2); cursor: pointer; }
+
+    /* Статистика */
+    .stats { display: flex; gap: 10px; margin: 0 16px 15px; padding: 12px; background: #151820; border-radius: 10px; transition: all 0.2s; }
+    .stats.hidden { display: none; }
+    .stat { flex: 1; text-align: center; }
+    .stat div { font-size: 12px; color: var(--text2); }
+    .stat span { font-size: 18px; font-weight: bold; color: var(--primary); display: block; margin-top: 4px; }
+
+    /* Список книг */
+    .list { padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+    .book { display: flex; gap: 12px; background: var(--surface); padding: 10px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .book img { width: 70px; height: 100px; object-fit: cover; border-radius: 6px; background: #222; }
     .book-info { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
-    .book-info h4 { margin: 0 0 4px; font-size: 16px; }
-    .book-info .author { color: var(--text-sec); font-size: 13px; margin-bottom: 4px; }
-    .book-info .isbn { font-size: 11px; color: #555; background: #111; padding: 2px 5px; border-radius: 4px; display: inline-block; width: fit-content; }
-    .book-price { font-size: 13px; color: var(--primary); margin-top: 4px; font-weight: bold; transition: opacity 0.2s; }
-    .book-price.hidden { display: none; }
-    .book-info .desc { font-size: 12px; color: #888; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    
-    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); z-index: 200; padding: 20px; box-sizing: border-box; overflow-y: auto; }
-    .modal.active { display: block; }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .form-group { margin-bottom: 15px; }
-    label { display: block; color: var(--text-sec); margin-bottom: 5px; font-size: 13px; }
-    input, textarea { width: 100%; padding: 12px; background: var(--surface); border: 1px solid #333; color: #fff; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+    .book-info h3 { margin: 0 0 4px; font-size: 15px; line-height: 1.2; }
+    .book-info .meta { font-size: 13px; color: var(--text2); }
+    .book-info .price { font-size: 13px; color: var(--primary); font-weight: 600; transition: opacity 0.2s; }
+    .book-info .price.hidden { display: none; }
+    .book-info .desc { font-size: 12px; color: #666; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* Модальное окно */
+    .modal { position: fixed; inset: 0; background: var(--bg); z-index: 30; padding: 20px; overflow-y: auto; display: none; }
+    .modal.open { display: block; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    label { font-size: 13px; color: var(--text2); display: block; margin-bottom: 4px; }
+    input, textarea, select { width: 100%; padding: 10px; margin-bottom: 12px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; font-size: 14px; }
     input:focus, textarea:focus { outline: none; border-color: var(--primary); }
-    .file-label { display: inline-block; padding: 10px 15px; background: #2a2d37; color: var(--primary); border-radius: 6px; cursor: pointer; font-size: 14px; border: 1px dashed var(--primary); }
-    #preview-container { margin-top: 10px; }
-    #preview-img { max-height: 100px; border-radius: 4px; }
-    .save-btn { width: 100%; padding: 15px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; margin-top: 10px; cursor: pointer; }
+    .btn-submit { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; margin-top: 5px; }
+    #reader { width: 100%; margin-bottom: 10px; background: #111; border-radius: 8px; overflow: hidden; }
+    .scan-btn { width: 100%; padding: 10px; background: #2a2d36; color: var(--primary); border: 1px dashed var(--primary); border-radius: 6px; margin-bottom: 10px; cursor: pointer; }
+    .file-label { display: inline-block; padding: 8px 12px; background: #222; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    #coverPreview { max-height: 80px; border-radius: 4px; margin-bottom: 10px; display: none; }
   </style>
 </head>
 <body>
 
-  <div id="overlay" onclick="toggleMenu()"></div>
-  <div id="sidebar">
-    <div class="profile-section">
-      <div class="avatar-wrap" onclick="document.getElementById('avatarInput').click()">
-        <img src="https://via.placeholder.com/60" id="userAvatar" class="avatar">
-        <div class="edit-icon">📷</div>
-        <input type="file" id="avatarInput" accept="image/*" style="display:none">
-      </div>
-      <div class="user-text">
-        <h3 id="userName">Гость</h3>
-        <span>Нажмите на имя, чтобы изменить</span>
-      </div>
-    </div>
-
-    <div class="sidebar-section">
-      <h3>Настройки отображения</h3>
-      <label class="toggle-item">
-        <input type="checkbox" id="togglePrice" checked> Показывать цену на карточках
-      </label>
-      <label class="toggle-item">
-        <input type="checkbox" id="toggleStats" checked> Показывать статистику
-      </label>
-    </div>
-  </div>
-
   <header>
-    <button class="btn" onclick="toggleMenu()">☰</button>
-    <span style="font-weight: bold;">Book Tracker</span>
-    <button class="btn btn-add" onclick="toggleModal(true)">+</button>
+    <button class="btn" onclick="toggleSidebar()">☰</button>
+    <span>Book Tracker PWA</span>
+    <button class="add-btn" onclick="openModal()">+</button>
   </header>
 
-  <div id="statsSection" class="stats-container">
-    <div class="stat-box">📚 Всего книг<br><span id="statCount">0</span></div>
-    <div class="stat-box">💰 Потрачено<br><span id="statTotal">0 ₽</span></div>
+  <div id="overlay" onclick="toggleSidebar()"></div>
+  <div id="sidebar">
+    <div class="profile">
+      <div class="avatar-wrap" onclick="document.getElementById('avatarInput').click()">
+        <img id="userAvatar" class="avatar" src="https://via.placeholder.com/48/4CAF50/FFFFFF?text=U">
+        <div class="avatar-badge">📷</div>
+        <input type="file" id="avatarInput" accept="image/*" hidden>
+      </div>
+      <div class="profile-text">
+        <h2 id="userName" onclick="editName()">Book Tracker</h2>
+        <span id="userStatus">online</span>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('personal')">Личная библиотека</div>
+      <div class="tab" onclick="switchTab('all')">Вся библиотека</div>
+    </div>
+
+    <div class="settings">
+      <h3>Настройки отображения</h3>
+      <div class="toggle-row">
+        <span>Показывать цену на карточках</span>
+        <input type="checkbox" id="togglePrice" checked>
+      </div>
+      <div class="toggle-row">
+        <span>Показывать статистику</span>
+        <input type="checkbox" id="toggleStats" checked>
+      </div>
+    </div>
   </div>
 
-  <div class="container" id="booksList"></div>
+  <div id="statsSection" class="stats">
+    <div class="stat"><div>Книг</div><span id="statCount">0</span></div>
+    <div class="stat"><div>Потрачено</div><span id="statSum">0 ₽</span></div>
+  </div>
 
+  <div id="bookList" class="list"></div>
+
+  <!-- Модалка добавления -->
   <div id="modal" class="modal">
     <div class="modal-header">
-      <h2 style="margin:0">Новая книга</h2>
-      <button class="btn" onclick="toggleModal(false)">✕</button>
+      <h2>Добавить книгу</h2>
+      <button class="btn" onclick="closeModal()">✕</button>
     </div>
-    <div class="form-group">
-      <label>Название</label>
-      <input type="text" id="inpTitle" placeholder="Введите название книги">
-    </div>
-    <div class="form-group">
-      <label>Автор</label>
-      <input type="text" id="inpAuthor" placeholder="Имя автора">
-    </div>
-    <div class="form-group">
-      <label>ISBN</label>
-      <input type="text" id="inpISBN" placeholder="978-...">
-    </div>
-    <div class="form-group">
-      <label>Цена покупки (₽)</label>
-      <input type="number" id="inpPrice" placeholder="0.00" step="0.01" min="0">
-    </div>
-    <div class="form-group">
-      <label>Описание</label>
-      <textarea id="inpDesc" rows="3" placeholder="Ваши заметки..."></textarea>
-    </div>
-    <div class="form-group">
-      <label>Обложка (Ссылка)</label>
-      <input type="url" id="inpCoverUrl" placeholder="https://...">
-    </div>
-    <div class="form-group">
-      <label>Или загрузите фото</label>
-      <label class="file-label">📷 Выбрать / Сделать фото
-        <input type="file" id="inpCoverFile" accept="image/*" style="display:none" onchange="previewFile()">
-      </label>
-      <div id="preview-container"><img id="preview-img" src="" style="display:none"></div>
-    </div>
-    <button class="save-btn" onclick="saveBook()">Добавить</button>
+    
+    <button class="scan-btn" onclick="startScan()">📷 Сканировать штрих-код</button>
+    <div id="reader"></div>
+    <input type="text" id="mIsbn" placeholder="Или введите ISBN вручную" oninput="fetchBookData(this.value)">
+
+    <label>Название</label><input type="text" id="mTitle">
+    <label>Автор</label><input type="text" id="mAuthor">
+    <label>Описание</label><textarea id="mDesc" rows="3"></textarea>
+    <label>Цена покупки (₽)</label><input type="number" id="mPrice" step="0.01" min="0">
+    <label>Обложка (ссылка)</label><input type="url" id="mCoverUrl" placeholder="https://...">
+    <label>Или загрузить фото</label>
+    <input type="file" id="mCoverFile" accept="image/*" hidden onchange="previewCover(this)">
+    <button class="file-label" onclick="document.getElementById('mCoverFile').click()">📷 Выбрать / Сделать фото</button>
+    <img id="coverPreview">
+    
+    <button class="btn-submit" onclick="saveBook()">Сохранить книгу</button>
   </div>
 
   <script>
-    // --- Настройки и Состояние ---
-    const DEFAULT_SETTINGS = { showPrice: true, showStats: true };
-    let appSettings = JSON.parse(localStorage.getItem('appSettings') || JSON.stringify(DEFAULT_SETTINGS));
+    // --- Данные и настройки ---
+    let books = JSON.parse(localStorage.getItem('books') || '[]');
+    let settings = JSON.parse(localStorage.getItem('settings') || '{"showPrice":true,"showStats":true}');
+    let profile = JSON.parse(localStorage.getItem('profile') || '{"name":"Book Tracker","avatar":"https://via.placeholder.com/48/4CAF50/FFFFFF?text=U"}');
+    let currentTab = 'personal';
+    let html5QrcodeScanner = null;
+    let coverBase64 = null;
 
+    // Инициализация интерфейса
+    document.getElementById('togglePrice').checked = settings.showPrice;
+    document.getElementById('toggleStats').checked = settings.showStats;
+    document.getElementById('userName').textContent = profile.name;
+    document.getElementById('userAvatar').src = profile.avatar;
+    applySettings();
+    renderList();
+    updateStats();
+
+    // --- Боковое меню ---
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+      document.getElementById('overlay').classList.toggle('open');
+    }
+
+    // --- Вкладки ---
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+      renderList();
+    }
+
+    // --- Настройки (сохранение без потери данных) ---
+    document.getElementById('togglePrice').onchange = (e) => {
+      settings.showPrice = e.target.checked;
+      saveSettings(); applySettings();
+    };
+    document.getElementById('toggleStats').onchange = (e) => {
+      settings.showStats = e.target.checked;
+      saveSettings(); applySettings();
+    };
+    function saveSettings() { localStorage.setItem('settings', JSON.stringify(settings)); }
     function applySettings() {
-      document.getElementById('togglePrice').checked = appSettings.showPrice;
-      document.getElementById('toggleStats').checked = appSettings.showStats;
-      updateVisibility();
-    }
-
-    function updateVisibility() {
-      const statsEl = document.getElementById('statsSection');
-      if (appSettings.showStats) statsEl.classList.remove('hidden');
-      else statsEl.classList.add('hidden');
-
-      document.querySelectorAll('.book-price').forEach(el => {
-        if (appSettings.showPrice) el.classList.remove('hidden');
-        else el.classList.add('hidden');
-      });
-    }
-
-    document.getElementById('togglePrice').addEventListener('change', (e) => {
-      appSettings.showPrice = e.target.checked;
-      localStorage.setItem('appSettings', JSON.stringify(appSettings));
-      updateVisibility();
-    });
-
-    document.getElementById('toggleStats').addEventListener('change', (e) => {
-      appSettings.showStats = e.target.checked;
-      localStorage.setItem('appSettings', JSON.stringify(appSettings));
-      updateVisibility();
-    });
-
-    // --- Меню ---
-    function toggleMenu() {
-      document.getElementById('sidebar').classList.toggle('active');
-      document.getElementById('overlay').classList.toggle('active');
+      document.getElementById('statsSection').classList.toggle('hidden', !settings.showStats);
+      document.querySelectorAll('.book .price').forEach(el => el.classList.toggle('hidden', !settings.showPrice));
     }
 
     // --- Профиль ---
-    const avatarInput = document.getElementById('avatarInput');
-    const userAvatar = document.getElementById('userAvatar');
-    const userName = document.getElementById('userName');
-
-    const savedProfile = JSON.parse(localStorage.getItem('userProfile') || '{}');
-    if (savedProfile.name) userName.textContent = savedProfile.name;
-    if (savedProfile.avatar) userAvatar.src = savedProfile.avatar;
-
-    userName.onclick = () => {
-      const newName = prompt("Введите ваше имя:", userName.textContent);
-      if (newName) { userName.textContent = newName; saveProfileData(); }
+    document.getElementById('avatarInput').onchange = (e) => {
+      const file = e.target.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { profile.avatar = reader.result; document.getElementById('userAvatar').src = reader.result; saveProfile(); };
+      reader.readAsDataURL(file);
     };
+    function editName() {
+      const newName = prompt('Введите имя пользователя:', profile.name);
+      if(newName) { profile.name = newName; document.getElementById('userName').textContent = newName; saveProfile(); }
+    }
+    function saveProfile() { localStorage.setItem('profile', JSON.stringify(profile)); }
 
-    avatarInput.addEventListener('change', function(e) {
-      if (e.target.files[0]) {
+    // --- Модалка ---
+    function openModal() { 
+      document.getElementById('modal').classList.add('open'); 
+      clearForm(); 
+    }
+    function closeModal() { 
+      document.getElementById('modal').classList.remove('open'); 
+      if(html5QrcodeScanner) html5QrcodeScanner.stop(); 
+    }
+    function clearForm() {
+      ['mIsbn','mTitle','mAuthor','mDesc','mPrice','mCoverUrl'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('mCoverFile').value = '';
+      document.getElementById('coverPreview').style.display = 'none';
+      coverBase64 = null;
+    }
+
+    // --- Сканирование штрих-кода ---
+    function startScan() {
+      const readerDiv = document.getElementById('reader');
+      readerDiv.innerHTML = '';
+      html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250, formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E] });
+      html5QrcodeScanner.render(success => {
+        document.getElementById('mIsbn').value = success.replace(/[^0-9]/g, '');
+        fetchBookData(document.getElementById('mIsbn').value);
+        html5QrcodeScanner.stop();
+      }, err => console.warn(err));
+    }
+
+    // --- Автоподгрузка данных по ISBN (Open Library API) ---
+    async function fetchBookData(isbn) {
+      if(!isbn || isbn.length < 10) return;
+      try {
+        const cleanIsbn = isbn.replace(/[^0-9]/g, '');
+        const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`);
+        const data = await res.json();
+        const key = `ISBN:${cleanIsbn}`;
+        if(data[key]) {
+          const book = data[key];
+          if(book.title) document.getElementById('mTitle').value = book.title;
+          if(book.authors?.length) document.getElementById('mAuthor').value = book.authors.map(a=>a.name).join(', ');
+          if(book.cover?.medium) document.getElementById('mCoverUrl').value = book.cover.medium;
+          if(book.notes) document.getElementById('mDesc').value = book.notes;
+        }
+      } catch(e) { console.log('API недоступно или ISBN не найден'); }
+    }
+
+    // --- Превью обложки из файла ---
+    function previewCover(input) {
+      if(input.files[0]) {
         const reader = new FileReader();
-        reader.onload = (evt) => { userAvatar.src = evt.target.result; saveProfileData(); };
-        reader.readAsDataURL(e.target.files[0]);
-      }
-    });
-
-    function saveProfileData() {
-      localStorage.setItem('userProfile', JSON.stringify({ name: userName.textContent, avatar: userAvatar.src }));
-    }
-
-    // --- Книги ---
-    let currentCoverData = null;
-
-    function toggleModal(show) {
-      const modal = document.getElementById('modal');
-      if (show) {
-        modal.classList.add('active');
-        ['inpTitle','inpAuthor','inpISBN','inpPrice','inpDesc','inpCoverUrl'].forEach(id => document.getElementById(id).value = '');
-        document.getElementById('inpCoverFile').value = '';
-        document.getElementById('preview-img').style.display = 'none';
-        currentCoverData = null;
-      } else modal.classList.remove('active');
-    }
-
-    function previewFile() {
-      const file = document.getElementById('inpCoverFile').files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          currentCoverData = e.target.result;
-          document.getElementById('preview-img').src = currentCoverData;
-          document.getElementById('preview-img').style.display = 'block';
-          document.getElementById('inpCoverUrl').value = '';
-        };
-        reader.readAsDataURL(file);
+        reader.onload = e => { coverBase64 = e.target.result; document.getElementById('coverPreview').src = coverBase64; document.getElementById('coverPreview').style.display = 'block'; };
+        reader.readAsDataURL(input.files[0]);
       }
     }
 
+    // --- Сохранение книги ---
     function saveBook() {
-      const title = document.getElementById('inpTitle').value.trim();
-      if (!title) { alert('Введите название!'); return; }
+      const title = document.getElementById('mTitle').value.trim();
+      if(!title) return alert('Введите название книги!');
 
+      const finalCover = coverBase64 || document.getElementById('mCoverUrl').value.trim() || 'https://via.placeholder.com/70x100?text=NoCover';
+      
       const book = {
         id: Date.now(),
-        title: title,
-        author: document.getElementById('inpAuthor').value.trim(),
-        isbn: document.getElementById('inpISBN').value.trim(),
-        price: document.getElementById('inpPrice').value.trim(),
-        desc: document.getElementById('inpDesc').value.trim(),
-        cover: currentCoverData || document.getElementById('inpCoverUrl').value.trim() || 'https://via.placeholder.com/80x110?text=No+Img'
+        isbn: document.getElementById('mIsbn').value.trim(),
+        title,
+        author: document.getElementById('mAuthor').value.trim(),
+        desc: document.getElementById('mDesc').value.trim(),
+        price: document.getElementById('mPrice').value || '0',
+        cover: finalCover,
+        date: new Date().toISOString(),
+        inPersonal: currentTab === 'personal'
       };
-
-      const books = JSON.parse(localStorage.getItem('myBooks') || '[]');
+      
       books.unshift(book);
-      localStorage.setItem('myBooks', JSON.stringify(books));
-
-      renderBooks();
-      renderStats();
-      toggleModal(false);
+      localStorage.setItem('books', JSON.stringify(books));
+      closeModal();
+      renderList();
+      updateStats();
     }
 
-    function renderBooks() {
-      const books = JSON.parse(localStorage.getItem('myBooks') || '[]');
-      const container = document.getElementById('booksList');
-      container.innerHTML = '';
+    // --- Отрисовка и статистика ---
+    function renderList() {
+      const list = document.getElementById('bookList');
+      list.innerHTML = '';
+      const filtered = currentTab === 'personal' ? books.filter(b => b.inPersonal) : books;
+      
+      if(filtered.length === 0) {
+        list.innerHTML = '<p style="text-align:center; color:#555; margin-top:50px;">Библиотека пуста. Нажмите + чтобы добавить книгу.</p>';
+        return;
+      }
 
-      books.forEach(book => {
-        const priceText = book.price ? `${parseFloat(book.price).toLocaleString('ru-RU')} ₽` : 'Не указана';
-        const html = `
-          <div class="book-card">
-            <img src="${book.cover}" class="book-cover" onerror="this.src='https://via.placeholder.com/80x110?text=Err'">
+      filtered.forEach(b => {
+        const priceText = b.price ? `${parseFloat(b.price).toFixed(2)} ₽` : '';
+        list.innerHTML += `
+          <div class="book">
+            <img src="${b.cover}" onerror="this.src='https://via.placeholder.com/70x100?text=Err'">
             <div class="book-info">
-              <h4>${book.title}</h4>
-              <div class="author">${book.author || 'Автор не указан'}</div>
-              <div class="isbn">ISBN: ${book.isbn || '—'}</div>
-              <div class="book-price ${appSettings.showPrice ? '' : 'hidden'}">${priceText}</div>
-              <div class="desc">${book.desc || ''}</div>
+              <h3>${b.title}</h3>
+              <div class="meta">${b.author || 'Автор не указан'}</div>
+              <div class="price ${settings.showPrice ? '' : 'hidden'}">${priceText}</div>
+              <div class="desc">${b.desc || ''}</div>
             </div>
-          </div>
-        `;
-        container.innerHTML += html;
+          </div>`;
       });
     }
-
-    function renderStats() {
-      const books = JSON.parse(localStorage.getItem('myBooks') || '[]');
-      document.getElementById('statCount').textContent = books.length;
+    function updateStats() {
       const total = books.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
-      document.getElementById('statTotal').textContent = total.toLocaleString('ru-RU') + ' ₽';
+      document.getElementById('statCount').textContent = books.length;
+      document.getElementById('statSum').textContent = total.toFixed(2) + ' ₽';
     }
 
-    // --- Инициализация ---
-    applySettings();
-    renderBooks();
-    renderStats();
-
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(err => console.log('SW error:', err));
-    }
+    // Регистрация SW
+    if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(console.error);
   </script>
 </body>
 </html>

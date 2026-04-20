@@ -1,11 +1,9 @@
 const CACHE = "book-tracker-v2";
 const STATIC_ASSETS = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
-
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then(cache => cache.addAll(STATIC_ASSETS)));
   self.skipWaiting();
 });
-
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -13,7 +11,6 @@ self.addEventListener("activate", (e) => {
     ).then(() => self.clients.claim())
   );
 });
-
 self.addEventListener("fetch", (e) => {
   if (!e.request.url.startsWith(self.location.origin)) return;
   e.respondWith(
@@ -28,7 +25,6 @@ self.addEventListener("fetch", (e) => {
     })
   );
 });
-
 self.addEventListener("sync", (e) => {
   if (e.tag === "sync-books") {
     e.waitUntil(Promise.resolve());
