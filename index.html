@@ -1,325 +1,906 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Book Tracker PWA</title>
-  <link rel="manifest" href="manifest.json">
-  <!-- Библиотека для сканирования штрих-кодов -->
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <style>
-    :root { --bg: #0f1117; --surface: #1a1d26; --primary: #4CAF50; --text: #fff; --text2: #888; --border: #333; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 20px; }
-    
-    /* Шапка */
-    header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface); position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
-    header span { font-weight: 600; font-size: 18px; }
-    .btn { background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; padding: 4px; }
-    .add-btn { background: var(--primary); width: 36px; height: 36px; border-radius: 50%; color: #fff; font-size: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
-
-    /* Боковое меню */
-    #sidebar { position: fixed; top: 0; left: -100%; width: 280px; height: 100%; background: var(--surface); transition: 0.3s; z-index: 20; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; }
-    #sidebar.open { left: 0; }
-    #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 15; display: none; }
-    #overlay.open { display: block; }
-
-    /* Профиль в меню */
-    .profile { display: flex; align-items: center; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 15px; }
-    .avatar-wrap { position: relative; cursor: pointer; }
-    .avatar { width: 48px; height: 48px; border-radius: 50%; background: #2a2d36; object-fit: cover; border: 2px solid var(--primary); }
-    .avatar-badge { position: absolute; bottom: 0; right: 0; background: var(--primary); width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; border: 2px solid var(--surface); }
-    .profile-text h2 { margin: 0; font-size: 16px; cursor: pointer; }
-    .profile-text span { font-size: 12px; color: var(--text2); }
-
-    /* Вкладки */
-    .tabs { display: flex; gap: 8px; margin-bottom: 15px; }
-    .tab { flex: 1; text-align: center; padding: 10px; background: #222; border-radius: 8px; cursor: pointer; font-size: 14px; transition: 0.2s; }
-    .tab.active { background: var(--primary); color: #fff; font-weight: 500; }
-
-    /* Настройки */
-    .settings { margin-top: 10px; }
-    .settings h3 { font-size: 13px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 10px; }
-    .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-    .toggle-row input { accent-color: var(--primary); transform: scale(1.2); cursor: pointer; }
-
-    /* Статистика */
-    .stats { display: flex; gap: 10px; margin: 0 16px 15px; padding: 12px; background: #151820; border-radius: 10px; transition: all 0.2s; }
-    .stats.hidden { display: none; }
-    .stat { flex: 1; text-align: center; }
-    .stat div { font-size: 12px; color: var(--text2); }
-    .stat span { font-size: 18px; font-weight: bold; color: var(--primary); display: block; margin-top: 4px; }
-
-    /* Список книг */
-    .list { padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
-    .book { display: flex; gap: 12px; background: var(--surface); padding: 10px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    .book img { width: 70px; height: 100px; object-fit: cover; border-radius: 6px; background: #222; }
-    .book-info { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
-    .book-info h3 { margin: 0 0 4px; font-size: 15px; line-height: 1.2; }
-    .book-info .meta { font-size: 13px; color: var(--text2); }
-    .book-info .price { font-size: 13px; color: var(--primary); font-weight: 600; transition: opacity 0.2s; }
-    .book-info .price.hidden { display: none; }
-    .book-info .desc { font-size: 12px; color: #666; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-
-    /* Модальное окно */
-    .modal { position: fixed; inset: 0; background: var(--bg); z-index: 30; padding: 20px; overflow-y: auto; display: none; }
-    .modal.open { display: block; }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-    label { font-size: 13px; color: var(--text2); display: block; margin-bottom: 4px; }
-    input, textarea, select { width: 100%; padding: 10px; margin-bottom: 12px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; font-size: 14px; }
-    input:focus, textarea:focus { outline: none; border-color: var(--primary); }
-    .btn-submit { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; margin-top: 5px; }
-    #reader { width: 100%; margin-bottom: 10px; background: #111; border-radius: 8px; overflow: hidden; }
-    .scan-btn { width: 100%; padding: 10px; background: #2a2d36; color: var(--primary); border: 1px dashed var(--primary); border-radius: 6px; margin-bottom: 10px; cursor: pointer; }
-    .file-label { display: inline-block; padding: 8px 12px; background: #222; border-radius: 6px; cursor: pointer; font-size: 13px; }
-    #coverPreview { max-height: 80px; border-radius: 4px; margin-bottom: 10px; display: none; }
-  </style>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#0f1117"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Book Tracker"/>
+<title>Book Tracker</title>
+<link rel="manifest" href="./manifest.json"/>
+<link rel="apple-touch-icon" href="./icon-192.png"/>
+<style>
+:root{--bg:#0f1117;--surface:#1a1d25;--surface2:#222633;--text:#f7fafc;--muted:#9aa0a6;--blue:#4da6ff;--orange:#ff7a00;--green:#3ddc84;--border:rgba(255,255,255,0.09);--shadow:0 20px 60px rgba(0,0,0,0.35);color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}html,body{min-height:100%;background:radial-gradient(circle at top left,rgba(77,166,255,0.18),transparent 34rem),radial-gradient(circle at bottom right,rgba(255,122,0,0.16),transparent 30rem),var(--bg);color:var(--text);overflow-x:hidden}
+button,input,textarea,select{font:inherit;color:inherit}button{cursor:pointer;border:0;background:0}img{max-width:100%}
+#app{width:min(100%,1120px);margin:0 auto;padding:18px 16px 120px}
+#confetti-canvas{position:fixed;inset:0;z-index:80;pointer-events:none}
+/* Drawer */
+.backdrop{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,0.45);opacity:0;pointer-events:none;transition:opacity 220ms ease}
+.backdrop.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;inset:0 auto 0 0;z-index:50;width:min(86vw,340px);padding:20px;background:rgba(15,17,23,0.97);border-right:1px solid var(--border);box-shadow:var(--shadow);transform:translateX(-105%);transition:transform 260ms cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;gap:0}
+.drawer.open{transform:translateX(0)}
+.d-brand{display:flex;align-items:center;gap:12px;margin-bottom:26px;min-height:64px}
+.avatar-wrap{position:relative;flex-shrink:0}
+.avatar-btn{width:52px;height:52px;border-radius:50%;border:2px solid var(--border);overflow:hidden;display:grid;place-items:center;background:linear-gradient(135deg,var(--blue),var(--orange));font-weight:900;font-size:1rem;cursor:pointer;transition:border-color 200ms ease}
+.avatar-btn:hover{border-color:var(--blue)}
+.avatar-btn img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+.avatar-badge{position:absolute;bottom:-3px;right:-3px;font-size:0.65rem;background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:2px 4px;pointer-events:none}
+.d-brand-text strong{display:block;font-size:1rem}
+.d-brand-text .online{font-size:0.78rem;font-weight:700;color:var(--green)}
+.d-brand-text .offline{font-size:0.78rem;font-weight:700;color:var(--muted)}
+.drawer nav{display:grid;gap:8px}
+.drawer nav button{display:flex;align-items:center;gap:12px;width:100%;border:1px solid transparent;border-radius:16px;padding:13px 14px;background:transparent;color:var(--text);text-align:left;transition:background 180ms ease,border-color 180ms ease}
+.drawer nav button.active,.drawer nav button:hover{background:rgba(77,166,255,0.12);border-color:rgba(77,166,255,0.32)}
+.d-footer{margin-top:auto;padding:14px;border:1px solid var(--border);border-radius:18px;background:var(--surface);display:grid;gap:4px}
+.d-footer span{font-weight:700}
+.d-footer small{color:var(--muted);font-size:0.82rem}
+/* Topbar */
+.topbar{position:sticky;top:0;z-index:20;display:grid;grid-template-columns:48px 1fr 48px;gap:12px;align-items:center;padding:12px 0 18px;backdrop-filter:blur(18px)}
+.eyebrow{color:var(--muted);font-size:0.72rem;text-transform:uppercase;letter-spacing:.12em;display:block}
+.topbar h1{margin:2px 0 0;line-height:1.08;font-size:1.4rem;letter-spacing:-.03em}
+.icon-btn{width:46px;height:46px;display:grid;place-items:center;border:1px solid var(--border);border-radius:16px;background:rgba(26,29,37,0.82);color:var(--text);box-shadow:0 10px 24px rgba(0,0,0,0.18);font-size:1.25rem;transition:transform 180ms ease}
+.add-btn{background:linear-gradient(135deg,var(--blue),var(--orange));border:0;font-size:1.55rem;font-weight:800}
+button:active{transform:scale(0.96)}
+/* Onboarding / Empty */
+.onboarding,.empty-state{border:1px solid var(--border);border-radius:24px;background:linear-gradient(180deg,rgba(26,29,37,0.96),rgba(26,29,37,0.72));box-shadow:var(--shadow);min-height:62vh;display:grid;align-content:center;gap:18px;padding:28px;animation:rise 420ms ease both}
+.onboarding h2{font-size:clamp(2rem,10vw,4.6rem);letter-spacing:-.06em;line-height:1.05}
+.onboarding p,.empty-state p{color:var(--muted);max-width:620px;line-height:1.65}
+.pill{width:fit-content;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(77,166,255,0.35);border-radius:999px;padding:7px 10px;color:var(--blue);background:rgba(77,166,255,0.1);font-size:0.82rem;font-weight:700}
+.pill.muted{color:var(--muted);border-color:var(--border);background:rgba(255,255,255,0.04)}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.btn-primary{border-radius:16px;padding:13px 18px;font-weight:800;background:linear-gradient(135deg,var(--blue),#2e7ee8);color:#fff;box-shadow:0 12px 26px rgba(77,166,255,0.25);transition:transform 180ms ease,box-shadow 180ms ease}
+.btn-secondary{border-radius:16px;padding:13px 18px;font-weight:800;border:1px solid var(--border);background:var(--surface2);color:var(--text);transition:transform 180ms ease}
+.btn-danger{border-radius:16px;padding:13px 18px;font-weight:800;background:rgba(255,89,89,0.14);color:#ff7777;border:1px solid rgba(255,89,89,0.32)}
+/* Controls */
+.controls{display:grid;gap:10px;margin:4px 0 18px}
+.search-box{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:18px;padding:0 14px;background:rgba(26,29,37,0.84)}
+.search-box input{flex:1;border:0;background:transparent;padding:13px 0;outline:none;color:var(--text)}
+.controls select{border:1px solid var(--border);border-radius:15px;padding:13px 14px;background:rgba(255,255,255,0.045);color:var(--text);outline:none;width:100%}
+/* Book grid */
+.book-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.book-card{min-width:0;border:1px solid var(--border);border-radius:22px;overflow:hidden;background:var(--surface);text-align:left;box-shadow:0 14px 30px rgba(0,0,0,0.18);animation:cardIn 420ms ease both;transition:transform 180ms ease,box-shadow 180ms ease,border-color 180ms ease;cursor:pointer;width:100%}
+.book-card:hover{transform:translateY(-3px) scale(1.015);border-color:rgba(77,166,255,0.35)}
+.cover{aspect-ratio:0.78;min-height:140px;display:grid;place-items:center;overflow:hidden;position:relative}
+.cover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent,rgba(0,0,0,0.24))}
+.cover img{width:100%;height:100%;object-fit:cover}
+.cover .initials{z-index:1;font-size:2rem;font-weight:900;letter-spacing:-.08em}
+.book-meta{min-height:100px;display:grid;gap:5px;padding:12px}
+.book-meta strong{line-height:1.12;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:0.95rem}
+.book-meta .author{font-size:0.85rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-bottom{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:3px}
+.card-bottom .status-icon{font-size:0.82rem;font-weight:800}
+.card-bottom .rating{color:#ffb74d;font-size:0.82rem;font-weight:800}
+.price-tag{display:inline-block;background:rgba(255,183,77,0.14);color:#ffb74d;border-radius:8px;padding:2px 7px;font-size:0.75rem;font-weight:800;border:1px solid rgba(255,183,77,0.28);margin-top:3px}
+/* Skeleton */
+.skeleton-card{pointer-events:none}
+.skeleton{background:rgba(255,255,255,0.07);overflow:hidden;position:relative}
+.skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);animation:shimmer 1.25s infinite}
+.sk-line{height:14px;border-radius:999px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden;margin:4px 0}
+.sk-line::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);animation:shimmer 1.25s infinite}
+.sk-line.s{width:70%}.sk-line.xs{width:40%}
+/* Modal overlay */
+.overlay{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,0.58);backdrop-filter:blur(10px);animation:fadeIn 180ms ease both}
+.overlay.end{align-items:end}
+.sheet,.modal-box{width:min(100%,760px);max-height:92vh;overflow-y:auto;border:1px solid var(--border);border-radius:28px 28px 18px 18px;background:rgba(26,29,37,0.98);box-shadow:var(--shadow);padding:18px;animation:sheetUp 260ms cubic-bezier(.2,.8,.2,1) both}
+.modal-box{border-radius:24px;max-width:440px}
+.sheet-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;gap:14px}
+.sheet-head h2{margin:2px 0 0;line-height:1.08}
+/* Form */
+.form-grid{display:grid;gap:12px;margin-top:14px}
+.form-grid label,.settings-form label{display:grid;gap:6px;color:var(--muted);font-size:0.88rem;font-weight:700}
+.form-grid label input,.form-grid label select,.form-grid label textarea,.settings-form label input,.manual-input{width:100%;border:1px solid var(--border);border-radius:14px;padding:12px 14px;background:rgba(255,255,255,0.045);color:var(--text);outline:none}
+.form-grid label textarea{resize:vertical}
+.wide{grid-column:1/-1}
+.sticky-actions{position:sticky;bottom:-18px;margin:18px -18px -18px;padding:14px 18px 18px;background:linear-gradient(180deg,rgba(26,29,37,0.78),#1a1d25 40%)}
+/* Detail */
+.detail-cover{position:relative;width:min(72vw,240px);aspect-ratio:0.72;margin:0 auto 16px;display:grid;place-items:center;overflow:hidden;border-radius:22px;box-shadow:0 24px 44px rgba(0,0,0,0.38)}
+.detail-cover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent,rgba(0,0,0,0.2))}
+.detail-cover img{width:100%;height:100%;object-fit:cover}
+.detail-cover .initials{z-index:1;font-size:2.6rem;font-weight:900;letter-spacing:-.08em}
+.detail-card{text-align:center}
+.detail-card h2{font-size:1.8rem;letter-spacing:-.04em;margin-bottom:6px}
+.detail-author{color:var(--muted);margin-bottom:10px}
+.pills-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:12px}
+.desc-box{line-height:1.6;text-align:left;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:16px;padding:12px;color:var(--muted);margin-bottom:14px;font-size:0.9rem}
+.quick-status{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.quick-status button{min-height:52px;border:1px solid var(--border);border-radius:16px;background:rgba(255,255,255,0.04);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:1.3rem;transition:background 180ms ease,border-color 180ms ease}
+.quick-status button.active{background:rgba(77,166,255,0.14)}
+.quick-status button small{font-size:0.62rem;color:var(--muted)}
+.stars{display:grid;grid-template-columns:repeat(10,1fr);gap:2px;margin-bottom:16px}
+.stars button{background:transparent;color:rgba(255,255,255,0.25);font-size:1rem;padding:4px 0}
+.stars button.on{color:#ffb74d}
+/* Stats */
+.stats-view{display:grid;gap:14px}
+.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.stats-grid button{min-height:120px;display:grid;place-items:center;border:1px solid var(--border);background:linear-gradient(180deg,var(--surface),rgba(34,38,51,0.74));color:var(--text);border-radius:18px;padding:14px;text-align:center}
+.stats-grid span{font-size:2.6rem;font-weight:900;letter-spacing:-.08em;color:var(--blue);display:block}
+.stats-grid span.gold{color:#ffb74d;font-size:1.8rem}
+.stats-grid small{color:var(--muted);font-weight:800;font-size:0.82rem}
+.insight-card{border:1px solid var(--border);border-radius:22px;background:linear-gradient(180deg,rgba(26,29,37,0.96),rgba(26,29,37,0.72));box-shadow:var(--shadow);padding:18px;display:grid;gap:10px}
+.insight-card h2{font-size:2rem;letter-spacing:-.05em;color:var(--blue)}
+.insight-card p{color:var(--muted);line-height:1.55;font-size:0.9rem}
+.recent-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:12px}
+.recent-row span{font-size:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-row b{color:#ffb74d;font-size:0.82rem;white-space:nowrap}
+/* Settings */
+.settings-form{display:grid;gap:14px}
+.toggle-row{display:grid;grid-template-columns:1fr auto;align-items:center;border:1px solid var(--border);border-radius:16px;padding:14px;background:rgba(255,255,255,0.035);gap:12px}
+.toggle-row input[type=checkbox]{width:48px;height:26px;accent-color:var(--blue)}
+.toggle-row label{display:contents}
+.toggle-row span{color:var(--text);font-size:0.95rem}
+/* Scanner */
+.scanner-video{width:100%;min-height:220px;object-fit:cover;border-radius:18px;border:1px solid var(--border);background:#05070a;display:block}
+.scan-status{display:flex;align-items:center;gap:8px;margin-bottom:12px;color:var(--muted);font-weight:800;font-size:0.9rem}
+.scan-dot{width:10px;height:10px;border-radius:999px;background:var(--muted)}
+.scan-dot.loading,.scan-dot.scanning{background:var(--orange);animation:blink 900ms infinite}
+.scan-dot.ready{background:var(--green)}
+.scan-dot.fallback{background:var(--blue)}
+.scan-hint{color:var(--muted);font-size:0.85rem;line-height:1.5;margin:8px 0}
+/* Segmented */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;border-radius:16px;background:rgba(255,255,255,0.05);margin:12px 0}
+.seg button{color:var(--muted);background:transparent;border-radius:13px;padding:10px;font-weight:700;font-size:0.9rem}
+.seg button.active{color:var(--text);background:var(--surface2)}
+/* Cover section */
+.cover-mode-seg{max-width:220px;font-size:0.82rem;margin:0}
+.cover-file-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:4px}
+.file-btn{display:inline-flex;align-items:center;gap:6px;padding:10px 14px;border:1px solid var(--border);border-radius:13px;background:var(--surface2);color:var(--text);font-weight:700;font-size:0.88rem;cursor:pointer;transition:background 180ms ease}
+.file-btn:hover{background:rgba(77,166,255,0.1)}
+.file-btn input{display:none}
+.cover-check{color:var(--green);font-weight:700;font-size:0.85rem}
+.cover-preview-row{display:flex;align-items:center;gap:12px;margin-top:8px}
+.cover-thumb{width:56px;height:74px;object-fit:cover;border-radius:10px;border:1px solid var(--border)}
+/* Scan ISBN button */
+.isbn-scan-btn{width:100%;padding:13px;border:2px dashed rgba(77,166,255,0.4);border-radius:16px;background:rgba(77,166,255,0.06);color:var(--blue);font-weight:800;font-size:0.95rem;text-align:center;margin-bottom:14px;transition:all 180ms ease}
+.isbn-scan-btn:hover{border-color:rgba(77,166,255,0.7);background:rgba(77,166,255,0.12)}
+.isbn-loading{text-align:center;padding:14px;color:var(--blue);font-weight:800;border-radius:14px;background:rgba(77,166,255,0.08);margin-bottom:14px;animation:blink 1.2s infinite}
+/* Manual input */
+.manual-row{display:flex;gap:10px;margin-top:12px}
+.manual-row input{flex:1}
+/* Toast */
+.toast{position:fixed;z-index:90;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);width:min(calc(100% - 32px),440px);border:1px solid rgba(77,166,255,0.34);border-radius:18px;padding:14px 16px;background:rgba(15,17,23,0.94);box-shadow:var(--shadow);color:var(--text);text-align:center;animation:toastIn 260ms ease both;pointer-events:none}
+.hidden{display:none}
+/* Animations */
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes cardIn{from{opacity:0;transform:translateY(18px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes sheetUp{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,18px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes shimmer{to{transform:translateX(100%)}}
+@keyframes blink{0%,100%{opacity:.7}50%{opacity:1}}
+@media(min-width:680px){
+  #app{padding-inline:28px}
+  .controls{grid-template-columns:1fr 220px}
+  .book-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .form-grid{grid-template-columns:repeat(2,1fr)}
+  .stats-grid{grid-template-columns:repeat(4,1fr)}
+}
+@media(min-width:980px){.book-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+</style>
 </head>
 <body>
-
-  <header>
-    <button class="btn" onclick="toggleSidebar()">☰</button>
-    <span>Book Tracker PWA</span>
-    <button class="add-btn" onclick="openModal()">+</button>
+<canvas id="confetti-canvas"></canvas>
+<div id="backdrop" class="backdrop"></div>
+<aside id="drawer" class="drawer">
+  <div class="d-brand">
+    <div class="avatar-wrap">
+      <button class="avatar-btn" id="avatar-btn" title="Сменить фото">BT</button>
+      <span class="avatar-badge">✏️</span>
+      <input type="file" accept="image/*" id="avatar-file" style="display:none">
+    </div>
+    <div class="d-brand-text">
+      <strong id="d-username">Читатель</strong>
+      <span id="d-status" class="online">● Онлайн</span>
+    </div>
+  </div>
+  <nav id="drawer-nav"></nav>
+  <div class="d-footer">
+    <span id="d-uname2">Читатель</span>
+    <small id="d-count">0 книг локально</small>
+  </div>
+</aside>
+<div id="app">
+  <header class="topbar">
+    <button class="icon-btn" id="menu-btn" aria-label="Меню">☰</button>
+    <div>
+      <span class="eyebrow">Личная библиотека</span>
+      <h1 id="page-title">Вся библиотека</h1>
+    </div>
+    <button class="icon-btn add-btn" id="add-btn" aria-label="Добавить">+</button>
   </header>
+  <div id="main-content"></div>
+</div>
+<div id="form-overlay" class="overlay end hidden"></div>
+<div id="detail-overlay" class="overlay end hidden"></div>
+<div id="scanner-overlay" class="overlay hidden"></div>
+<div id="import-overlay" class="overlay hidden"></div>
+<div id="toast-el" class="toast hidden"></div>
+<input type="file" accept="application/json" id="json-import" style="display:none">
+<script>
+'use strict';
+// ───────────────────────────── State ──────────────────────────────
+const S = {
+  books: [], settings: {
+    username:'Читатель', avatar:'', soundEnabled:true,
+    vibrationEnabled:true, showPrice:true, showStatsPrice:true
+  },
+  view:'all', statusFilter:'all', search:'', loading:true,
+  isbnLoading:false
+};
+const STATUS = {
+  unread:{label:'Не прочитано',icon:'💤',color:'#9aa0a6',short:'Спит'},
+  reading:{label:'Читаю',icon:'📖',color:'#4da6ff',short:'В процессе'},
+  completed:{label:'Прочитано',icon:'✅',color:'#3ddc84',short:'Готово'},
+  wishlist:{label:'Wishlist',icon:'⭐',color:'#ffb74d',short:'Хочу'}
+};
+const MENU = [
+  {key:'all',label:'Вся библиотека',icon:'📚'},
+  {key:'reading',label:'Читаю',icon:'📖'},
+  {key:'unread',label:'Не прочитано',icon:'💤'},
+  {key:'completed',label:'Прочитано',icon:'✅'},
+  {key:'wishlist',label:'Wishlist',icon:'⭐'},
+  {key:'stats',label:'Статистика',icon:'📊'},
+  {key:'settings',label:'Настройки',icon:'⚙️'}
+];
+let editingBook = null, pendingImport = null, importMode = 'merge';
+let scannerStream = null, scanTimer = null, scannerController = null;
+let searchDebounce = null;
+let toastQueue = [], toastActive = false;
 
-  <div id="overlay" onclick="toggleSidebar()"></div>
-  <div id="sidebar">
-    <div class="profile">
-      <div class="avatar-wrap" onclick="document.getElementById('avatarInput').click()">
-        <img id="userAvatar" class="avatar" src="https://via.placeholder.com/48/4CAF50/FFFFFF?text=U">
-        <div class="avatar-badge">📷</div>
-        <input type="file" id="avatarInput" accept="image/*" hidden>
-      </div>
-      <div class="profile-text">
-        <h2 id="userName" onclick="editName()">Book Tracker</h2>
-        <span id="userStatus">online</span>
-      </div>
-    </div>
-
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('personal')">Личная библиотека</div>
-      <div class="tab" onclick="switchTab('all')">Вся библиотека</div>
-    </div>
-
-    <div class="settings">
-      <h3>Настройки отображения</h3>
-      <div class="toggle-row">
-        <span>Показывать цену на карточках</span>
-        <input type="checkbox" id="togglePrice" checked>
-      </div>
-      <div class="toggle-row">
-        <span>Показывать статистику</span>
-        <input type="checkbox" id="toggleStats" checked>
-      </div>
-    </div>
-  </div>
-
-  <div id="statsSection" class="stats">
-    <div class="stat"><div>Книг</div><span id="statCount">0</span></div>
-    <div class="stat"><div>Потрачено</div><span id="statSum">0 ₽</span></div>
-  </div>
-
-  <div id="bookList" class="list"></div>
-
-  <!-- Модалка добавления -->
-  <div id="modal" class="modal">
-    <div class="modal-header">
-      <h2>Добавить книгу</h2>
-      <button class="btn" onclick="closeModal()">✕</button>
-    </div>
-    
-    <button class="scan-btn" onclick="startScan()">📷 Сканировать штрих-код</button>
-    <div id="reader"></div>
-    <input type="text" id="mIsbn" placeholder="Или введите ISBN вручную" oninput="fetchBookData(this.value)">
-
-    <label>Название</label><input type="text" id="mTitle">
-    <label>Автор</label><input type="text" id="mAuthor">
-    <label>Описание</label><textarea id="mDesc" rows="3"></textarea>
-    <label>Цена покупки (₽)</label><input type="number" id="mPrice" step="0.01" min="0">
-    <label>Обложка (ссылка)</label><input type="url" id="mCoverUrl" placeholder="https://...">
-    <label>Или загрузить фото</label>
-    <input type="file" id="mCoverFile" accept="image/*" hidden onchange="previewCover(this)">
-    <button class="file-label" onclick="document.getElementById('mCoverFile').click()">📷 Выбрать / Сделать фото</button>
-    <img id="coverPreview">
-    
-    <button class="btn-submit" onclick="saveBook()">Сохранить книгу</button>
-  </div>
-
-  <script>
-    // --- Данные и настройки ---
-    let books = JSON.parse(localStorage.getItem('books') || '[]');
-    let settings = JSON.parse(localStorage.getItem('settings') || '{"showPrice":true,"showStats":true}');
-    let profile = JSON.parse(localStorage.getItem('profile') || '{"name":"Book Tracker","avatar":"https://via.placeholder.com/48/4CAF50/FFFFFF?text=U"}');
-    let currentTab = 'personal';
-    let html5QrcodeScanner = null;
-    let coverBase64 = null;
-
-    // Инициализация интерфейса
-    document.getElementById('togglePrice').checked = settings.showPrice;
-    document.getElementById('toggleStats').checked = settings.showStats;
-    document.getElementById('userName').textContent = profile.name;
-    document.getElementById('userAvatar').src = profile.avatar;
-    applySettings();
-    renderList();
-    updateStats();
-
-    // --- Боковое меню ---
-    function toggleSidebar() {
-      document.getElementById('sidebar').classList.toggle('open');
-      document.getElementById('overlay').classList.toggle('open');
-    }
-
-    // --- Вкладки ---
-    function switchTab(tab) {
-      currentTab = tab;
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      event.target.classList.add('active');
-      renderList();
-    }
-
-    // --- Настройки (сохранение без потери данных) ---
-    document.getElementById('togglePrice').onchange = (e) => {
-      settings.showPrice = e.target.checked;
-      saveSettings(); applySettings();
-    };
-    document.getElementById('toggleStats').onchange = (e) => {
-      settings.showStats = e.target.checked;
-      saveSettings(); applySettings();
-    };
-    function saveSettings() { localStorage.setItem('settings', JSON.stringify(settings)); }
-    function applySettings() {
-      document.getElementById('statsSection').classList.toggle('hidden', !settings.showStats);
-      document.querySelectorAll('.book .price').forEach(el => el.classList.toggle('hidden', !settings.showPrice));
-    }
-
-    // --- Профиль ---
-    document.getElementById('avatarInput').onchange = (e) => {
-      const file = e.target.files[0]; if(!file) return;
-      const reader = new FileReader();
-      reader.onload = () => { profile.avatar = reader.result; document.getElementById('userAvatar').src = reader.result; saveProfile(); };
-      reader.readAsDataURL(file);
-    };
-    function editName() {
-      const newName = prompt('Введите имя пользователя:', profile.name);
-      if(newName) { profile.name = newName; document.getElementById('userName').textContent = newName; saveProfile(); }
-    }
-    function saveProfile() { localStorage.setItem('profile', JSON.stringify(profile)); }
-
-    // --- Модалка ---
-    function openModal() { 
-      document.getElementById('modal').classList.add('open'); 
-      clearForm(); 
-    }
-    function closeModal() { 
-      document.getElementById('modal').classList.remove('open'); 
-      if(html5QrcodeScanner) html5QrcodeScanner.stop(); 
-    }
-    function clearForm() {
-      ['mIsbn','mTitle','mAuthor','mDesc','mPrice','mCoverUrl'].forEach(id => document.getElementById(id).value = '');
-      document.getElementById('mCoverFile').value = '';
-      document.getElementById('coverPreview').style.display = 'none';
-      coverBase64 = null;
-    }
-
-    // --- Сканирование штрих-кода ---
-    function startScan() {
-      const readerDiv = document.getElementById('reader');
-      readerDiv.innerHTML = '';
-      html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250, formatsToSupport: [Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E] });
-      html5QrcodeScanner.render(success => {
-        document.getElementById('mIsbn').value = success.replace(/[^0-9]/g, '');
-        fetchBookData(document.getElementById('mIsbn').value);
-        html5QrcodeScanner.stop();
-      }, err => console.warn(err));
-    }
-
-    // --- Автоподгрузка данных по ISBN (Open Library API) ---
-    async function fetchBookData(isbn) {
-      if(!isbn || isbn.length < 10) return;
-      try {
-        const cleanIsbn = isbn.replace(/[^0-9]/g, '');
-        const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`);
-        const data = await res.json();
-        const key = `ISBN:${cleanIsbn}`;
-        if(data[key]) {
-          const book = data[key];
-          if(book.title) document.getElementById('mTitle').value = book.title;
-          if(book.authors?.length) document.getElementById('mAuthor').value = book.authors.map(a=>a.name).join(', ');
-          if(book.cover?.medium) document.getElementById('mCoverUrl').value = book.cover.medium;
-          if(book.notes) document.getElementById('mDesc').value = book.notes;
-        }
-      } catch(e) { console.log('API недоступно или ISBN не найден'); }
-    }
-
-    // --- Превью обложки из файла ---
-    function previewCover(input) {
-      if(input.files[0]) {
-        const reader = new FileReader();
-        reader.onload = e => { coverBase64 = e.target.result; document.getElementById('coverPreview').src = coverBase64; document.getElementById('coverPreview').style.display = 'block'; };
-        reader.readAsDataURL(input.files[0]);
+// ───────────────────────────── DB ──────────────────────────────
+const DB_NAME = 'book-tracker-pwa', DB_VER = 2;
+let db = null;
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, DB_VER);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains('books')) {
+        const st = d.createObjectStore('books', {keyPath:'id'});
+        st.createIndex('status','status',{unique:false});
+        st.createIndex('updatedAt','updatedAt',{unique:false});
+        st.createIndex('titleAuthor',['title','author'],{unique:false});
+      } else {
+        const tx = r.transaction;
+        const st = tx && tx.objectStore('books');
+        if (st && !st.indexNames.contains('titleAuthor')) st.createIndex('titleAuthor',['title','author'],{unique:false});
       }
-    }
+      if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings',{keyPath:'id'});
+    };
+    r.onsuccess = () => { db = r.result; res(db); };
+    r.onerror = () => rej(r.error);
+  });
+}
+function withStore(name, mode, fn) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction(name, mode);
+    const st = tx.objectStore(name);
+    const req = fn(st);
+    let result;
+    if (req) { req.onsuccess = () => { result = req.result; }; req.onerror = () => rej(req.error); }
+    tx.oncomplete = () => res(result);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+const loadBooks = () => withStore('books','readonly', s => s.getAll()).then(r => (r||[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
+const putBook = b => withStore('books','readwrite', s => s.put(b));
+const delBook = id => withStore('books','readwrite', s => s.delete(id));
+const loadSettings = () => withStore('settings','readonly', s => s.get('settings')).then(r => r ? r.value : null);
+const saveSettings = v => withStore('settings','readwrite', s => s.put({id:'settings',value:v}));
+function replaceAllBooks(books) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction('books','readwrite');
+    const st = tx.objectStore('books');
+    st.clear();
+    books.forEach(b => st.put(b));
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
 
-    // --- Сохранение книги ---
-    function saveBook() {
-      const title = document.getElementById('mTitle').value.trim();
-      if(!title) return alert('Введите название книги!');
-
-      const finalCover = coverBase64 || document.getElementById('mCoverUrl').value.trim() || 'https://via.placeholder.com/70x100?text=NoCover';
-      
-      const book = {
-        id: Date.now(),
-        isbn: document.getElementById('mIsbn').value.trim(),
-        title,
-        author: document.getElementById('mAuthor').value.trim(),
-        desc: document.getElementById('mDesc').value.trim(),
-        price: document.getElementById('mPrice').value || '0',
-        cover: finalCover,
-        date: new Date().toISOString(),
-        inPersonal: currentTab === 'personal'
+// ───────────────────────────── Utils ──────────────────────────────
+const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const palette = ['#4da6ff','#ff7a00','#3ddc84','#b88cff','#ff6f91'];
+const gradient = t => { const i = t.split('').reduce((s,c)=>s+c.charCodeAt(0),0)%palette.length; return `linear-gradient(145deg,${palette[i]},#111827 72%)`; };
+function normalizeBook(b) {
+  const now = new Date().toISOString();
+  const status = ['unread','reading','completed','wishlist'].includes(b.status) ? b.status : 'unread';
+  return {
+    id: b.id || uid(), title: String(b.title||'Без названия').trim(),
+    author: String(b.author||'Неизвестный автор').trim(), cover: String(b.cover||''),
+    status, rating: Math.max(1,Math.min(10,Number(b.rating)||7)),
+    description: String(b.description||''), genre: String(b.genre||''),
+    price: Math.max(0,Number(b.price)||0), purchaseDate: String(b.purchaseDate||''),
+    finishedDate: status==='completed' ? String(b.finishedDate||now) : '',
+    createdAt: String(b.createdAt||now), updatedAt: now
+  };
+}
+function dedupeBooks(books) {
+  const byId = new Map(), byKey = new Map();
+  books.forEach(b => {
+    const n = normalizeBook(b), key = `${n.title.toLowerCase()}::${n.author.toLowerCase()}`;
+    const eid = byKey.get(key);
+    if (byId.has(n.id)) { byId.set(n.id,{...byId.get(n.id),...n}); byKey.set(key,n.id); }
+    else if (eid) { const prev=byId.get(eid); byId.set(eid,{...prev,...n,id:eid,createdAt:prev.createdAt}); }
+    else { byId.set(n.id,n); byKey.set(key,n.id); }
+  });
+  return [...byId.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+}
+function compressImage(file, maxSize=900, q=0.75) {
+  return new Promise((res,rej) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxSize/Math.max(img.width,img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1,Math.round(img.width*scale));
+        canvas.height = Math.max(1,Math.round(img.height*scale));
+        const ctx = canvas.getContext('2d');
+        if(!ctx){rej(new Error('no ctx'));return;}
+        ctx.drawImage(img,0,0,canvas.width,canvas.height);
+        res(canvas.toDataURL('image/jpeg',q));
       };
-      
-      books.unshift(book);
-      localStorage.setItem('books', JSON.stringify(books));
-      closeModal();
-      renderList();
-      updateStats();
-    }
+      img.onerror = () => rej(new Error('img error'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => rej(new Error('read error'));
+    reader.readAsDataURL(file);
+  });
+}
+function downloadJson(obj) {
+  const blob = new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`book-tracker-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+}
 
-    // --- Отрисовка и статистика ---
-    function renderList() {
-      const list = document.getElementById('bookList');
-      list.innerHTML = '';
-      const filtered = currentTab === 'personal' ? books.filter(b => b.inPersonal) : books;
-      
-      if(filtered.length === 0) {
-        list.innerHTML = '<p style="text-align:center; color:#555; margin-top:50px;">Библиотека пуста. Нажмите + чтобы добавить книгу.</p>';
-        return;
+// ───────────────────────────── ISBN Lookup ──────────────────────────────
+async function fetchBookByIsbn(isbn) {
+  try {
+    const [olRes, gbRes] = await Promise.allSettled([
+      fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`).then(r=>r.json()),
+      fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`).then(r=>r.json())
+    ]);
+    if (olRes.status==='fulfilled' && olRes.value) {
+      const key = Object.keys(olRes.value)[0];
+      if (key) {
+        const d = olRes.value[key];
+        const title = d.title||'';
+        const author = d.authors?.[0]?.name||d.by_statement||'';
+        const cover = d.cover?.large||d.cover?.medium||`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+        const desc = typeof d.notes==='string'?d.notes:d.subjects?.slice(0,4).map(s=>typeof s==='string'?s:s.name||'').join(', ')||'';
+        const genre = d.subjects?.[0]?.name||'';
+        if (title) return {title,author,cover,description:desc,genre};
       }
-
-      filtered.forEach(b => {
-        const priceText = b.price ? `${parseFloat(b.price).toFixed(2)} ₽` : '';
-        list.innerHTML += `
-          <div class="book">
-            <img src="${b.cover}" onerror="this.src='https://via.placeholder.com/70x100?text=Err'">
-            <div class="book-info">
-              <h3>${b.title}</h3>
-              <div class="meta">${b.author || 'Автор не указан'}</div>
-              <div class="price ${settings.showPrice ? '' : 'hidden'}">${priceText}</div>
-              <div class="desc">${b.desc || ''}</div>
-            </div>
-          </div>`;
-      });
     }
-    function updateStats() {
-      const total = books.reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
-      document.getElementById('statCount').textContent = books.length;
-      document.getElementById('statSum').textContent = total.toFixed(2) + ' ₽';
+    if (gbRes.status==='fulfilled' && gbRes.value?.totalItems>0) {
+      const info = gbRes.value.items?.[0]?.volumeInfo;
+      if (info) {
+        const title=info.title||'', author=(info.authors||[]).join(', ');
+        const cover=(info.imageLinks?.thumbnail||'').replace('http:','https:')||`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+        const description=(info.description||'').slice(0,400), genre=(info.categories||[])[0]||'';
+        if (title) return {title,author,cover,description,genre};
+      }
     }
+    const coverUrl=`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+    const ok=await fetch(coverUrl).then(r=>r.ok).catch(()=>false);
+    if(ok) return {title:'',author:'',cover:coverUrl,description:'',genre:''};
+    return null;
+  } catch { return null; }
+}
 
-    // Регистрация SW
-    if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(console.error);
-  </script>
+// ───────────────────────────── Sound / Vibration / Confetti ──────────────────────────────
+function playSound() {
+  if (!S.settings.soundEnabled) return;
+  const AC = window.AudioContext||window.webkitAudioContext;
+  if (!AC) return;
+  const ctx = new AC(), gain = ctx.createGain(); gain.gain.value=0.03; gain.connect(ctx.destination);
+  [523.25,659.25,783.99].forEach((f,i)=>{const o=ctx.createOscillator();o.frequency.value=f;o.type='sine';o.connect(gain);o.start(ctx.currentTime+i*0.08);o.stop(ctx.currentTime+0.18+i*0.08);});
+  setTimeout(()=>ctx.close(),600);
+}
+function vib(p=[30]){if(S.settings.vibrationEnabled&&'vibrate'in navigator)navigator.vibrate(p);}
+function confetti() {
+  const canvas = document.getElementById('confetti-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth*devicePixelRatio;
+  canvas.height = window.innerHeight*devicePixelRatio;
+  const pieces = Array.from({length:90},()=>({
+    x:Math.random()*canvas.width,y:-20*devicePixelRatio,
+    size:(5+Math.random()*8)*devicePixelRatio,speed:(2+Math.random()*5)*devicePixelRatio,
+    drift:(Math.random()-.5)*4*devicePixelRatio,rotation:Math.random()*Math.PI,
+    color:['#4da6ff','#ff7a00','#3ddc84','#ffb74d','#fff'][Math.floor(Math.random()*5)]
+  }));
+  let frame=0;
+  const draw=()=>{ frame++; ctx.clearRect(0,0,canvas.width,canvas.height);
+    pieces.forEach(p=>{p.y+=p.speed;p.x+=p.drift;p.rotation+=0.12;ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rotation);ctx.fillStyle=p.color;ctx.fillRect(-p.size/2,-p.size/2,p.size,p.size*0.55);ctx.restore();});
+    if(frame<120) requestAnimationFrame(draw); else ctx.clearRect(0,0,canvas.width,canvas.height);
+  };
+  requestAnimationFrame(draw);
+}
+function celebrate(msg) { toast(msg); confetti(); playSound(); vib([45,25,45]); }
+
+// ───────────────────────────── Toast ──────────────────────────────
+function toast(msg) {
+  toastQueue.push(msg);
+  if (!toastActive) runToast();
+}
+function runToast() {
+  if (!toastQueue.length) { toastActive=false; return; }
+  toastActive=true;
+  const el = document.getElementById('toast-el');
+  el.textContent = toastQueue.shift();
+  el.classList.remove('hidden');
+  setTimeout(()=>{ el.classList.add('hidden'); runToast(); },2600);
+}
+
+// ───────────────────────────── Drawer ──────────────────────────────
+function renderDrawer() {
+  const nav = document.getElementById('drawer-nav');
+  nav.innerHTML = MENU.map(m=>`<button class="${S.view===m.key?'active':''}" data-view="${m.key}"><span>${m.icon}</span>${m.label}</button>`).join('');
+  nav.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click',()=>{ S.view=btn.dataset.view; setDrawerOpen(false); S.statusFilter='all'; S.search=''; render(); });
+  });
+  const uname = S.settings.username||'Читатель';
+  document.getElementById('d-username').textContent = uname;
+  document.getElementById('d-uname2').textContent = uname;
+  document.getElementById('d-count').textContent = `${S.books.length} книг локально`;
+  const avatarBtn = document.getElementById('avatar-btn');
+  if (S.settings.avatar) { avatarBtn.innerHTML = `<img src="${S.settings.avatar}" alt="avatar">`; }
+  else { avatarBtn.textContent = 'BT'; avatarBtn.style.background='linear-gradient(135deg,#4da6ff,#ff7a00)'; }
+  const st = document.getElementById('d-status');
+  if (navigator.onLine) { st.className='online'; st.textContent='● Онлайн'; }
+  else { st.className='offline'; st.textContent='○ Оффлайн'; }
+}
+function setDrawerOpen(open) {
+  document.getElementById('drawer').classList.toggle('open',open);
+  document.getElementById('backdrop').classList.toggle('open',open);
+}
+
+// ───────────────────────────── Main render ──────────────────────────────
+function render() {
+  renderDrawer();
+  const content = document.getElementById('main-content');
+  const title = MENU.find(m=>m.key===S.view)?.label||'Библиотека';
+  document.getElementById('page-title').textContent = title;
+  const onboarded = localStorage.getItem('book-tracker-onboarded')==='true';
+  if (!onboarded && S.books.length===0 && !S.loading) { renderOnboarding(content); return; }
+  if (S.view==='stats') { renderStats(content); return; }
+  if (S.view==='settings') { renderSettings(content); return; }
+  renderBookList(content);
+}
+function renderOnboarding(el) {
+  el.innerHTML=`<section class="onboarding">
+    <span class="pill">Оффлайн PWA</span>
+    <h2>Добро пожаловать в вашу личную библиотеку</h2>
+    <p>Храните книги, wishlist, прогресс чтения и статистику прямо на устройстве. Без аккаунтов и серверов.</p>
+    <div class="btn-row">
+      <button class="btn-primary" id="ob-add">Добавить первую книгу</button>
+      <button class="btn-secondary" id="ob-scan">Сканировать ISBN</button>
+    </div></section>`;
+  el.querySelector('#ob-add').addEventListener('click',()=>openForm());
+  el.querySelector('#ob-scan').addEventListener('click',()=>openScanner());
+}
+function renderBookList(el) {
+  const viewStatus = ['reading','unread','completed','wishlist'].includes(S.view) ? S.view : null;
+  const q = S.search.trim().toLowerCase();
+  let books = S.books.filter(b=>{
+    const mv = viewStatus ? b.status===viewStatus : true;
+    const mf = S.statusFilter==='all' ? true : b.status===S.statusFilter;
+    const ms = !q || b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q) || b.genre.toLowerCase().includes(q);
+    return mv && mf && ms;
+  });
+  const label = MENU.find(m=>m.key===S.view)?.label||'списке';
+  el.innerHTML = `
+    <div class="controls">
+      <label class="search-box"><span>🔍</span><input type="search" placeholder="Поиск по названию, автору, жанру" value="${escHtml(S.search)}" id="search-inp"></label>
+      <select id="status-filter">
+        <option value="all">Все статусы</option>
+        ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${S.statusFilter===k?'selected':''}>${v.label}</option>`).join('')}
+      </select>
+    </div>
+    <section class="book-grid" id="book-grid">
+      ${S.loading ? Array.from({length:6},()=>`<div class="book-card skeleton-card"><div class="cover skeleton" style="aspect-ratio:0.78;min-height:140px"></div><div class="book-meta"><div class="sk-line"></div><div class="sk-line s"></div><div class="sk-line xs"></div></div></div>`).join('') :
+        books.length===0 ? `<div class="onboarding" style="grid-column:1/-1;min-height:40vh"><div style="font-size:4rem">📚</div><h2 style="font-size:1.8rem">Здесь пока пусто</h2><p>В разделе «${label}» нет книг.</p><button class="btn-primary" id="empty-add">Добавить книгу</button></div>` :
+        books.map((b,i)=>bookCardHtml(b,i)).join('')
+      }
+    </section>`;
+  el.querySelector('#search-inp')?.addEventListener('input',e=>{
+    clearTimeout(searchDebounce); searchDebounce=setTimeout(()=>{ S.search=e.target.value; render(); },300);
+  });
+  el.querySelector('#status-filter')?.addEventListener('change',e=>{ S.statusFilter=e.target.value; render(); });
+  el.querySelector('#empty-add')?.addEventListener('click',()=>openForm());
+  el.querySelectorAll('.book-card[data-id]').forEach(card=>{
+    card.addEventListener('click',()=>openDetail(S.books.find(b=>b.id===card.dataset.id)));
+  });
+}
+function bookCardHtml(b,i) {
+  const st = STATUS[b.status];
+  const coverHtml = b.cover
+    ? `<img src="${escHtml(b.cover)}" alt="${escHtml(b.title)}" loading="lazy" decoding="async" onerror="this.style.display='none'">`
+    : `<span class="initials">${escHtml(b.title.slice(0,2).toUpperCase())}</span>`;
+  const priceHtml = S.settings.showPrice && b.price>0 ? `<div class="price-tag">₽${b.price.toLocaleString()}</div>` : '';
+  return `<button class="book-card" data-id="${b.id}" style="animation-delay:${Math.min(i*45,500)}ms">
+    <div class="cover" style="${b.cover?'background:#111827':'background:'+gradient(b.title)}">${coverHtml}</div>
+    <div class="book-meta">
+      <strong>${escHtml(b.title)}</strong>
+      <div class="author">${escHtml(b.author)}</div>
+      <div class="card-bottom">
+        <span class="status-icon" style="color:${st.color}">${st.icon}</span>
+        <span class="rating">${b.rating}/10</span>
+      </div>
+      ${priceHtml}
+    </div></button>`;
+}
+function renderStats(el) {
+  const byS = s => S.books.filter(b=>b.status===s).length;
+  const total=S.books.length, totalPrice=S.books.reduce((s,b)=>s+(b.price||0),0);
+  const purchased=S.books.filter(b=>b.price>0);
+  const avgPrice=purchased.length?(totalPrice/purchased.length).toFixed(0):'0';
+  const avgRating=total?(S.books.reduce((s,b)=>s+b.rating,0)/total).toFixed(1):'0';
+  const recent=S.books.filter(b=>b.status==='completed').slice(0,3);
+  const priceSection = S.settings.showStatsPrice ? `
+    <div class="stats-grid" style="margin-top:-4px">
+      <button data-nav="all"><span class="gold">₽${totalPrice.toLocaleString()}</span><small>Потрачено всего</small></button>
+      <button data-nav="wishlist"><span>${byS('wishlist')}</span><small>В wishlist</small></button>
+      <button data-nav="all"><span class="gold">₽${avgPrice}</span><small>Средняя цена</small></button>
+      <button data-nav="all"><span>${purchased.length}</span><small>Книг с ценой</small></button>
+    </div>` : '';
+  el.innerHTML=`<section class="stats-view">
+    <div class="stats-grid">
+      <button data-nav="all"><span>${total}</span><small>Всего книг</small></button>
+      <button data-nav="reading"><span>${byS('reading')}</span><small>Читаю</small></button>
+      <button data-nav="completed"><span>${byS('completed')}</span><small>Прочитано</small></button>
+      <button data-nav="unread"><span>${byS('unread')}</span><small>Не прочитано</small></button>
+    </div>
+    ${priceSection}
+    <div class="insight-card"><span class="eyebrow">Средний рейтинг</span><h2>${avgRating}/10</h2><p>Нажмите на карточку, чтобы открыть список.</p></div>
+    <div class="insight-card"><span class="eyebrow">Последние завершённые</span>
+      ${recent.length ? recent.map(b=>`<div class="recent-row"><span>${escHtml(b.title)}</span><b>${b.rating}/10${S.settings.showStatsPrice&&b.price>0?' · ₽'+b.price.toLocaleString():''}</b></div>`).join('') : '<p>Завершённые книги появятся здесь.</p>'}
+    </div>
+  </section>`;
+  el.querySelectorAll('[data-nav]').forEach(btn=>{
+    btn.addEventListener('click',()=>{ S.view=btn.dataset.nav; render(); });
+  });
+}
+function renderSettings(el) {
+  const chk = (v,id) => `<input type="checkbox" id="${id}" ${v?'checked':''}>`;
+  el.innerHTML=`<section class="settings-form" style="border:1px solid var(--border);border-radius:24px;padding:18px">
+    <label>Имя пользователя<input id="sett-name" value="${escHtml(S.settings.username)}" style="margin-top:6px"></label>
+    <div class="toggle-row"><span>Звук</span>${chk(S.settings.soundEnabled,'sett-sound')}</div>
+    <div class="toggle-row"><span>Вибрация</span>${chk(S.settings.vibrationEnabled,'sett-vib')}</div>
+    <div class="toggle-row"><span>Показывать цену на карточках</span>${chk(S.settings.showPrice,'sett-price')}</div>
+    <div class="toggle-row"><span>Финансовая статистика</span>${chk(S.settings.showStatsPrice,'sett-stats')}</div>
+    <div class="btn-row">
+      <button class="btn-primary" id="sett-save">Сохранить</button>
+      <button class="btn-secondary" id="sett-export">Экспорт JSON</button>
+      <button class="btn-secondary" id="sett-import">Импорт JSON</button>
+    </div>
+  </section>`;
+  el.querySelector('#sett-save').addEventListener('click',async ()=>{
+    S.settings.username = el.querySelector('#sett-name').value.trim()||'Читатель';
+    S.settings.soundEnabled = el.querySelector('#sett-sound').checked;
+    S.settings.vibrationEnabled = el.querySelector('#sett-vib').checked;
+    S.settings.showPrice = el.querySelector('#sett-price').checked;
+    S.settings.showStatsPrice = el.querySelector('#sett-stats').checked;
+    await saveSettings(S.settings); toast('Настройки сохранены'); render();
+  });
+  el.querySelector('#sett-export').addEventListener('click',()=>{ downloadJson({version:2,exportedAt:new Date().toISOString(),settings:S.settings,books:S.books}); toast('JSON экспортирован'); });
+  el.querySelector('#sett-import').addEventListener('click',()=>document.getElementById('json-import').click());
+}
+
+// ───────────────────────────── Book Form ──────────────────────────────
+let formData = {};
+function openForm(book=null) {
+  editingBook = book;
+  formData = book ? {...book} : {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:''};
+  renderForm();
+  document.getElementById('form-overlay').classList.remove('hidden');
+}
+function closeForm() { document.getElementById('form-overlay').classList.add('hidden'); editingBook=null; }
+let coverMode = 'url';
+function renderForm() {
+  const ol = document.getElementById('form-overlay');
+  const isEdit = !!editingBook;
+  ol.innerHTML=`<div class="sheet">
+    <div class="sheet-head">
+      <div><span class="eyebrow">${isEdit?'Редактирование':'Новая книга'}</span><h2>${isEdit?'Обновить':'Добавить'} книгу</h2></div>
+      <button class="icon-btn" id="form-close">×</button>
+    </div>
+    ${!isEdit?`<button class="isbn-scan-btn" id="form-scan">📷 Сканировать ISBN для автозаполнения</button>`:''}
+    <div id="isbn-loading-msg" class="isbn-loading hidden">🔍 Ищу книгу по ISBN...</div>
+    <div class="form-grid">
+      <label>Название *<input id="f-title" value="${escHtml(formData.title)}" placeholder="Например, Дюна"></label>
+      <label>Автор *<input id="f-author" value="${escHtml(formData.author)}" placeholder="Фрэнк Герберт"></label>
+      <div class="wide" style="display:grid;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span style="color:var(--muted);font-size:0.88rem;font-weight:700">Обложка</span>
+          <div class="seg cover-mode-seg" style="max-width:220px;margin:0">
+            <button id="mode-url" class="${coverMode==='url'?'active':''}">По ссылке</button>
+            <button id="mode-file" class="${coverMode==='file'?'active':''}">Фото/Галерея</button>
+          </div>
+        </div>
+        <div id="cover-url-section" class="${coverMode==='url'?'':'hidden'}">
+          <input id="f-cover-url" value="${formData.cover&&!formData.cover.startsWith('data:')?escHtml(formData.cover):''}" placeholder="https://example.com/cover.jpg" style="width:100%">
+        </div>
+        <div id="cover-file-section" class="${coverMode==='file'?'':'hidden'}">
+          <div class="cover-file-row">
+            <label class="file-btn">📷 Камера<input type="file" accept="image/*" capture="environment" id="cover-cam"></label>
+            <label class="file-btn">🖼️ Галерея<input type="file" accept="image/*" id="cover-gal"></label>
+            ${formData.cover?'<span class="cover-check">✅ Загружена</span>':''}
+          </div>
+        </div>
+        ${formData.cover?`<div class="cover-preview-row"><img src="${escHtml(formData.cover)}" class="cover-thumb" onerror="this.style.display='none'"><button class="btn-danger" style="padding:8px 14px;font-size:0.85rem" id="clear-cover">Удалить</button></div>`:''}
+      </div>
+      <label>Жанр<input id="f-genre" value="${escHtml(formData.genre)}" placeholder="Фантастика"></label>
+      <label>Цена (₽)<input type="number" id="f-price" min="0" value="${formData.price||''}" placeholder="0"></label>
+      <label>Дата покупки<input type="date" id="f-date" value="${formData.purchaseDate||''}"></label>
+      <label>Статус<select id="f-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${formData.status===k?'selected':''}>${v.icon} ${v.label}</option>`).join('')}</select></label>
+      <label class="wide">Рейтинг: <span id="rating-val">${formData.rating}</span>/10<input type="range" id="f-rating" min="1" max="10" value="${formData.rating}" style="width:100%"></label>
+      <label class="wide">Описание<textarea id="f-desc" rows="3" placeholder="Заметки о книге">${escHtml(formData.description)}</textarea></label>
+    </div>
+    <div class="btn-row sticky-actions">
+      <button class="btn-secondary" id="form-cancel">Закрыть</button>
+      <button class="btn-primary" id="form-save">${isEdit?'Сохранить':'Добавить'}</button>
+    </div>
+  </div>`;
+  ol.querySelector('#form-close').addEventListener('click',closeForm);
+  ol.querySelector('#form-cancel').addEventListener('click',closeForm);
+  ol.querySelector('#form-save').addEventListener('click',submitForm);
+  ol.querySelector('#form-scan')?.addEventListener('click',()=>{closeForm();openScanner();});
+  ol.querySelector('#f-rating').addEventListener('input',e=>ol.querySelector('#rating-val').textContent=e.target.value);
+  ol.querySelector('#mode-url').addEventListener('click',()=>{ coverMode='url'; renderForm(); });
+  ol.querySelector('#mode-file').addEventListener('click',()=>{ coverMode='file'; renderForm(); });
+  ol.querySelector('#clear-cover')?.addEventListener('click',()=>{ formData.cover=''; renderForm(); });
+  const handleCoverFile = async file => {
+    if(!file)return; try { formData.cover=await compressImage(file); renderForm(); toast('Обложка добавлена'); } catch { toast('Ошибка обработки обложки'); }
+  };
+  ol.querySelector('#cover-cam')?.addEventListener('change',e=>handleCoverFile(e.target.files?.[0]));
+  ol.querySelector('#cover-gal')?.addEventListener('change',e=>handleCoverFile(e.target.files?.[0]));
+}
+async function submitForm() {
+  const ol = document.getElementById('form-overlay');
+  const title = ol.querySelector('#f-title').value.trim();
+  const author = ol.querySelector('#f-author').value.trim();
+  if(!title||!author){ toast('Название и автор обязательны'); vib([20]); return; }
+  const coverUrl = ol.querySelector('#f-cover-url')?.value.trim()||'';
+  const cover = coverMode==='url' ? coverUrl : (formData.cover||'');
+  const book = normalizeBook({
+    ...(editingBook||{}), title, author, cover,
+    genre: ol.querySelector('#f-genre').value.trim(),
+    price: Number(ol.querySelector('#f-price').value)||0,
+    purchaseDate: ol.querySelector('#f-date').value,
+    status: ol.querySelector('#f-status').value,
+    rating: Number(ol.querySelector('#f-rating').value),
+    description: ol.querySelector('#f-desc').value.trim(),
+    id: editingBook?.id, createdAt: editingBook?.createdAt,
+    finishedDate: ol.querySelector('#f-status').value==='completed' ? (editingBook?.finishedDate||new Date().toISOString()) : ''
+  });
+  await putBook(book);
+  const prevStatus = editingBook?.status;
+  if (editingBook) { S.books = S.books.map(b=>b.id===book.id?book:b); }
+  else { S.books = dedupeBooks([book,...S.books]); }
+  S.books.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+  localStorage.setItem('book-tracker-onboarded','true');
+  closeForm(); vib([25]);
+  if (prevStatus==='wishlist' && book.status!=='wishlist') celebrate('Книга добавлена в библиотеку!');
+  else if (prevStatus!=='completed' && book.status==='completed') celebrate('Книга завершена!');
+  else toast(editingBook?'Книга обновлена':'Книга добавлена');
+  render();
+}
+
+// ───────────────────────────── Book Detail ──────────────────────────────
+function openDetail(book) {
+  if(!book) return;
+  const ol = document.getElementById('detail-overlay');
+  const st = STATUS[book.status];
+  const coverHtml = book.cover
+    ? `<img src="${escHtml(book.cover)}" alt="${escHtml(book.title)}" loading="lazy" onerror="this.style.display='none'">`
+    : `<span class="initials">${escHtml(book.title.slice(0,2).toUpperCase())}</span>`;
+  const pills = [
+    book.genre ? `<span class="pill muted">${escHtml(book.genre)}</span>` : '',
+    S.settings.showPrice && book.price>0 ? `<span class="pill muted">₽${book.price.toLocaleString()}</span>` : '',
+    book.purchaseDate ? `<span class="pill muted">📅 ${book.purchaseDate}</span>` : ''
+  ].filter(Boolean).join('');
+  ol.innerHTML=`<article class="sheet detail-card">
+    <div class="sheet-head">
+      <span class="pill" style="border-color:${st.color};color:${st.color}">${st.icon} ${st.label}</span>
+      <button class="icon-btn" id="det-close">×</button>
+    </div>
+    <div class="detail-cover" style="${book.cover?'background:#111827':'background:'+gradient(book.title)}">${coverHtml}</div>
+    <h2>${escHtml(book.title)}</h2>
+    <p class="detail-author">${escHtml(book.author)}</p>
+    ${pills?`<div class="pills-row">${pills}</div>`:''}
+    ${book.description?`<div class="desc-box">${escHtml(book.description)}</div>`:''}
+    <div class="quick-status">
+      ${['unread','reading','completed'].map(s=>`<button class="${book.status===s?'active':''}" style="border-color:${STATUS[s].color}" data-status="${s}">${STATUS[s].icon}<small>${STATUS[s].short}</small></button>`).join('')}
+    </div>
+    <div class="stars">${Array.from({length:10},(_,i)=>`<button class="${i+1<=book.rating?'on':''}" data-r="${i+1}">★</button>`).join('')}</div>
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn-secondary" id="det-edit">Редактировать</button>
+      <button class="btn-danger" id="det-del">Удалить</button>
+    </div>
+  </article>`;
+  ol.classList.remove('hidden');
+  ol.querySelector('#det-close').addEventListener('click',()=>ol.classList.add('hidden'));
+  ol.querySelectorAll('[data-status]').forEach(btn=>btn.addEventListener('click',async ()=>{
+    const prev=book.status; book.status=btn.dataset.status;
+    if(book.status==='completed'&&!book.finishedDate) book.finishedDate=new Date().toISOString();
+    if(book.status!=='completed') book.finishedDate='';
+    book.updatedAt=new Date().toISOString();
+    await putBook(book); S.books=S.books.map(b=>b.id===book.id?book:b);
+    if(prev==='wishlist'&&book.status!=='wishlist') celebrate('Книга добавлена в библиотеку!');
+    else if(prev!=='completed'&&book.status==='completed') celebrate('Книга завершена!');
+    else toast('Статус обновлён');
+    ol.classList.add('hidden'); render();
+  }));
+  ol.querySelectorAll('[data-r]').forEach(btn=>btn.addEventListener('click',async ()=>{
+    book.rating=Number(btn.dataset.r); book.updatedAt=new Date().toISOString();
+    await putBook(book); S.books=S.books.map(b=>b.id===book.id?book:b);
+    vib([12]); ol.classList.add('hidden'); render();
+  }));
+  ol.querySelector('#det-edit').addEventListener('click',()=>{ ol.classList.add('hidden'); openForm(book); });
+  ol.querySelector('#det-del').addEventListener('click',async ()=>{
+    if(!confirm(`Удалить «${book.title}»?`)) return;
+    await delBook(book.id); S.books=S.books.filter(b=>b.id!==book.id);
+    ol.classList.add('hidden'); toast('Книга удалена'); render();
+  });
+}
+
+// ───────────────────────────── Scanner ──────────────────────────────
+function openScanner() {
+  const ol = document.getElementById('scanner-overlay');
+  let scanMode = 'camera', scanDotStatus = 'loading';
+  function renderScanner() {
+    ol.innerHTML=`<div class="modal-box" style="max-width:520px;width:min(100%,520px)">
+      <div class="sheet-head">
+        <div><span class="eyebrow">ISBN Scanner</span><h2>Сканировать штрихкод</h2></div>
+        <button class="icon-btn" id="sc-close">×</button>
+      </div>
+      <div class="scan-status"><span class="scan-dot ${scanDotStatus}" id="sc-dot"></span><span id="sc-label">${scanDotStatus==='loading'?'Запрашиваю камеру...':scanDotStatus==='scanning'?'Ищу штрихкод...':scanDotStatus==='fallback'?'Используйте ручной ввод':'Камера готова'}</span></div>
+      ${scanMode==='camera'?`<video id="sc-video" class="scanner-video" playsinline muted></video>`:''}
+      <div class="seg">
+        <button class="${scanMode==='camera'?'active':''}" id="sc-mode-cam">Камера</button>
+        <button class="${scanMode==='manual'?'active':''}" id="sc-mode-man">Ввести ISBN</button>
+      </div>
+      <p class="scan-hint">Наведите камеру на штрихкод. Данные заполнятся автоматически из открытых баз данных.</p>
+      ${scanMode==='manual'||scanDotStatus==='fallback'?`<div class="manual-row"><input class="manual-input" id="sc-manual-inp" placeholder="9785171183664" inputmode="numeric"><button class="btn-primary" id="sc-manual-go">Найти</button></div>`:''}
+    </div>`;
+    ol.querySelector('#sc-close').addEventListener('click',()=>{ stopScan(); ol.classList.add('hidden'); });
+    ol.querySelector('#sc-mode-cam').addEventListener('click',()=>{ stopScan(); scanMode='camera'; scanDotStatus='loading'; renderScanner(); startCam(); });
+    ol.querySelector('#sc-mode-man').addEventListener('click',()=>{ stopScan(); scanMode='manual'; scanDotStatus='idle'; renderScanner(); });
+    ol.querySelector('#sc-manual-go')?.addEventListener('click',()=>{
+      const v=ol.querySelector('#sc-manual-inp')?.value.trim();
+      if(v){ol.classList.add('hidden');stopScan();applyIsbn(v);}
+    });
+    ol.querySelector('#sc-manual-inp')?.addEventListener('keydown',e=>{ if(e.key==='Enter'){const v=e.target.value.trim();if(v){ol.classList.add('hidden');stopScan();applyIsbn(v);}} });
+    if(scanMode==='camera') setTimeout(startCam,50);
+  }
+  function startCam() {
+    navigator.mediaDevices?.getUserMedia({video:{facingMode:'environment'}}).then(stream=>{
+      scannerStream=stream;
+      const vid=ol.querySelector('#sc-video');
+      if(!vid){stopScan();return;}
+      vid.srcObject=stream; vid.play();
+      scanDotStatus='ready';
+      ol.querySelector('#sc-dot')&&(ol.querySelector('#sc-dot').className='scan-dot ready');
+      ol.querySelector('#sc-label')&&(ol.querySelector('#sc-label').textContent='Камера готова');
+      const BD=window.BarcodeDetector;
+      if(!BD){scanDotStatus='fallback';renderScanner();return;}
+      const det=new BD({formats:['ean_13','ean_8','code_128']});
+      const scan=async()=>{
+        if(!scannerStream||!vid) return;
+        try { const codes=await det.detect(vid); if(codes[0]?.rawValue){const v=codes[0].rawValue;stopScan();ol.classList.add('hidden');applyIsbn(v);return;} }
+        catch{};
+        scanDotStatus='scanning';
+        ol.querySelector('#sc-dot')&&(ol.querySelector('#sc-dot').className='scan-dot scanning');
+        ol.querySelector('#sc-label')&&(ol.querySelector('#sc-label').textContent='Ищу штрихкод...');
+        scanTimer=setTimeout(scan,650);
+      };
+      scan();
+    }).catch(()=>{scanDotStatus='fallback';renderScanner();});
+  }
+  function stopScan(){clearTimeout(scanTimer);scannerStream?.getTracks().forEach(t=>t.stop());scannerStream=null;}
+  ol.classList.remove('hidden');
+  renderScanner();
+}
+async function applyIsbn(isbn) {
+  const clean = isbn.replace(/[^0-9X]/gi,'');
+  S.isbnLoading=true;
+  openForm(); // open with empty/current formData
+  document.getElementById('isbn-loading-msg')?.classList.remove('hidden');
+  toast('Поиск книги по ISBN...');
+  try {
+    const data = await fetchBookByIsbn(clean);
+    if(data&&(data.title||data.cover)){
+      formData.title = data.title||formData.title;
+      formData.author = data.author||formData.author;
+      formData.cover = data.cover||formData.cover;
+      formData.description = data.description||formData.description;
+      formData.genre = data.genre||formData.genre;
+      renderForm();
+      toast(data.title?'Данные книги найдены. Проверьте и сохраните.':'Обложка найдена. Заполните данные.');
+    } else {
+      formData.description = formData.description||`ISBN: ${clean}`;
+      renderForm();
+      toast('Книга не найдена. Заполните данные вручную.');
+    }
+  } catch {
+    formData.description = formData.description||`ISBN: ${clean}`;
+    renderForm();
+    toast('Ошибка поиска. Заполните данные вручную.');
+  } finally { S.isbnLoading=false; }
+}
+
+// ───────────────────────────── Import ──────────────────────────────
+function openImport(books) {
+  pendingImport=books; importMode='merge';
+  const ol=document.getElementById('import-overlay');
+  ol.innerHTML=`<div class="modal-box">
+    <h2>Импорт JSON</h2>
+    <p style="color:var(--muted);margin:10px 0">Найдено книг: ${books.length}. Merge проверит дубли.</p>
+    <div class="seg">
+      <button class="active" id="imp-merge">Объединить</button>
+      <button id="imp-replace">Заменить</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn-secondary" id="imp-cancel">Отмена</button>
+      <button class="btn-primary" id="imp-ok">Подтвердить</button>
+    </div>
+  </div>`;
+  ol.classList.remove('hidden');
+  ol.querySelector('#imp-merge').addEventListener('click',()=>{importMode='merge';ol.querySelector('#imp-merge').classList.add('active');ol.querySelector('#imp-replace').classList.remove('active');});
+  ol.querySelector('#imp-replace').addEventListener('click',()=>{importMode='replace';ol.querySelector('#imp-replace').classList.add('active');ol.querySelector('#imp-merge').classList.remove('active');});
+  ol.querySelector('#imp-cancel').addEventListener('click',()=>{ol.classList.add('hidden');pendingImport=null;});
+  ol.querySelector('#imp-ok').addEventListener('click',async()=>{
+    const next = importMode==='replace' ? dedupeBooks(pendingImport) : dedupeBooks([...S.books,...pendingImport]);
+    await replaceAllBooks(next); S.books=next;
+    ol.classList.add('hidden'); pendingImport=null;
+    toast(importMode==='replace'?'Библиотека заменена':'Объединено без дублей'); render();
+  });
+}
+
+// ───────────────────────────── Helpers ──────────────────────────────
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ───────────────────────────── Init ──────────────────────────────
+async function init() {
+  if ('serviceWorker' in navigator && (location.protocol==='https:'||location.hostname==='localhost')) {
+    navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
+  }
+  await openDB();
+  const [books, settings] = await Promise.all([loadBooks(), loadSettings()]);
+  S.books = books;
+  if (settings) S.settings = {...S.settings,...settings};
+  S.loading = false;
+  render();
+  // Events
+  document.getElementById('backdrop').addEventListener('click',()=>setDrawerOpen(false));
+  document.getElementById('menu-btn').addEventListener('click',()=>setDrawerOpen(true));
+  document.getElementById('add-btn').addEventListener('click',()=>{ const s=S.view==='wishlist'?'wishlist':'unread'; openForm({...emptyForm(),status:s}); });
+  document.getElementById('avatar-btn').addEventListener('click',()=>document.getElementById('avatar-file').click());
+  document.getElementById('avatar-file').addEventListener('change',async e=>{
+    const file=e.target.files?.[0]; if(!file)return;
+    try{ S.settings.avatar=await compressImage(file,256,0.82); await saveSettings(S.settings); renderDrawer(); toast('Фото профиля обновлено'); }
+    catch{ toast('Ошибка загрузки фото'); }
+    e.target.value='';
+  });
+  document.getElementById('json-import').addEventListener('change',async e=>{
+    const file=e.target.files?.[0]; if(!file)return;
+    try{
+      const payload=JSON.parse(await file.text());
+      const arr=Array.isArray(payload)?payload:payload.books??[];
+      if(!Array.isArray(arr))throw new Error('bad format');
+      openImport(arr.map(normalizeBook));
+    }catch{toast('Не удалось прочитать JSON');}
+    e.target.value='';
+  });
+  window.addEventListener('online',()=>{ document.getElementById('d-status').className='online'; document.getElementById('d-status').textContent='● Онлайн'; });
+  window.addEventListener('offline',()=>{ document.getElementById('d-status').className='offline'; document.getElementById('d-status').textContent='○ Оффлайн'; });
+}
+function emptyForm(){return {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:''};}
+init().catch(console.error);
+</script>
 </body>
 </html>
