@@ -356,24 +356,34 @@ function downloadJson(obj) {
 }
 function emptyForm(){return {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:'',finishedDate:''};}
 
-// ─────────��─────────────────── ISBN Lookup (Bookmate.com) ──────────────────────────────
+// ───────────────────────────── ISBN Lookup (RSL - Российская Государственная Библиотека) ──────────────────────────────
 async function fetchBookByIsbn(isbn) {
   try {
-    // Поиск на Bookmate через прямой API
-    const bookmate = await fetch(`https://api.bookmate.com/v3/books/searchByIsbn?isbn=${isbn}`)
-      .then(r => r.json())
+    // Поиск на RSL (search.rsl.ru)
+    const rslUrl = `https://search.rsl.ru/ru/record/${isbn}`;
+    const rslResponse = await fetch(rslUrl)
+      .then(r => r.text())
       .catch(() => null);
 
-    if (bookmate && bookmate.book) {
-      const book = bookmate.book;
-      const title = book.title || '';
-      const author = book.author?.name || '';
-      const cover = book.coverUrl ? (book.coverUrl.startsWith('http') ? book.coverUrl : `https:${book.coverUrl}`) : '';
-      const description = book.description || '';
-      const genre = book.genre || book.genre?.name || '';
-      const rating = book.rating ? Math.round(book.rating * 2) : 7; // Преобразуем 5-звёздную в 10-звёздную
-
-      if (title) return { title, author, cover, description, genre, rating: Math.min(10, Math.max(1, rating)) };
+    if (rslResponse) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(rslResponse, 'text/html');
+      
+      // Парсим HTML результаты RSL
+      const titleEl = doc.querySelector('[class*="title"]') || doc.querySelector('h1');
+      const authorEl = doc.querySelector('[class*="author"]') || doc.querySelector('[data-author]');
+      const coverEl = doc.querySelector('img[class*="cover"]') || doc.querySelector('[data-cover]');
+      const descEl = doc.querySelector('[class*="description"]') || doc.querySelector('[data-desc]');
+      
+      const title = titleEl?.textContent?.trim() || '';
+      const author = authorEl?.textContent?.trim() || '';
+      const cover = coverEl?.src || '';
+      const description = descEl?.textContent?.trim() || '';
+      const genre = '';
+      
+      if (title && author) {
+        return { title, author, cover, description, genre };
+      }
     }
 
     // Fallback: OpenLibrary
@@ -776,7 +786,7 @@ function openScanner() {
         <button class="${scanMode==='camera'?'active':''}" id="sc-mode-cam">Камера</button>
         <button class="${scanMode==='manual'?'active':''}" id="sc-mode-man">Ввести ISBN</button>
       </div>
-      <p class="scan-hint">Наведите камеру на штрихкод. Данные заполнятся автоматически из Bookmate.</p>
+      <p class="scan-hint">Наведите камеру на штрихкод. Данные заполнятся автоматически из РГБ (search.rsl.ru).</p>
       ${scanMode==='manual'||scanDotStatus==='fallback'?`<div class="manual-row"><input class="manual-input" id="sc-manual-inp" placeholder="9785171183664" inputmode="numeric"><button class="btn-primary" id="sc-manual-go">Найти</button></div>`:''}
     </div>`;
     ol.querySelector('#sc-close').addEventListener('click',()=>{ stopScan(); ol.classList.add('hidden'); });
@@ -822,7 +832,7 @@ async function applyIsbn(isbn) {
   S.isbnLoading=true;
   openForm();
   document.getElementById('isbn-loading-msg')?.classList.remove('hidden');
-  toast('Поиск книги по ISBN на Bookmate...');
+  toast('Поиск книги по ISBN на РГБ...');
   try {
     const data = await fetchBookByIsbn(clean);
     if(data&&(data.title||data.cover)){
@@ -831,7 +841,6 @@ async function applyIsbn(isbn) {
       formData.cover = data.cover||formData.cover;
       formData.description = data.description||formData.description;
       formData.genre = data.genre||formData.genre;
-      if(data.rating) formData.rating = data.rating;
       renderForm();
       toast(data.title?'Данные книги найдены. Проверьте и сохраните.':'Обложка найдена. Заполните данные.');
     } else {
