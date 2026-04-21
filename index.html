@@ -356,46 +356,24 @@ function downloadJson(obj) {
 }
 function emptyForm(){return {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:'',finishedDate:''};}
 
-// ───────────────────────────── ISBN Lookup (Litres.ru) ──────────────────────────────
+// ─────────��─────────────────── ISBN Lookup (Bookmate.com) ──────────────────────────────
 async function fetchBookByIsbn(isbn) {
   try {
-    // Поиск на Litres.ru через прямой парсинг
-    const litresUrl = `https://www.litres.ru/search/?q=${encodeURIComponent(isbn)}`;
-    const response = await fetch(`https://cors-anywhere.herokuapp.com/${litresUrl}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    }).catch(() => null);
+    // Поиск на Bookmate через прямой API
+    const bookmate = await fetch(`https://api.bookmate.com/v3/books/searchByIsbn?isbn=${isbn}`)
+      .then(r => r.json())
+      .catch(() => null);
 
-    if (response && response.ok) {
-      const html = await response.text();
-      
-      // Парсим HTML для извлечения данных книги
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      
-      // Ищем первый результат
-      const bookItem = doc.querySelector('[data-testid="search-result-item"]') || 
-                       doc.querySelector('article[data-test-id="SearchResultsTableRow"]') ||
-                       doc.querySelector('.book-item');
-      
-      if (bookItem) {
-        const titleEl = bookItem.querySelector('h3, .book__title, [class*="title"]');
-        const authorEl = bookItem.querySelector('[class*="author"], .book__author');
-        const coverEl = bookItem.querySelector('img[class*="cover"], img[class*="book"]');
-        const descEl = bookItem.querySelector('[class*="description"], .book__description');
-        const genreEl = bookItem.querySelector('[class*="genre"], .book__genre');
-        const ratingEl = bookItem.querySelector('[class*="rating"], .book__rating');
-        
-        const title = titleEl?.textContent?.trim() || '';
-        const author = authorEl?.textContent?.trim() || '';
-        const cover = coverEl?.src || '';
-        const description = descEl?.textContent?.trim() || '';
-        const genre = genreEl?.textContent?.trim() || '';
-        const rating = ratingEl ? Math.round(parseFloat(ratingEl.textContent) * 1.3) : 7; // Преобразуем 5-звёздную систему в 10-звёздную
-        
-        if (title) {
-          return { title, author, cover, description, genre, rating: Math.min(10, Math.max(1, rating)) };
-        }
-      }
+    if (bookmate && bookmate.book) {
+      const book = bookmate.book;
+      const title = book.title || '';
+      const author = book.author?.name || '';
+      const cover = book.coverUrl ? (book.coverUrl.startsWith('http') ? book.coverUrl : `https:${book.coverUrl}`) : '';
+      const description = book.description || '';
+      const genre = book.genre || book.genre?.name || '';
+      const rating = book.rating ? Math.round(book.rating * 2) : 7; // Преобразуем 5-звёздную в 10-звёздную
+
+      if (title) return { title, author, cover, description, genre, rating: Math.min(10, Math.max(1, rating)) };
     }
 
     // Fallback: OpenLibrary
@@ -782,7 +760,7 @@ function openDetail(book) {
   });
 }
 
-// ───────────────────────────── Scanner ───────���──────────────────────
+// ───────────────────────────── Scanner ──────────────────────────────
 function openScanner() {
   const ol = document.getElementById('scanner-overlay');
   let scanMode = 'camera', scanDotStatus = 'loading';
@@ -798,7 +776,7 @@ function openScanner() {
         <button class="${scanMode==='camera'?'active':''}" id="sc-mode-cam">Камера</button>
         <button class="${scanMode==='manual'?'active':''}" id="sc-mode-man">Ввести ISBN</button>
       </div>
-      <p class="scan-hint">Наведите камеру на штрихкод. Данные заполнятся автоматически из Litres.ru.</p>
+      <p class="scan-hint">Наведите камеру на штрихкод. Данные заполнятся автоматически из Bookmate.</p>
       ${scanMode==='manual'||scanDotStatus==='fallback'?`<div class="manual-row"><input class="manual-input" id="sc-manual-inp" placeholder="9785171183664" inputmode="numeric"><button class="btn-primary" id="sc-manual-go">Найти</button></div>`:''}
     </div>`;
     ol.querySelector('#sc-close').addEventListener('click',()=>{ stopScan(); ol.classList.add('hidden'); });
@@ -844,7 +822,7 @@ async function applyIsbn(isbn) {
   S.isbnLoading=true;
   openForm();
   document.getElementById('isbn-loading-msg')?.classList.remove('hidden');
-  toast('Поиск книги по ISBN на Litres.ru...');
+  toast('Поиск книги по ISBN на Bookmate...');
   try {
     const data = await fetchBookByIsbn(clean);
     if(data&&(data.title||data.cover)){
