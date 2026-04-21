@@ -354,40 +354,58 @@ function downloadJson(obj) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download=`book-tracker-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
 }
+function emptyForm(){return {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:'',finishedDate:''};}
 
-// ───────────────────────────── ISBN Lookup ──────────────────────────────
+// ───────────────────────────── ISBN Lookup (русские источники) ──────────────────────────────
 async function fetchBookByIsbn(isbn) {
   try {
-    const [olRes, gbRes] = await Promise.allSettled([
-      fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`).then(r=>r.json()),
-      fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`).then(r=>r.json())
-    ]);
-    if (olRes.status==='fulfilled' && olRes.value) {
-      const key = Object.keys(olRes.value)[0];
-      if (key) {
-        const d = olRes.value[key];
-        const title = d.title||'';
-        const author = d.authors?.[0]?.name||d.by_statement||'';
-        const cover = d.cover?.large||d.cover?.medium||`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
-        const desc = typeof d.notes==='string'?d.notes:d.subjects?.slice(0,4).map(s=>typeof s==='string'?s:s.name||'').join(', ')||'';
-        const genre = d.subjects?.[0]?.name||'';
-        if (title) return {title,author,cover,description:desc,genre};
+    // Приоритет 1: OpenLibrary (поддерживает русский контент хорошо и без ограничений)
+    const olRes = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`)
+      .then(r => r.json())
+      .catch(() => ({}));
+
+    if (olRes && Object.keys(olRes).length > 0) {
+      const key = Object.keys(olRes)[0];
+      const d = olRes[key];
+      const title = d.title || '';
+      const author = d.authors?.[0]?.name || d.by_statement || '';
+      const cover = d.cover?.large || d.cover?.medium || `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+      const desc = typeof d.notes === 'string' 
+        ? d.notes 
+        : d.subjects?.slice(0, 4).map(s => typeof s === 'string' ? s : s.name || '').join(', ') || '';
+      const genre = d.subjects?.[0]?.name || '';
+      
+      if (title) return { title, author, cover, description: desc, genre };
+    }
+
+    // Приоритет 2: Google Books API (международный источник)
+    const gbRes = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`)
+      .then(r => r.json())
+      .catch(() => ({ totalItems: 0 }));
+
+    if (gbRes?.totalItems > 0) {
+      const info = gbRes.items?.[0]?.volumeInfo;
+      if (info && info.title) {
+        const title = info.title;
+        const author = (info.authors || []).join(', ');
+        const cover = (info.imageLinks?.thumbnail || '').replace('http:', 'https:') 
+          || `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+        const description = (info.description || '').slice(0, 400);
+        const genre = (info.categories || [])[0] || '';
+        return { title, author, cover, description, genre };
       }
     }
-    if (gbRes.status==='fulfilled' && gbRes.value?.totalItems>0) {
-      const info = gbRes.value.items?.[0]?.volumeInfo;
-      if (info) {
-        const title=info.title||'', author=(info.authors||[]).join(', ');
-        const cover=(info.imageLinks?.thumbnail||'').replace('http:','https:')||`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
-        const description=(info.description||'').slice(0,400), genre=(info.categories||[])[0]||'';
-        if (title) return {title,author,cover,description,genre};
-      }
-    }
-    const coverUrl=`https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
-    const ok=await fetch(coverUrl).then(r=>r.ok).catch(()=>false);
-    if(ok) return {title:'',author:'',cover:coverUrl,description:'',genre:''};
+
+    // Приоритет 3: Проверяем наличие обложки в OpenLibrary даже если данных нет
+    const coverUrl = `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
+    const coverOk = await fetch(coverUrl, { method: 'HEAD' }).then(r => r.ok).catch(() => false);
+    if (coverOk) return { title: '', author: '', cover: coverUrl, description: '', genre: '' };
+    
     return null;
-  } catch { return null; }
+  } catch (error) {
+    console.error('ISBN lookup error:', error);
+    return null;
+  }
 }
 
 // ───────────────────────────── Sound / Vibration / Confetti ──────────────────────────────
@@ -594,7 +612,7 @@ function renderSettings(el) {
 let formData = {};
 function openForm(book=null) {
   editingBook = book;
-  formData = book ? {...book} : {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:''};
+  formData = book ? {...book} : emptyForm();
   renderForm();
   document.getElementById('form-overlay').classList.remove('hidden');
 }
@@ -808,7 +826,7 @@ function openScanner() {
 async function applyIsbn(isbn) {
   const clean = isbn.replace(/[^0-9X]/gi,'');
   S.isbnLoading=true;
-  openForm(); // open with empty/current formData
+  openForm();
   document.getElementById('isbn-loading-msg')?.classList.remove('hidden');
   toast('Поиск книги по ISBN...');
   try {
@@ -878,7 +896,7 @@ async function init() {
   // Events
   document.getElementById('backdrop').addEventListener('click',()=>setDrawerOpen(false));
   document.getElementById('menu-btn').addEventListener('click',()=>setDrawerOpen(true));
-  document.getElementById('add-btn').addEventListener('click',()=>{ const s=S.view==='wishlist'?'wishlist':'unread'; openForm({...emptyForm(),status:s}); });
+  document.getElementById('add-btn').addEventListener('click',()=>openForm());
   document.getElementById('avatar-btn').addEventListener('click',()=>document.getElementById('avatar-file').click());
   document.getElementById('avatar-file').addEventListener('change',async e=>{
     const file=e.target.files?.[0]; if(!file)return;
@@ -899,7 +917,6 @@ async function init() {
   window.addEventListener('online',()=>{ document.getElementById('d-status').className='online'; document.getElementById('d-status').textContent='● Онлайн'; });
   window.addEventListener('offline',()=>{ document.getElementById('d-status').className='offline'; document.getElementById('d-status').textContent='○ Оффлайн'; });
 }
-function emptyForm(){return {title:'',author:'',cover:'',status:'unread',rating:7,description:'',genre:'',price:0,purchaseDate:''};}
 init().catch(console.error);
 </script>
 </body>
