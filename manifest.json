@@ -1,39 +1,80 @@
 {
-  "name": "Book Tracker PWA",
-  "short_name": "Book Tracker",
-  "description": "Оффлайн приложение для управления личной библиотекой книг",
-  "start_url": "/BookTrackerPro/index.html",
+  "name": "Book Tracker Pro — Трекер книг для бук-блогера",
+  "short_name": "BookTracker",
+  "description": "Личный трекер прочитанных книг с контент-планом для бук-блогера. Поиск по ISBN, отзывы, цитаты, статистика. Работает оффлайн.",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "/BookTrackerPro/",
   "scope": "/BookTrackerPro/",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#0f1117",
+  "orientation": "portrait-primary",
   "theme_color": "#0f1117",
-  "lang": "ru",
-  "categories": ["books", "productivity", "lifestyle"],
+  "background_color": "#0f1117",
+  "categories": ["books", "education", "lifestyle", "productivity"],
   "icons": [
     {
-      "src": "/BookTrackerPro/icon-192.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/BookTrackerPro/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/BookTrackerPro/icon-512.png",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/BookTrackerPro/icon-512.png",
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
-  ]
+  ],
+  "shortcuts": [
+    {
+      "name": "Добавить книгу",
+      "short_name": "Добавить",
+      "description": "Добавить новую книгу по ISBN или вручную",
+      "url": "/BookTrackerPro/?action=add",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Контент-план",
+      "short_name": "Контент",
+      "description": "Открыть контент-план съёмок",
+      "url": "/BookTrackerPro/?tab=content",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Календарь",
+      "short_name": "Календарь",
+      "description": "Открыть календарь съёмок",
+      "url": "/BookTrackerPro/?tab=calendar",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
 }
