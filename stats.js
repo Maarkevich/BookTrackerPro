@@ -1,55 +1,43 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — stats.js
-// 🔖 v3.2.0 | 2026-07-24
-// 📝 Статистика + Календарь контент-плана
+// 🔖 v3.3.0 | 2026-07-25
+// 📝 Статистика + Календарь
 //
-//    Статистика:
-//      📚 Книги: прочитано, жанры, издательства, темп
-//      🎬 Контент: по типам, площадкам, статусам, месяцам
-//      📦 PR: от издательств, конверсия
+//    Подвкладки:
+//      📚 Книги    — статусы, жанры, издательства, время чтения
+//      🎬 Контент  — типы, площадки, статусы, топ книг
+//      💰 Финансы  — траты, средняя цена, по издательствам (НОВОЕ)
+//      🏆 Блог     — PR, конверсия, челленджи, серии, цитаты
 //
-//    Календарь:
-//      📅 Месячный вид с точками по типам контента
-//      Клик по дню → список контента на этот день
+//    Живая статистика: count-up чисел, анимация баров
 // ─────────────────────────────────────────────
 
 import { esc } from './app.js';
+import { formatPrice, convertToDefault } from './app.js';
+import { BOOK_STATUSES, CURRENCIES } from './db.js';
 import { CONTENT_TYPES, CONTENT_STATUSES, PLATFORMS } from './content.js';
+import { calcChallengeProgress } from './challenges.js';
+import { getSeriesList } from './series.js';
 
 // ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «СТАТИСТИКА»
 // ═══════════════════════════════════════════════
 
-/**
- * Рендерит вкладку статистики.
- *
- * @param {HTMLElement} container — #main-content
- * @param {object[]} books
- * @param {object} settings
- */
 export function renderStatsTab(container, books, settings) {
-  // Подвкладки
   if (!container._statsSub) container._statsSub = 'books';
   const sub = container._statsSub;
 
   container.innerHTML = `
     <div class="filter-bar no-scrollbar">
-      <button class="filter-chip ${sub === 'books' ? 'active' : ''}" data-ssub="books">
-        📚 Книги
-      </button>
-      <button class="filter-chip ${sub === 'content' ? 'active' : ''}" data-ssub="content">
-        🎬 Контент
-      </button>
-      <button class="filter-chip ${sub === 'blog' ? 'active' : ''}" data-ssub="blog">
-        📦 Блог
-      </button>
+      <button class="filter-chip ${sub === 'books' ? 'active' : ''}" data-ssub="books">📚 Книги</button>
+      <button class="filter-chip ${sub === 'content' ? 'active' : ''}" data-ssub="content">🎬 Контент</button>
+      <button class="filter-chip ${sub === 'money' ? 'active' : ''}" data-ssub="money">💰 Финансы</button>
+      <button class="filter-chip ${sub === 'blog' ? 'active' : ''}" data-ssub="blog">🏆 Блог</button>
     </div>
     <div id="stats-body"></div>
   `;
 
   const body = container.querySelector('#stats-body');
-
-  // Подвкладки
   container.querySelectorAll('[data-ssub]').forEach(btn => {
     btn.addEventListener('click', () => {
       container._statsSub = btn.dataset.ssub;
@@ -59,420 +47,467 @@ export function renderStatsTab(container, books, settings) {
 
   if (sub === 'books') renderBookStats(body, books);
   else if (sub === 'content') renderContentStats(body, books);
-  else renderBlogStats(body, books);
+  else if (sub === 'money') renderMoneyStats(body, books, settings);
+  else renderBlogStats(body, books, settings);
+
+  // Запуск анимаций после вставки в DOM
+  requestAnimationFrame(() => {
+    animateBars(body);
+    animateNumbers(body);
+  });
 }
 
 // ═══════════════════════════════════════════════
-//  2. СТАТИСТИКА: КНИГИ
+//  2. АНИМАЦИИ (count-up + бары)
+// ═══════════════════════════════════════════════
+
+function animateNumbers(container) {
+  container.querySelectorAll('[data-countup]').forEach(el => {
+    const target = parseFloat(el.dataset.countup);
+    const decimals = parseInt(el.dataset.decimals || 0);
+    const suffix = el.dataset.suffix || '';
+    if (isNaN(target)) return;
+
+    const duration = 900;
+    const start = performance.now();
+    function tick(now) {
+      const p = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const val = target * eased;
+      el.textContent = (decimals > 0 ? val.toFixed(decimals) : Math.round(val).toLocaleString('ru')) + suffix;
+      if (p < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+
+function animateBars(container) {
+  container.querySelectorAll('.stat-bar-fill[data-w]').forEach(el => {
+    el.style.width = el.dataset.w + '%';
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  3. СТАТИСТИКА: КНИГИ
 // ═══════════════════════════════════════════════
 
 function renderBookStats(container, books) {
   const total = books.length;
-  const finished = books.filter(b => b.status === 'finished').length;
-  const reading = books.filter(b => b.status === 'reading').length;
-  const tbr = books.filter(b => b.status === 'tbr').length;
-  const dropped = books.filter(b => b.status === 'dropped').length;
-  const paused = books.filter(b => b.status === 'paused').length;
+  const byStatus = {};
+  for (const b of books) byStatus[b.status] = (byStatus[b.status] || 0) + 1;
 
-  // Средний рейтинг
+  const finished = byStatus.finished || 0;
   const rated = books.filter(b => (b.review?.rating || b.rating || 0) > 0);
   const avgRating = rated.length > 0
-    ? (rated.reduce((s, b) => s + (b.review?.rating || b.rating || 0), 0) / rated.length).toFixed(1)
-    : '—';
+    ? (rated.reduce((s, b) => s + (b.review?.rating || b.rating || 0), 0) / rated.length)
+    : 0;
 
-  // Всего страниц
-  const totalPages = books.reduce((s, b) => s + (b.pageCount || 0), 0);
-  const readPages = books
-    .filter(b => b.status === 'finished')
-    .reduce((s, b) => s + (b.pageCount || 0), 0);
+  const readPages = books.filter(b => b.status === 'finished').reduce((s, b) => s + (b.pageCount || 0), 0);
 
-  // Жанры
-  const genres = countBy(books.filter(b => b.genre), b => b.genre);
-  const topGenres = Object.entries(genres)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8);
+  // Время чтения
+  const withDays = books.filter(b => b.readingDays > 0);
+  const avgDays = withDays.length > 0
+    ? Math.round(withDays.reduce((s, b) => s + b.readingDays, 0) / withDays.length) : 0;
+  const fastest = withDays.length > 0 ? withDays.reduce((a, b) => a.readingDays < b.readingDays ? a : b) : null;
+  const slowest = withDays.length > 0 ? withDays.reduce((a, b) => a.readingDays > b.readingDays ? a : b) : null;
 
-  // Издательства
-  const publishers = countBy(books.filter(b => b.publisher), b => b.publisher);
-  const topPublishers = Object.entries(publishers)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8);
-
-  // По месяцам (прочитанные)
+  const genres = topEntries(countBy(books.filter(b => b.genre), b => b.genre), 8);
+  const publishers = topEntries(countBy(books.filter(b => b.publisher), b => b.publisher), 8);
   const monthly = calcMonthlyBooks(books);
 
-  const maxGenre = topGenres.length > 0 ? topGenres[0][1] : 1;
-  const maxPub = topPublishers.length > 0 ? topPublishers[0][1] : 1;
+  const maxGenre = genres[0]?.[1] || 1;
+  const maxPub = publishers[0]?.[1] || 1;
   const maxMonthly = Math.max(...monthly.map(m => m.count), 1);
-
-  const genreColors = ['#6c8cff', '#4caf82', '#e0a030', '#e05555', '#a78bfa', '#f472b6', '#22d3ee', '#f97316'];
+  const palette = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#8aa3c9','#e0955c','#d97b6c'];
 
   container.innerHTML = `
-    <!-- Карточки -->
     <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-value">${total}</div>
-        <div class="stat-label">📚 Всего книг</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${finished}</div>
-        <div class="stat-label">✅ Прочитано</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${reading}</div>
-        <div class="stat-label">📖 Читаю</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${avgRating}</div>
-        <div class="stat-label">⭐ Средний рейтинг</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${tbr}</div>
-        <div class="stat-label">📋 Хочу прочитать</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${readPages.toLocaleString('ru')}</div>
-        <div class="stat-label">📄 Страниц прочитано</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${dropped}</div>
-        <div class="stat-label">❌ Брошено</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${paused}</div>
-        <div class="stat-label">⏸️ На паузе</div>
-      </div>
+      ${statCard(total, '📚 Всего книг', true)}
+      ${statCard(finished, '✅ Прочитано', true)}
+      ${statCard(avgRating, '⭐ Средний рейтинг', true, 1)}
+      ${statCard(readPages, '📄 Страниц прочитано', true)}
     </div>
-
-    <!-- Жанры -->
-    ${topGenres.length > 0 ? `
-      <div class="stat-section">
-        <h3>📂 Жанры</h3>
-        ${topGenres.map(([name, count], i) => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label truncate">${esc(name)}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(count / maxGenre) * 100}%;background:${genreColors[i % genreColors.length]}"></div>
-            </div>
-            <div class="stat-bar-count">${count}</div>
-          </div>
-        `).join('')}
-      </div>
-    ` : ''}
-
-    <!-- Издательства -->
-    ${topPublishers.length > 0 ? `
-      <div class="stat-section">
-        <h3>🏢 Издательства</h3>
-        ${topPublishers.map(([name, count], i) => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label truncate">${esc(name)}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(count / maxPub) * 100}%;background:${genreColors[(i + 3) % genreColors.length]}"></div>
-            </div>
-            <div class="stat-bar-count">${count}</div>
-          </div>
-        `).join('')}
-      </div>
-    ` : ''}
-
-    <!-- Активность по месяцам -->
-    ${monthly.length > 0 ? `
-      <div class="stat-section">
-        <h3>📅 Прочитано по месяцам</h3>
-        ${monthly.map(m => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label">${m.label}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(m.count / maxMonthly) * 100}%;background:var(--green)"></div>
-            </div>
-            <div class="stat-bar-count">${m.count}</div>
-          </div>
-        `).join('')}
-      </div>
-    ` : ''}
-  `;
-}
-
-// ═══════════════════════════════════════════════
-//  3. СТАТИСТИКА: КОНТЕНТ
-// ═══════════════════════════════════════════════
-
-function renderContentStats(container, books) {
-  // Собираем весь контент
-  const allContent = books.flatMap(b =>
-    (b.contentItems || []).map(c => ({ ...c, bookTitle: b.title }))
-  );
-
-  const total = allContent.length;
-  const published = allContent.filter(c => c.status === 'published').length;
-  const inProgress = allContent.filter(c =>
-    ['planned', 'filming', 'editing'].includes(c.status)
-  ).length;
-  const ideas = allContent.filter(c => c.status === 'idea').length;
-
-  // По типам
-  const byType = countBy(allContent, c => c.type);
-  const typeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
-  const maxType = typeEntries.length > 0 ? typeEntries[0][1] : 1;
-
-  // По площадкам
-  const byPlatform = countBy(
-    allContent.filter(c => c.platform),
-    c => c.platform
-  );
-  const platformEntries = Object.entries(byPlatform).sort((a, b) => b[1] - a[1]);
-  const maxPlatform = platformEntries.length > 0 ? platformEntries[0][1] : 1;
-
-  // По статусам
-  const byStatus = countBy(allContent, c => c.status);
-
-  // По месяцам (опубликованные)
-  const monthly = calcMonthlyContent(allContent);
-  const maxMonthly = Math.max(...monthly.map(m => m.count), 1);
-
-  // Топ книг по количеству контента
-  const bookContentCount = {};
-  for (const c of allContent) {
-    bookContentCount[c.bookTitle] = (bookContentCount[c.bookTitle] || 0) + 1;
-  }
-  const topBooks = Object.entries(bookContentCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-
-  const typeColors = {
-    unboxing: '#e0a030', read_with_me: '#4caf82', review: '#a78bfa',
-    lipsync: '#f472b6', top: '#22d3ee', quote: '#6c8cff',
-    comparison: '#e05555', haul: '#f97316'
-  };
-
-  const platformColors = {
-    youtube: '#e05555', tiktok: '#22d3ee', telegram: '#6c8cff',
-    vk: '#4caf82', dzen: '#e0a030', instagram: '#f472b6'
-  };
-
-  container.innerHTML = `
-    <!-- Карточки -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-value">${total}</div>
-        <div class="stat-label">🎬 Всего контента</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${published}</div>
-        <div class="stat-label">📤 Опубликовано</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${inProgress}</div>
-        <div class="stat-label">🎥 В работе</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${ideas}</div>
-        <div class="stat-label">💡 Идеи</div>
-      </div>
-    </div>
-
-    <!-- По типам -->
-    ${typeEntries.length > 0 ? `
-      <div class="stat-section">
-        <h3>🎬 Контент по типам</h3>
-        ${typeEntries.map(([type, count]) => {
-          const t = CONTENT_TYPES[type] || { icon: '🎬', label: type };
-          return `
-            <div class="stat-bar-row">
-              <div class="stat-bar-label">${t.icon} ${t.label}</div>
-              <div class="stat-bar-track">
-                <div class="stat-bar-fill" style="width:${(count / maxType) * 100}%;background:${typeColors[type] || '#6c8cff'}"></div>
-              </div>
-              <div class="stat-bar-count">${count}</div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    ` : ''}
-
-    <!-- По площадкам -->
-    ${platformEntries.length > 0 ? `
-      <div class="stat-section">
-        <h3>📱 По площадкам</h3>
-        ${platformEntries.map(([platform, count]) => {
-          const p = PLATFORMS[platform] || { icon: '🌐', label: platform };
-          return `
-            <div class="stat-bar-row">
-              <div class="stat-bar-label">${p.icon} ${p.label}</div>
-              <div class="stat-bar-track">
-                <div class="stat-bar-fill" style="width:${(count / maxPlatform) * 100}%;background:${platformColors[platform] || '#6c8cff'}"></div>
-              </div>
-              <div class="stat-bar-count">${count}</div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    ` : ''}
 
     <!-- По статусам -->
     <div class="stat-section">
       <h3>📊 По статусам</h3>
-      <div class="flex gap-8" style="flex-wrap:wrap">
-        ${Object.entries(CONTENT_STATUSES).map(([key, s]) => {
-          const count = byStatus[key] || 0;
-          return `
-            <div class="stat-card" style="flex:1;min-width:100px;padding:10px">
-              <div class="stat-value" style="font-size:1.3rem">${count}</div>
-              <div class="stat-label">${s.icon} ${s.label}</div>
-            </div>
-          `;
-        }).join('')}
+      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+        ${Object.entries(BOOK_STATUSES).map(([key, st]) => `
+          <div class="stat-card" style="padding:12px 8px">
+            <div class="stat-value" style="font-size:1.3rem" data-countup="${byStatus[key] || 0}">0</div>
+            <div class="stat-label">${st.icon} ${st.label}</div>
+          </div>
+        `).join('')}
       </div>
     </div>
 
-    <!-- Топ книг по контенту -->
-    ${topBooks.length > 0 ? `
+    <!-- Время чтения -->
+    ${withDays.length > 0 ? `
       <div class="stat-section">
-        <h3>🏆 Топ книг по контенту</h3>
-        ${topBooks.map(([title, count], i) => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label truncate">${i + 1}. ${esc(title)}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(count / topBooks[0][1]) * 100}%;background:var(--accent)"></div>
-            </div>
-            <div class="stat-bar-count">${count}</div>
-          </div>
-        `).join('')}
+        <h3>⏱️ Время чтения</h3>
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat-card"><div class="stat-value" data-countup="${avgDays}">0</div><div class="stat-label">дн. в среднем</div></div>
+          <div class="stat-card"><div class="stat-value" data-countup="${fastest.readingDays}">0</div><div class="stat-label">🚀 быстрее всего</div></div>
+          <div class="stat-card"><div class="stat-value" data-countup="${slowest.readingDays}">0</div><div class="stat-label">🐢 дольше всего</div></div>
+        </div>
+        <div class="text-small text-muted">
+          🚀 «${esc(fastest.title)}» — ${fastest.readingDays} дн. ·
+          🐢 «${esc(slowest.title)}» — ${slowest.readingDays} дн.
+        </div>
       </div>
     ` : ''}
 
-    <!-- Активность по месяцам -->
+    ${barSection('📂 Жанры', genres, maxGenre, palette)}
+    ${barSection('🏢 Издательства', publishers, maxPub, palette, 3)}
+
     ${monthly.length > 0 ? `
       <div class="stat-section">
-        <h3>📅 Публикации по месяцам</h3>
-        ${monthly.map(m => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label">${m.label}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(m.count / maxMonthly) * 100}%;background:var(--green)"></div>
-            </div>
-            <div class="stat-bar-count">${m.count}</div>
-          </div>
-        `).join('')}
+        <h3>📅 Прочитано по месяцам</h3>
+        ${monthly.map(m => barRow(m.label, m.count, maxMonthly, 'var(--green)')).join('')}
       </div>
     ` : ''}
   `;
 }
 
 // ═══════════════════════════════════════════════
-//  4. СТАТИСТИКА: БЛОГ (PR, конверсия)
+//  4. СТАТИСТИКА: КОНТЕНТ
 // ═══════════════════════════════════════════════
 
-function renderBlogStats(container, books) {
+function renderContentStats(container, books) {
+  const allContent = books.flatMap(b => (b.contentItems || []).map(c => ({ ...c, bookTitle: b.title })));
+  const total = allContent.length;
+  const published = allContent.filter(c => c.status === 'published').length;
+  const inProgress = allContent.filter(c => ['planned','filming','editing'].includes(c.status)).length;
+  const ideas = allContent.filter(c => c.status === 'idea').length;
+
+  const byType = topEntries(countBy(allContent, c => c.type), 10);
+  const byPlatform = topEntries(countBy(allContent.filter(c => c.platform), c => c.platform), 10);
+  const byStatus = countBy(allContent, c => c.status);
+
+  const bookContent = {};
+  for (const c of allContent) bookContent[c.bookTitle] = (bookContent[c.bookTitle] || 0) + 1;
+  const topBooks = topEntries(bookContent, 5);
+
+  const monthly = calcMonthlyContent(allContent);
+  const maxType = byType[0]?.[1] || 1;
+  const maxPlatform = byPlatform[0]?.[1] || 1;
+  const maxMonthly = Math.max(...monthly.map(m => m.count), 1);
+
+  const typeColors = {
+    unboxing:'#e0955c', read_with_me:'#94b878', review:'#b092d6', lipsync:'#d98aa8',
+    top:'#7fb8b0', quote:'#e8a33d', comparison:'#d97b6c', haul:'#e0955c'
+  };
+  const platformColors = {
+    youtube:'#d97b6c', tiktok:'#7fb8b0', telegram:'#8aa3c9', vk:'#94b878', dzen:'#e0955c', instagram:'#d98aa8'
+  };
+
+  container.innerHTML = `
+    <div class="stats-grid">
+      ${statCard(total, '🎬 Всего контента', true)}
+      ${statCard(published, '📤 Опубликовано', true)}
+      ${statCard(inProgress, '🎥 В работе', true)}
+      ${statCard(ideas, '💡 Идеи', true)}
+    </div>
+
+    ${byType.length > 0 ? `
+      <div class="stat-section">
+        <h3>🎬 По типам</h3>
+        ${byType.map(([type, count]) => {
+          const t = CONTENT_TYPES[type] || { icon: '🎬', label: type };
+          return barRow(`${t.icon} ${t.label}`, count, maxType, typeColors[type] || '#e8a33d');
+        }).join('')}
+      </div>
+    ` : ''}
+
+    ${byPlatform.length > 0 ? `
+      <div class="stat-section">
+        <h3>📱 По площадкам</h3>
+        ${byPlatform.map(([p, count]) => {
+          const pl = PLATFORMS[p] || { icon: '🌐', label: p };
+          return barRow(`${pl.icon} ${pl.label}`, count, maxPlatform, platformColors[p] || '#e8a33d');
+        }).join('')}
+      </div>
+    ` : ''}
+
+    <div class="stat-section">
+      <h3>📊 По статусам</h3>
+      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+        ${Object.entries(CONTENT_STATUSES).map(([key, s]) => `
+          <div class="stat-card" style="padding:12px 8px">
+            <div class="stat-value" style="font-size:1.3rem" data-countup="${byStatus[key] || 0}">0</div>
+            <div class="stat-label">${s.icon} ${s.label}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    ${topBooks.length > 0 ? `
+      <div class="stat-section">
+        <h3>🏆 Топ книг по контенту</h3>
+        ${topBooks.map(([title, count], i) => barRow(`${i + 1}. ${title}`, count, topBooks[0][1], 'var(--accent)')).join('')}
+      </div>
+    ` : ''}
+
+    ${monthly.length > 0 ? `
+      <div class="stat-section">
+        <h3>📅 Публикации по месяцам</h3>
+        ${monthly.map(m => barRow(m.label, m.count, maxMonthly, 'var(--green)')).join('')}
+      </div>
+    ` : ''}
+  `;
+}
+
+// ═══════════════════════════════════════════════
+//  5. СТАТИСТИКА: ФИНАНСЫ (НОВАЯ)
+// ═══════════════════════════════════════════════
+
+function renderMoneyStats(container, books, settings) {
+  if (!settings.showPriceInStats) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">💰</div>
+        <div class="empty-title">Финансы скрыты</div>
+        <div class="empty-text">Включите «Показывать цену в статистике» в Настройках</div>
+      </div>
+    `;
+    return;
+  }
+
+  const priced = books.filter(b => b.price?.amount > 0);
+  if (priced.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">💰</div>
+        <div class="empty-title">Нет данных о ценах</div>
+        <div class="empty-text">Добавьте цену книге в форме редактирования</div>
+      </div>
+    `;
+    return;
+  }
+
+  const def = settings.defaultCurrency;
+  const defSym = (CURRENCIES[def] || CURRENCIES.RUB).symbol;
+
+  // Конвертируем все цены в валюту по умолчанию
+  const converted = priced.map(b => ({
+    book: b,
+    amount: convertToDefault(b.price, settings).amount,
+    original: b.price,
+  }));
+
+  const total = converted.reduce((s, c) => s + c.amount, 0);
+  const avg = Math.round(total / converted.length);
+  const mostExpensive = converted.reduce((a, b) => a.amount > b.amount ? a : b);
+
+  // В этом месяце
+  const nowKey = new Date().toISOString().slice(0, 7);
+  const thisMonth = converted
+    .filter(c => (c.book.dateAdded || '').startsWith(nowKey))
+    .reduce((s, c) => s + c.amount, 0);
+
+  // По издательствам
+  const byPub = {};
+  for (const c of converted) {
+    const p = c.book.publisher || 'Без издательства';
+    if (!byPub[p]) byPub[p] = { sum: 0, count: 0 };
+    byPub[p].sum += c.amount;
+    byPub[p].count++;
+  }
+  const pubEntries = Object.entries(byPub).sort((a, b) => b[1].sum - a[1].sum).slice(0, 8);
+  const maxPub = pubEntries[0]?.[1].sum || 1;
+
+  // По месяцам
+  const byMonth = {};
+  for (const c of converted) {
+    const m = (c.book.dateAdded || '').slice(0, 7);
+    if (!m) continue;
+    byMonth[m] = (byMonth[m] || 0) + c.amount;
+  }
+  const monthEntries = Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+  const maxMonth = Math.max(...monthEntries.map(([, v]) => v), 1);
+
+  // Разбивка по валютам (оригиналы)
+  const byCurrency = {};
+  for (const c of converted) {
+    const cur = c.original.currency;
+    if (!byCurrency[cur]) byCurrency[cur] = { sum: 0, count: 0 };
+    byCurrency[cur].sum += c.original.amount;
+    byCurrency[cur].count++;
+  }
+
+  const palette = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#8aa3c9','#e0955c','#d97b6c'];
+
+  container.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" data-countup="${total}">0</div>
+        <div class="stat-label">💰 Всего потрачено (${defSym})</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-countup="${thisMonth}">0</div>
+        <div class="stat-label">📅 В этом месяце</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-countup="${avg}">0</div>
+        <div class="stat-label">⚖️ Средняя цена</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-countup="${priced.length}">0</div>
+        <div class="stat-label">📚 Книг с ценой</div>
+      </div>
+    </div>
+
+    <!-- Самая дорогая -->
+    <div class="stat-section">
+      <h3>👑 Самая дорогая книга</h3>
+      <div class="content-card" style="cursor:default">
+        ${mostExpensive.book.coverUrl
+          ? `<img src="${mostExpensive.book.coverUrl}" style="width:44px;height:66px;border-radius:6px;object-fit:cover"/>`
+          : `<div style="width:44px;height:66px;border-radius:6px;background:var(--bg-input);display:flex;align-items:center;justify-content:center">📕</div>`}
+        <div class="content-info">
+          <div class="content-title">${esc(mostExpensive.book.title)}</div>
+          <div class="content-book">${esc(mostExpensive.book.author)}</div>
+          <div class="content-meta">
+            <span class="book-badge badge-price">💰 ${formatPrice(mostExpensive.original)}</span>
+            ${mostExpensive.original.currency !== def
+              ? `<span class="text-small text-muted">≈ ${mostExpensive.amount.toLocaleString('ru')} ${defSym}</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- По издательствам -->
+    ${pubEntries.length > 0 ? `
+      <div class="stat-section">
+        <h3>🏢 Траты по издательствам</h3>
+        ${pubEntries.map(([name, d], i) => `
+          <div class="stat-bar-row">
+            <div class="stat-bar-label truncate">${esc(name)}</div>
+            <div class="stat-bar-track">
+              <div class="stat-bar-fill" data-w="${(d.sum / maxPub) * 100}" style="width:0%;background:${palette[i % palette.length]}"></div>
+            </div>
+            <div class="stat-bar-count">${d.sum.toLocaleString('ru')} ${defSym}</div>
+          </div>
+          <div class="text-small text-muted" style="margin:-4px 0 8px 114px">${d.count} книг</div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    <!-- По месяцам -->
+    ${monthEntries.length > 0 ? `
+      <div class="stat-section">
+        <h3>📅 Траты по месяцам</h3>
+        ${monthEntries.map(([m, v]) => barRow(formatMonth(m), v, maxMonth, 'var(--accent)', ' ' + defSym)).join('')}
+      </div>
+    ` : ''}
+
+    <!-- Разбивка по валютам -->
+    ${Object.keys(byCurrency).length > 1 ? `
+      <div class="stat-section">
+        <h3>💱 По валютам (оригинал)</h3>
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+          ${Object.entries(byCurrency).map(([cur, d]) => `
+            <div class="stat-card" style="padding:12px 8px">
+              <div class="stat-value" style="font-size:1.1rem">${d.sum.toLocaleString('ru')} ${(CURRENCIES[cur] || {}).symbol || cur}</div>
+              <div class="stat-label">${d.count} книг</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+// ═══════════════════════════════════════════════
+//  6. СТАТИСТИКА: БЛОГ
+// ═══════════════════════════════════════════════
+
+function renderBlogStats(container, books, settings) {
   const prBooks = books.filter(b => b.isPR);
   const totalPR = prBooks.length;
 
-  // По издательствам (PR)
-  const prByPublisher = countBy(
-    prBooks.filter(b => b.receivedFrom),
-    b => b.receivedFrom
-  );
-  const prPubEntries = Object.entries(prByPublisher).sort((a, b) => b[1] - a[1]);
-  const maxPR = prPubEntries.length > 0 ? prPubEntries[0][1] : 1;
+  const prByPub = topEntries(countBy(prBooks.filter(b => b.receivedFrom), b => b.receivedFrom), 8);
+  const maxPR = prByPub[0]?.[1] || 1;
 
-  // Конверсия: получена → контент снят → опубликовано
-  const withContent = prBooks.filter(b => (b.contentItems || []).length > 0);
-  const withPublished = prBooks.filter(b =>
-    (b.contentItems || []).some(c => c.status === 'published')
-  );
-  const withReview = prBooks.filter(b => b.review?.text || b.review?.rating > 0);
+  const withContent = prBooks.filter(b => (b.contentItems || []).length > 0).length;
+  const withPublished = prBooks.filter(b => (b.contentItems || []).some(c => c.status === 'published')).length;
+  const withReview = prBooks.filter(b => b.review?.text || b.review?.rating > 0).length;
 
-  const convContent = totalPR > 0 ? Math.round(withContent.length / totalPR * 100) : 0;
-  const convPublished = totalPR > 0 ? Math.round(withPublished.length / totalPR * 100) : 0;
-  const convReview = totalPR > 0 ? Math.round(withReview.length / totalPR * 100) : 0;
+  const conv = (n) => totalPR > 0 ? Math.round(n / totalPR * 100) : 0;
 
-  // Отзывы
   const totalReviews = books.filter(b => b.review?.text || b.review?.rating > 0).length;
   const totalQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).length, 0);
-  const usedQuotes = books.reduce((s, b) =>
-    s + (b.review?.quotes || []).filter(q => q.used).length, 0
-  );
+  const usedQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).filter(q => q.used).length, 0);
 
-  // Средний рейтинг отзывов
-  const reviewed = books.filter(b => (b.review?.rating || 0) > 0);
-  const avgReview = reviewed.length > 0
-    ? (reviewed.reduce((s, b) => s + b.review.rating, 0) / reviewed.length).toFixed(1)
-    : '—';
+  // Челленджи
+  const challenges = window._challengesCache || [];
+  const activeCh = challenges.filter(c => c.status === 'active');
+  const doneCh = challenges.filter(c => c.status === 'completed');
 
-  const pubColors = ['#6c8cff', '#4caf82', '#e0a030', '#e05555', '#a78bfa', '#f472b6'];
+  // Серии
+  const series = getSeriesList(books);
+  const completedSeries = series.filter(s => s.read >= s.effectiveTotal && s.effectiveTotal > 0);
+
+  const palette = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#8aa3c9','#e0955c','#d97b6c'];
 
   container.innerHTML = `
-    <!-- Карточки -->
     <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-value">${totalPR}</div>
-        <div class="stat-label">📦 PR-книг</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${totalReviews}</div>
-        <div class="stat-label">✍️ Отзывов</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${totalQuotes}</div>
-        <div class="stat-label">💬 Цитат</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value">${avgReview}</div>
-        <div class="stat-label">⭐ Средний рейтинг</div>
-      </div>
+      ${statCard(totalPR, '📦 PR-книг', true)}
+      ${statCard(totalReviews, '✍️ Отзывов', true)}
+      ${statCard(totalQuotes, '💬 Цитат', true)}
+      ${statCard(doneCh.length, '🏆 Челленджей завершено', true)}
     </div>
 
     <!-- Конверсия PR -->
     <div class="stat-section">
       <h3>📈 Конверсия PR-книг</h3>
-      <div class="hint text-small text-muted mb-8">
-        Получена → Контент → Опубликовано → Отзыв
-      </div>
-
-      <div class="stat-bar-row">
-        <div class="stat-bar-label">📦 Получено</div>
-        <div class="stat-bar-track">
-          <div class="stat-bar-fill" style="width:100%;background:var(--pink)"></div>
-        </div>
-        <div class="stat-bar-count">${totalPR}</div>
-      </div>
-      <div class="stat-bar-row">
-        <div class="stat-bar-label">🎬 С контентом</div>
-        <div class="stat-bar-track">
-          <div class="stat-bar-fill" style="width:${convContent}%;background:var(--cyan)"></div>
-        </div>
-        <div class="stat-bar-count">${convContent}%</div>
-      </div>
-      <div class="stat-bar-row">
-        <div class="stat-bar-label">📤 Опубликовано</div>
-        <div class="stat-bar-track">
-          <div class="stat-bar-fill" style="width:${convPublished}%;background:var(--green)"></div>
-        </div>
-        <div class="stat-bar-count">${convPublished}%</div>
-      </div>
-      <div class="stat-bar-row">
-        <div class="stat-bar-label">✍️ С отзывом</div>
-        <div class="stat-bar-track">
-          <div class="stat-bar-fill" style="width:${convReview}%;background:var(--purple)"></div>
-        </div>
-        <div class="stat-bar-count">${convReview}%</div>
-      </div>
+      <div class="text-small text-muted mb-8">Получена → Контент → Опубликовано → Отзыв</div>
+      ${convBar('📦 Получено', totalPR, totalPR, 'var(--pink)')}
+      ${convBar('🎬 С контентом', withContent, totalPR, 'var(--cyan)')}
+      ${convBar('📤 Опубликовано', withPublished, totalPR, 'var(--green)')}
+      ${convBar('✍️ С отзывом', withReview, totalPR, 'var(--purple)')}
     </div>
 
-    <!-- PR по издательствам -->
-    ${prPubEntries.length > 0 ? `
+    ${prByPub.length > 0 ? `
       <div class="stat-section">
         <h3>🏢 PR по издательствам</h3>
-        ${prPubEntries.map(([name, count], i) => `
-          <div class="stat-bar-row">
-            <div class="stat-bar-label truncate">${esc(name)}</div>
-            <div class="stat-bar-track">
-              <div class="stat-bar-fill" style="width:${(count / maxPR) * 100}%;background:${pubColors[i % pubColors.length]}"></div>
+        ${prByPub.map(([name, count], i) => barRow(name, count, maxPR, palette[i % palette.length])).join('')}
+      </div>
+    ` : ''}
+
+    <!-- Активные челленджи -->
+    ${activeCh.length > 0 ? `
+      <div class="stat-section">
+        <h3>🟢 Активные челленджи</h3>
+        ${activeCh.map(ch => {
+          const prog = calcChallengeProgress(ch, books);
+          return `
+            <div class="content-card" style="cursor:default">
+              <div class="content-icon" style="background:var(--accent-dim)">${ch.emoji || '🏆'}</div>
+              <div class="content-info">
+                <div class="content-title">${esc(ch.name)}</div>
+                <div class="content-meta">
+                  <span class="text-small">${prog.current} / ${prog.target} · ${prog.percent}%</span>
+                </div>
+                <div class="series-progress-track mt-8" style="height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden">
+                  <div class="stat-bar-fill" data-w="${prog.percent}" style="width:0%;background:linear-gradient(90deg,var(--green),var(--cyan));height:100%"></div>
+                </div>
+              </div>
             </div>
-            <div class="stat-bar-count">${count}</div>
-          </div>
-        `).join('')}
+          `;
+        }).join('')}
+      </div>
+    ` : ''}
+
+    <!-- Серии -->
+    ${series.length > 0 ? `
+      <div class="stat-section">
+        <h3>📚 Серии</h3>
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat-card"><div class="stat-value" data-countup="${series.length}">0</div><div class="stat-label">всего серий</div></div>
+          <div class="stat-card"><div class="stat-value" data-countup="${series.filter(s => s.read > 0 && s.read < s.effectiveTotal).length}">0</div><div class="stat-label">в процессе</div></div>
+          <div class="stat-card"><div class="stat-value" data-countup="${completedSeries.length}">0</div><div class="stat-label">🏆 завершено</div></div>
+        </div>
       </div>
     ` : ''}
 
@@ -480,48 +515,42 @@ function renderBlogStats(container, books) {
     <div class="stat-section">
       <h3>💬 Цитаты</h3>
       <div class="stats-grid" style="grid-template-columns:1fr 1fr">
-        <div class="stat-card">
-          <div class="stat-value">${totalQuotes}</div>
-          <div class="stat-label">Всего цитат</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${usedQuotes}</div>
-          <div class="stat-label">✅ Использовано</div>
-        </div>
+        <div class="stat-card"><div class="stat-value" data-countup="${totalQuotes}">0</div><div class="stat-label">всего цитат</div></div>
+        <div class="stat-card"><div class="stat-value" data-countup="${usedQuotes}">0</div><div class="stat-label">✅ использовано</div></div>
       </div>
     </div>
   `;
 }
 
+function convBar(label, value, total, color) {
+  const pct = total > 0 ? Math.round(value / total * 100) : 0;
+  return `
+    <div class="stat-bar-row">
+      <div class="stat-bar-label">${label}</div>
+      <div class="stat-bar-track">
+        <div class="stat-bar-fill" data-w="${pct}" style="width:0%;background:${color}"></div>
+      </div>
+      <div class="stat-bar-count">${pct}%</div>
+    </div>
+  `;
+}
+
 // ═══════════════════════════════════════════════
-//  5. ВКЛАДКА «КАЛЕНДАРЬ»
+//  7. ВКЛАДКА «КАЛЕНДАРЬ»
 // ═══════════════════════════════════════════════
 
-/**
- * Рендерит вкладку календаря.
- *
- * @param {HTMLElement} container — #main-content
- * @param {object[]} books
- * @param {object} callbacks — { onDayClick, onAdd }
- */
 export function renderCalendarTab(container, books, callbacks) {
-  // Текущий месяц (сохраняем между рендерами)
   if (!container._calYear) {
     const now = new Date();
     container._calYear = now.getFullYear();
     container._calMonth = now.getMonth();
   }
-
   const year = container._calYear;
   const month = container._calMonth;
 
-  const monthNames = [
-    'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
-  ];
-  const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  const dayNames = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-  // Собираем контент по датам
   const contentByDate = {};
   for (const book of books) {
     for (const c of (book.contentItems || [])) {
@@ -532,71 +561,40 @@ export function renderCalendarTab(container, books, callbacks) {
     }
   }
 
-  // Строим сетку календаря
   const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
-  const daysInMonth = lastDay.getDate();
-
-  // Понедельник = 0 (JS: getDay() → 0=Вс, 1=Пн, ...)
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
   let startDow = firstDay.getDay() - 1;
   if (startDow < 0) startDow = 6;
 
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-
-  // Ячейки: пустые (предыдущий месяц) + дни + пустые (следующий)
+  const todayStr = new Date().toISOString().slice(0, 10);
   const cells = [];
 
-  // Пустые ячейки в начале
-  const prevMonthLast = new Date(year, month, 0).getDate();
-  for (let i = startDow - 1; i >= 0; i--) {
-    cells.push({ day: prevMonthLast - i, other: true, dateStr: null });
-  }
-
-  // Дни текущего месяца
+  const prevLast = new Date(year, month, 0).getDate();
+  for (let i = startDow - 1; i >= 0; i--) cells.push({ day: prevLast - i, other: true });
   for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    cells.push({
-      day: d,
-      other: false,
-      dateStr,
-      isToday: dateStr === todayStr,
-      content: contentByDate[dateStr] || []
-    });
+    const dateStr = `${year}-${String(month + 1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    cells.push({ day: d, other: false, dateStr, isToday: dateStr === todayStr, content: contentByDate[dateStr] || [] });
   }
-
-  // Пустые ячейки в конце (до 42 = 6 строк)
-  const remaining = 42 - cells.length;
-  for (let i = 1; i <= remaining; i++) {
-    cells.push({ day: i, other: true, dateStr: null });
-  }
+  const rem = 42 - cells.length;
+  for (let i = 1; i <= rem; i++) cells.push({ day: i, other: true });
 
   container.innerHTML = `
     <div class="calendar">
       <div class="calendar-header">
         <h3>${monthNames[month]} ${year}</h3>
         <div class="calendar-nav">
-          <button id="cal-prev" aria-label="Предыдущий месяц">◀</button>
-          <button id="cal-today" class="btn-small" style="font-size:0.75rem">Сегодня</button>
-          <button id="cal-next" aria-label="Следующий месяц">▶</button>
+          <button id="cal-prev">◀</button>
+          <button id="cal-today" class="btn-small" style="font-size:.72rem;width:auto">Сегодня</button>
+          <button id="cal-next">▶</button>
         </div>
       </div>
-
       <div class="calendar-grid">
         ${dayNames.map(d => `<div class="calendar-day-name">${d}</div>`).join('')}
         ${cells.map(cell => {
-          if (cell.other) {
-            return `<div class="calendar-day other-month"><span class="day-num">${cell.day}</span></div>`;
-          }
-
-          const dots = cell.content.slice(0, 4).map(c => {
-            const type = c.type || 'review';
-            return `<span class="calendar-dot ${type}"></span>`;
-          }).join('');
-
+          if (cell.other) return `<div class="calendar-day other-month"><span class="day-num">${cell.day}</span></div>`;
+          const dots = cell.content.slice(0, 4).map(c => `<span class="calendar-dot ${c.type || 'review'}"></span>`).join('');
           return `
-            <div class="calendar-day ${cell.isToday ? 'today' : ''}"
-                 data-date="${cell.dateStr}"
+            <div class="calendar-day ${cell.isToday ? 'today' : ''}" data-date="${cell.dateStr}"
                  ${cell.content.length > 0 ? 'style="cursor:pointer"' : ''}>
               <span class="day-num">${cell.day}</span>
               ${dots ? `<div class="calendar-dots">${dots}</div>` : ''}
@@ -604,47 +602,26 @@ export function renderCalendarTab(container, books, callbacks) {
           `;
         }).join('')}
       </div>
-
-      <!-- Легенда -->
       <div class="calendar-legend">
         ${Object.entries(CONTENT_TYPES).map(([key, t]) => `
-          <div class="legend-item">
-            <span class="legend-dot" style="background:${getTypeColor(key)}"></span>
-            ${t.icon} ${t.label}
-          </div>
+          <div class="legend-item"><span class="legend-dot" style="background:${getTypeColor(key)}"></span>${t.icon} ${t.label}</div>
         `).join('')}
       </div>
     </div>
-
-    <!-- Контент на выбранный день -->
     <div id="cal-day-content" class="mt-16"></div>
-
-    <button id="cal-add" class="btn-primary mt-16">
-      ＋ Запланировать контент
-    </button>
+    <button id="cal-add" class="btn-primary mt-16">＋ Запланировать контент</button>
   `;
 
-  // ── События ──
-
-  // Навигация по месяцам
   container.querySelector('#cal-prev').addEventListener('click', () => {
     container._calMonth--;
-    if (container._calMonth < 0) {
-      container._calMonth = 11;
-      container._calYear--;
-    }
+    if (container._calMonth < 0) { container._calMonth = 11; container._calYear--; }
     renderCalendarTab(container, books, callbacks);
   });
-
   container.querySelector('#cal-next').addEventListener('click', () => {
     container._calMonth++;
-    if (container._calMonth > 11) {
-      container._calMonth = 0;
-      container._calYear++;
-    }
+    if (container._calMonth > 11) { container._calMonth = 0; container._calYear++; }
     renderCalendarTab(container, books, callbacks);
   });
-
   container.querySelector('#cal-today').addEventListener('click', () => {
     const now = new Date();
     container._calYear = now.getFullYear();
@@ -652,27 +629,17 @@ export function renderCalendarTab(container, books, callbacks) {
     renderCalendarTab(container, books, callbacks);
   });
 
-  // Клик по дню
   container.querySelectorAll('.calendar-day[data-date]').forEach(day => {
     day.addEventListener('click', () => {
       const dateStr = day.dataset.date;
       const dayContent = contentByDate[dateStr] || [];
-
       const dayEl = container.querySelector('#cal-day-content');
-
       if (dayContent.length === 0) {
-        dayEl.innerHTML = `
-          <div class="text-center text-muted text-small" style="padding:20px">
-            📅 ${formatDateRu(dateStr)}: нет запланированного контента
-          </div>
-        `;
+        dayEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:20px">📅 ${formatDateRu(dateStr)}: нет контента</div>`;
         return;
       }
-
       dayEl.innerHTML = `
-        <div class="text-small text-muted mb-8" style="font-weight:700">
-          📅 ${formatDateRu(dateStr)}
-        </div>
+        <div class="text-small text-muted mb-8" style="font-weight:700">📅 ${formatDateRu(dateStr)}</div>
         ${dayContent.map(c => {
           const t = CONTENT_TYPES[c.type] || { icon: '🎬', label: c.type };
           const s = CONTENT_STATUSES[c.status] || { icon: '❓', label: c.status, class: '' };
@@ -695,102 +662,102 @@ export function renderCalendarTab(container, books, callbacks) {
     });
   });
 
-  // Добавить контент
-  container.querySelector('#cal-add').addEventListener('click', () => {
-    callbacks.onAdd();
-  });
+  container.querySelector('#cal-add').addEventListener('click', () => callbacks.onAdd());
 }
 
 // ═══════════════════════════════════════════════
-//  6. УТИЛИТЫ
+//  8. УТИЛИТЫ
 // ═══════════════════════════════════════════════
 
-/**
- * Подсчёт по ключу.
- * @returns {Object<string, number>}
- */
 function countBy(arr, keyFn) {
-  const result = {};
+  const r = {};
   for (const item of arr) {
-    const key = keyFn(item);
-    if (key) result[key] = (result[key] || 0) + 1;
+    const k = keyFn(item);
+    if (k) r[k] = (r[k] || 0) + 1;
   }
-  return result;
+  return r;
 }
 
-/**
- * Прочитанные книги по месяцам (за последние 12).
- */
+function topEntries(obj, n) {
+  return Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+
+function statCard(value, label, countup, decimals = 0) {
+  return `
+    <div class="stat-card">
+      <div class="stat-value" ${countup ? `data-countup="${value}" data-decimals="${decimals}"` : ''}>${countup ? '0' : value}</div>
+      <div class="stat-label">${label}</div>
+    </div>
+  `;
+}
+
+function barSection(title, entries, max, palette, offset = 0) {
+  if (entries.length === 0) return '';
+  return `
+    <div class="stat-section">
+      <h3>${title}</h3>
+      ${entries.map(([name, count], i) => barRow(name, count, max, palette[(i + offset) % palette.length])).join('')}
+    </div>
+  `;
+}
+
+function barRow(label, count, max, color, suffix = '') {
+  return `
+    <div class="stat-bar-row">
+      <div class="stat-bar-label truncate">${esc(label)}</div>
+      <div class="stat-bar-track">
+        <div class="stat-bar-fill" data-w="${(count / max) * 100}" style="width:0%;background:${color}"></div>
+      </div>
+      <div class="stat-bar-count">${count}${suffix}</div>
+    </div>
+  `;
+}
+
 function calcMonthlyBooks(books) {
   const now = new Date();
   const months = [];
-
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`;
     const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' });
-
-    const count = books.filter(b => {
-      if (b.status !== 'finished') return false;
-      const date = b.dateFinished || b.updatedAt || '';
-      return date.startsWith(key);
-    }).length;
-
+    const count = books.filter(b => b.status === 'finished' && (b.dateFinished || '').startsWith(key)).length;
     months.push({ key, label, count });
   }
-
-  // Убираем пустые месяцы в начале
   while (months.length > 0 && months[0].count === 0) months.shift();
   return months;
 }
 
-/**
- * Опубликованный контент по месяцам (за последние 12).
- */
 function calcMonthlyContent(allContent) {
   const now = new Date();
   const months = [];
-
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`;
     const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' });
-
-    const count = allContent.filter(c => {
-      if (c.status !== 'published') return false;
-      const date = c.publishedDate || '';
-      return date.startsWith(key);
-    }).length;
-
+    const count = allContent.filter(c => c.status === 'published' && (c.publishedDate || '').startsWith(key)).length;
     months.push({ key, label, count });
   }
-
   while (months.length > 0 && months[0].count === 0) months.shift();
   return months;
 }
 
-/**
- * Цвет для типа контента (для точек календаря).
- */
-function getTypeColor(type) {
-  const colors = {
-    unboxing: '#e0a030', read_with_me: '#4caf82', review: '#a78bfa',
-    lipsync: '#f472b6', top: '#22d3ee', quote: '#6c8cff',
-    comparison: '#e05555', haul: '#f97316'
-  };
-  return colors[type] || '#6c8cff';
+function formatMonth(key) {
+  try {
+    const d = new Date(key + '-01T00:00:00');
+    return d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' });
+  } catch { return key; }
 }
 
-/**
- * Форматирование даты: "25 июля 2026"
- */
+function getTypeColor(type) {
+  const colors = {
+    unboxing:'#e0955c', read_with_me:'#94b878', review:'#b092d6', lipsync:'#d98aa8',
+    top:'#7fb8b0', quote:'#e8a33d', comparison:'#d97b6c', haul:'#e0955c'
+  };
+  return colors[type] || '#e8a33d';
+}
+
 function formatDateRu(dateStr) {
   try {
-    const d = new Date(dateStr + 'T00:00:00');
-    return d.toLocaleDateString('ru-RU', {
-      day: 'numeric', month: 'long', year: 'numeric'
-    });
-  } catch {
-    return dateStr;
-  }
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  } catch { return dateStr; }
 }

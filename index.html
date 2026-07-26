@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
   <meta name="theme-color" content="#0f1117"/>
-  <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера"/>
+  <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, цитаты по фото"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <meta name="apple-mobile-web-app-title" content="BookTracker"/>
@@ -17,13 +17,25 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
 
   <!-- Стили -->
-  <link rel="stylesheet" href="app.css?v=3.2.0"/>
+  <link rel="stylesheet" href="app.css?v=3.3.0"/>
+
+  <!-- Шрифты: заголовочный + текстовый -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
   <!-- Preload критических ресурсов -->
   <link rel="preload" href="app.js" as="script" crossorigin/>
   <link rel="preload" href="db.js" as="script" crossorigin/>
 </head>
 <body>
+  <!-- ═══ Фоновая атмосфера ═══ -->
+  <div class="ambient" aria-hidden="true">
+    <div class="ambient-glow ambient-glow-1"></div>
+    <div class="ambient-glow ambient-glow-2"></div>
+    <div class="ambient-grain"></div>
+  </div>
+
   <!-- ═══ Конфетти ═══ -->
   <canvas id="confetti-canvas"></canvas>
 
@@ -32,31 +44,68 @@
   <aside id="drawer" class="drawer">
     <div class="drawer-header">
       <span class="drawer-logo">📚</span>
-      <span class="drawer-title">Book Tracker Pro</span>
+      <div class="drawer-title-wrap">
+        <span class="drawer-title">Book Tracker</span>
+        <span class="drawer-subtitle">Pro · для бук-блогера</span>
+      </div>
       <button id="drawer-close" class="icon-btn" aria-label="Закрыть">✕</button>
     </div>
+
     <nav class="drawer-nav">
+      <!-- Основные разделы -->
       <button class="nav-item active" data-tab="books">
         <span class="nav-icon">📚</span> Мои книги
+        <span class="nav-count" id="nav-count-books"></span>
       </button>
       <button class="nav-item" data-tab="content">
         <span class="nav-icon">🎬</span> Контент-план
+        <span class="nav-count" id="nav-count-content"></span>
       </button>
       <button class="nav-item" data-tab="reviews">
         <span class="nav-icon">✍️</span> Отзывы
+        <span class="nav-count" id="nav-count-reviews"></span>
       </button>
       <button class="nav-item" data-tab="calendar">
         <span class="nav-icon">📅</span> Календарь
       </button>
+      <button class="nav-item" data-tab="challenges">
+        <span class="nav-icon">🏆</span> Челленджи
+        <span class="nav-count" id="nav-count-challenges"></span>
+      </button>
       <button class="nav-item" data-tab="stats">
         <span class="nav-icon">📊</span> Статистика
       </button>
+
+      <!-- Подборки (динамические) -->
+      <div class="drawer-section">
+        <div class="drawer-section-title">📂 Подборки</div>
+        <div id="drawer-collections"><!-- заполняется из collections.js --></div>
+        <button class="nav-item sub" id="drawer-add-collection">
+          <span class="nav-icon">＋</span> Новая подборка
+        </button>
+      </div>
+
+      <!-- Серии (динамические) -->
+      <div class="drawer-section">
+        <div class="drawer-section-title">📚 Серии</div>
+        <div id="drawer-series"><!-- заполняется из series.js --></div>
+      </div>
+
+      <!-- Системные фильтры (динамические) -->
+      <div class="drawer-section">
+        <div class="drawer-section-title">🔎 Фильтры</div>
+        <div id="drawer-filters"><!-- заполняется из collections.js --></div>
+      </div>
+
+      <!-- Настройки -->
       <button class="nav-item" data-tab="settings">
         <span class="nav-icon">⚙️</span> Настройки
       </button>
     </nav>
+
     <div class="drawer-footer">
-      <span id="drawer-version">v3.2.0</span>
+      <span id="drawer-version">v3.3.0</span>
+      <span class="drawer-offline hidden" id="drawer-offline">📴 оффлайн</span>
     </div>
   </aside>
 
@@ -68,16 +117,20 @@
       <h1 id="page-title" class="topbar-title">Мои книги</h1>
       <div class="topbar-actions">
         <button id="search-toggle" class="icon-btn" aria-label="Поиск">🔍</button>
+        <button id="scan-btn" class="icon-btn" aria-label="Сканер ISBN">📷</button>
         <button id="add-btn" class="icon-btn primary" aria-label="Добавить">＋</button>
       </div>
     </header>
 
-    <!-- Поисковая строка (скрыта по умолчанию) -->
+    <!-- Поисковая строка -->
     <div id="search-bar" class="search-bar hidden">
-      <input type="text" id="search-input" placeholder="Поиск по названию, автору, ISBN..."
+      <input type="text" id="search-input" placeholder="Поиск по названию, автору, ISBN, тегу..."
              autocomplete="off" enterkeyhint="search"/>
       <button id="search-close" class="icon-btn">✕</button>
     </div>
+
+    <!-- Активные фильтры (теги, подборки, серии) -->
+    <div id="active-filters" class="active-filters hidden"></div>
 
     <!-- Контент страницы -->
     <main id="main-content" class="main-content">
@@ -92,9 +145,7 @@
         <h2 id="form-title">Новая книга</h2>
         <button id="form-close" class="icon-btn">✕</button>
       </div>
-      <div id="form-body" class="overlay-body">
-        <!-- Заполняется через JS (bookForm) -->
-      </div>
+      <div id="form-body" class="overlay-body"><!-- JS --></div>
     </div>
   </div>
 
@@ -105,9 +156,7 @@
         <h2 id="detail-title">Книга</h2>
         <button id="detail-close" class="icon-btn">✕</button>
       </div>
-      <div id="detail-body" class="overlay-body">
-        <!-- Заполняется через JS (bookDetail) -->
-      </div>
+      <div id="detail-body" class="overlay-body"><!-- JS --></div>
     </div>
   </div>
 
@@ -135,9 +184,7 @@
         <h2 id="content-form-title">Новый контент</h2>
         <button id="content-form-close" class="icon-btn">✕</button>
       </div>
-      <div id="content-form-body" class="overlay-body">
-        <!-- Заполняется через JS (content.js) -->
-      </div>
+      <div id="content-form-body" class="overlay-body"><!-- JS --></div>
     </div>
   </div>
 
@@ -148,13 +195,26 @@
         <h2 id="review-form-title">Отзыв</h2>
         <button id="review-form-close" class="icon-btn">✕</button>
       </div>
-      <div id="review-form-body" class="overlay-body">
-        <!-- Заполняется через JS (review.js) -->
+      <div id="review-form-body" class="overlay-body"><!-- JS --></div>
+    </div>
+  </div>
+
+  <!-- ═══ Оверлей: Просмотр обложки (НОВЫЙ) ═══ -->
+  <div id="cover-overlay" class="overlay hidden">
+    <div class="cover-viewer">
+      <button id="cover-close" class="icon-btn cover-close-btn">✕</button>
+      <img id="cover-viewer-img" src="" alt="Обложка"/>
+      <div class="cover-viewer-caption">
+        <div id="cover-viewer-title" class="cover-viewer-title"></div>
+        <div class="cover-viewer-actions">
+          <button id="cover-photo-btn" class="btn-secondary">📷 Заменить фото</button>
+          <input type="file" id="cover-photo-input" accept="image/*" capture="environment" class="hidden"/>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- ═══ Тост (уведомления) ═══ -->
+  <!-- ═══ Тост ═══ -->
   <div id="toast-el" class="toast hidden"></div>
 
   <!-- ═══ Баннер обновления PWA ═══ -->
@@ -172,6 +232,6 @@
   </div>
 
   <!-- JS модуль -->
-  <script type="module" src="app.js?v=3.2.0"></script>
+  <script type="module" src="app.js?v=3.3.0"></script>
 </body>
 </html>

@@ -1,15 +1,15 @@
 {
   "name": "Book Tracker Pro — Трекер книг для бук-блогера",
   "short_name": "BookTracker",
-  "description": "Личный трекер прочитанных книг с контент-планом для бук-блогера. Поиск по ISBN, отзывы, цитаты, статистика. Работает оффлайн.",
+  "description": "Трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, контент-план, отзывы, статистика. Работает полностью оффлайн.",
   "lang": "ru",
   "dir": "ltr",
   "start_url": "/BookTrackerPro/",
   "scope": "/BookTrackerPro/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "theme_color": "#0f1117",
-  "background_color": "#0f1117",
+  "theme_color": "#161210",
+  "background_color": "#161210",
   "categories": ["books", "education", "lifestyle", "productivity"],
   "icons": [
     {
@@ -41,38 +41,30 @@
     {
       "name": "Добавить книгу",
       "short_name": "Добавить",
-      "description": "Добавить новую книгу по ISBN или вручную",
+      "description": "Добавить книгу по ISBN или вручную",
       "url": "/BookTrackerPro/?action=add",
-      "icons": [
-        {
-          "src": "icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Сканер ISBN",
+      "short_name": "Сканер",
+      "description": "Отсканировать штрихкод книги",
+      "url": "/BookTrackerPro/?action=scan",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Контент-план",
       "short_name": "Контент",
       "description": "Открыть контент-план съёмок",
       "url": "/BookTrackerPro/?tab=content",
-      "icons": [
-        {
-          "src": "icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Календарь",
-      "short_name": "Календарь",
-      "description": "Открыть календарь съёмок",
-      "url": "/BookTrackerPro/?tab=calendar",
-      "icons": [
-        {
-          "src": "icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
+      "name": "Челленджи",
+      "short_name": "Челленджи",
+      "description": "Открыть челленджи чтения",
+      "url": "/BookTrackerPro/?tab=challenges",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     }
   ],
   "screenshots": [],
