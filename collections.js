@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — collections.js
-// 🔖 v3.4.0 | 2026-07-29
+// 🔖 v3.4.2 | 2026-07-30
 // 📝 Подборки книг
 //
 //    Типы:
@@ -181,7 +181,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
           ${collection.isSystem ? ' · системная' : ''}
         </div>
       </div>
-      <!-- v3.4.0: редактирование доступно и для системных подборок -->
+      <!-- v3.4.2: редактирование доступно и для системных подборок -->
       <button id="col-edit-hero" class="btn-secondary" style="flex-shrink:0" title="Редактировать">✏️</button>
     </div>
 
@@ -313,7 +313,7 @@ export function openCollectionForm(collection, onSave) {
       description: overlay.querySelector('#col-f-desc').value.trim(),
       bookIds: c.bookIds || [],
       isSystem: c.isSystem || false,
-      // v3.4.0: сохраняем порядок (для новых — назначит app.js)
+      // v3.4.2: сохраняем порядок (для новых — назначит app.js)
       order: typeof c.order === 'number' ? c.order : undefined,
       createdAt: c.createdAt || new Date().toISOString(),
     };
@@ -611,7 +611,7 @@ const COLLECTION_STYLES = `
 }
 .collection-count { font-size:.78rem; color:var(--text-secondary); }
 
-/* v3.4.0: бейдж системной подборки */
+/* v3.4.2: бейдж системной подборки */
 .col-system-badge {
   font-size:.6rem; font-weight:800;
   padding:2px 7px; border-radius:8px;
@@ -620,7 +620,7 @@ const COLLECTION_STYLES = `
   flex-shrink:0;
 }
 
-/* v3.4.0: блок действий (порядок + правка + удаление) */
+/* v3.4.2: блок действий (порядок + правка + удаление) */
 .collection-actions {
   display:flex; align-items:center; gap:4px;
   flex-shrink:0;

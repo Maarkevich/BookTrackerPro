@@ -1,6 +1,6 @@
 /* ─────────────────────────────────────────────
 📦 BookTrackerPro — app.css
-🔖 v3.4.0 | 2026-07-29
+🔖 v3.4.2 | 2026-07-30
 📝 Дизайн: «ночная библиотека»
 Тёплый тёмный + янтарный акцент
 Display: Unbounded · Body: Manrope
@@ -218,7 +218,7 @@ select {
 .icon-btn.primary:active { transform: scale(.92); }
 
 /* ═══════════════════════════════════════════════
-6. ПОИСК (ГЛОБАЛЬНЫЙ, v3.4.0) И АКТИВНЫЕ ФИЛЬТРЫ
+6. ПОИСК (ГЛОБАЛЬНЫЙ, v3.4.2) И АКТИВНЫЕ ФИЛЬТРЫ
 ═══════════════════════════════════════════════ */
 .search-bar {
   display: flex; flex-direction: column; gap: 9px;
@@ -432,7 +432,7 @@ select {
   text-transform: uppercase; color: var(--text-muted);
   padding: 0 14px 6px;
 }
-/* v3.4.0: кликабельные заголовки секций */
+/* v3.4.2: кликабельные заголовки секций */
 button.drawer-section-title {
   display: block; width: 100%; text-align: left;
   background: none; border: none; cursor: pointer;
@@ -660,7 +660,7 @@ button.drawer-section-title:hover {
   color: var(--accent);
 }
 
-/* v3.4.0: чипы тегов в форме книги */
+/* v3.4.2: чипы тегов в форме книги */
 .tags-chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .tag-pick-chip {
   padding: 6px 13px; border-radius: 16px;
@@ -676,7 +676,7 @@ button.drawer-section-title:hover {
   box-shadow: 0 2px 8px rgba(232,163,61,.15);
 }
 
-/* v3.4.0: предпросмотр обложки в форме */
+/* v3.4.2: предпросмотр обложки в форме */
 .cover-preview {
   margin-top: 10px;
   display: flex; justify-content: center;
@@ -828,7 +828,7 @@ button.drawer-section-title:hover {
   background: var(--bg-input); color: var(--text-secondary);
 }
 
-/* v3.4.0: SVG-иконки соцсетей */
+/* v3.4.2: SVG-иконки соцсетей */
 .p-icon {
   display: inline-flex; align-items: center; justify-content: center;
   vertical-align: -2px;
@@ -836,7 +836,7 @@ button.drawer-section-title:hover {
 }
 .p-icon svg { width: 100%; height: 100%; display: block; }
 
-/* v3.4.0: превью публикации (Microlink) */
+/* v3.4.2: превью публикации (Microlink) */
 .link-preview-card {
   display: flex; gap: 10px; align-items: center;
   padding: 8px;
@@ -1172,7 +1172,7 @@ button.drawer-section-title:hover {
 .content-list-title { font-size: .87rem; font-weight: 700; }
 .content-list-sub { font-size: .76rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
 
-/* v3.4.0: кликабельный контент в карточке книги */
+/* v3.4.2: кликабельный контент в карточке книги */
 .content-list-item.content-clickable { cursor: pointer; }
 .content-list-item.content-clickable:hover {
   border-color: var(--accent);

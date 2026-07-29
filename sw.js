@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — sw.js
-// 🔖 v3.4.1 | 2026-07-29
+// 🔖 v3.4.2 | 2026-07-30
 // 📝 Service Worker: полный оффлайн
 //
 //    Стратегии кеширования:
@@ -12,7 +12,7 @@
 //      📷 OCR (Tesseract)    → precache (полный оффлайн)
 //
 //    Новое в 3.4.1:
-//      — CACHE_NAME → btp-v3.4.1 (сброс кеша при обновлении)
+//      — CACHE_NAME → btp-v3.4.2 (сброс кеша при обновлении)
 //      — microlink.js в app shell
 //      — api.microlink.io в списке API (network-only)
 //
@@ -28,7 +28,7 @@
 // ═══════════════════════════════════════════════
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
-const CACHE_NAME = 'btp-v3.4.1';
+const CACHE_NAME = 'btp-v3.4.2';
 
 // Базовый путь (GitHub Pages: /BookTrackerPro; свой домен: '')
 const BASE = '/BookTrackerPro';
