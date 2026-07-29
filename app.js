@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.4.0 | 2026-07-29
+// 🔖 v3.4.1 | 2026-07-29
 // 📝 Точка входа: навигация, рендеринг, события
 //
 //    Новое в 3.4.0:
@@ -1277,6 +1277,11 @@ function fillFormFromResult(r) {
     set('#bf-series-num', r.litresSeries[0].number);
   }
   if (r.litresMinAge) set('#bf-age', r.litresMinAge + '+');
+  }
+  if (r.price?.amount > 0) {
+    set('#bf-price', r.price.amount);
+    set('#bf-currency', r.price.currency);
+  }
 }
 
 // ─── Сохранение формы ───
@@ -1954,7 +1959,7 @@ function renderSettingsTab() {
 
     <div class="settings-section">
       <h3>ℹ️ О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.4.0 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.4.1 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
