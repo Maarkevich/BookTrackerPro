@@ -244,6 +244,52 @@
   </div>
 
   <!-- JS модуль -->
-  <script type="module" src="app.js?v=3.4.1"></script>
+  <script type="module">
+  // 🔧 Диагностическая ловушка v3.4.1 — показывает ошибку прямо в UI.
+  // Когда приложение починится — этот блок можно удалить и вернуть
+  // обычную строку: <script type="module" src="app.js?v=3.4.1"></script>
+  const show = (title, body) => {
+    let p = document.getElementById('__diag');
+    if (!p) {
+      p = document.createElement('div');
+      p.id = '__diag';
+      p.style.cssText = 'position:fixed;inset:0;z-index:99999;overflow:auto;' +
+        'background:#161210;color:#f0e7d8;font:13px/1.5 ui-monospace,Menlo,monospace;' +
+        'padding:18px;box-sizing:border-box';
+      document.body.appendChild(p);
+    }
+    p.innerHTML =
+      '<div style="font:800 15px system-ui;color:#e8a33d;margin-bottom:10px">' + title + '</div>' +
+      '<pre style="white-space:pre-wrap;word-break:break-word;color:#d98aa8;margin:0 0 14px">' +
+        (body || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+      '</pre>' + p.innerHTML;
+  };
+
+  // 1) Смерть модуля (синтаксис / отсутствующий импорт) — ловится здесь надёжнее всего
+  try {
+    await import('./app.js?v=3.4.1');
+  } catch (e) {
+    show('💥 app.js не загрузился', (e && e.stack) || (e && e.message) || String(e));
+    ping();
+  }
+
+  // 2) Рантайм-ошибки (если модуль загрузился, но init() упал)
+  window.addEventListener('error', e =>
+    show('⚠️ Ошибка выполнения', (e.error && e.error.stack) || e.message + ' @ ' + e.filename + ':' + e.lineno));
+  window.addEventListener('unhandledrejection', e =>
+    show('⚠️ Unhandled rejection', (e.reason && e.reason.stack) || String(e.reason)));
+
+  // 3) Пинг ключевых файлов — покажет, какой из них 404 / не залит
+  async function ping() {
+    const files = ['microlink.js','isbn.js','content.js','collections.js','db.js','app.css','version.json'];
+    const rows = await Promise.all(files.map(async f => {
+      try {
+        const r = await fetch('./' + f, { method: 'HEAD', cache: 'no-store' });
+        return (r.ok ? '✅ ' : '❌ ' + r.status + ' ') + f;
+      } catch (err) { return '❌ net ' + f; }
+    }));
+    show('📦 Проверка файлов на сервере', rows.join('\n'));
+  }
+</script>
 </body>
 </html>
