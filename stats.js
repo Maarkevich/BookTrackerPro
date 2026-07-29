@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — stats.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 Статистика + Календарь
 //
 //    Подвкладки:
@@ -198,7 +198,9 @@ function renderContentStats(container, books) {
     top:'#7fb8b0', quote:'#e8a33d', comparison:'#d97b6c', haul:'#e0955c'
   };
   const platformColors = {
-    youtube:'#d97b6c', tiktok:'#7fb8b0', telegram:'#8aa3c9', vk:'#94b878', dzen:'#e0955c', instagram:'#d98aa8'
+    youtube:'#d97b6c', tiktok:'#7fb8b0', telegram:'#8aa3c9',
+  vk:'#94b878', dzen:'#e0955c', instagram:'#d98aa8',
+  pinterest:'#e06a5c', threads:'#b3a48e'
   };
 
   container.innerHTML = `

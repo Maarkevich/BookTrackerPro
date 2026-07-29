@@ -1,15 +1,19 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 Точка входа: навигация, рендеринг, события
 //
-//    Новое в 3.3.0:
-//      — 7 статусов + dropdown по клику
-//      — Модалка оценки после «Прочитано»/«Брошено»
-//      — Поиск в интернете при добавлении
-//      — Кликабельные теги, серии, подборки, челленджи
-//      — Цена с валютой, просмотр обложки, цитаты по фото
-//      — Совместное чтение, время чтения
+//    Новое в 3.4.0:
+//      — Глобальный поиск со скоупами и книжными тегами
+//      — Теги в форме книги (чипы существующих)
+//      — Предпросмотр обложки в форме
+//      — «Вставить ссылку» → извлечение книги (Microlink)
+//      — Обложка из галереи
+//      — Кликабельный контент в карточке книги
+//      — Кликабельные заголовки drawer
+//      — Изменение порядка подборок (onMove)
+//      — Microlink в Настройках, добавление тегов
+//      — Pinterest + Threads
 //
 // ⚠️ ТЕСТОВЫЕ КЛЮЧИ ЛИТРЕС (замените в Настройках):
 //    Partner: partner_id=16, secret=93w4jfhs8imksGo-oa3s85d6Akmkkbnsi9
@@ -20,15 +24,17 @@ import {
   saveCover, deleteCover, changeBookStatus,
   BOOK_STATUSES, CURRENCIES,
   loadCollections, loadChallenges, loadTags, putTag, delTag,
+  moveCollection, getNextCollectionOrder,
   exportAll, importAll, getDBSize
 } from './db.js';
 import {
-  validateISBN, cleanISBN, fetchBookByIsbn, searchBooks,
+  validateISBN, cleanISBN, fetchBookByIsbn, searchBooks, fetchBookFromUrl,
   isRussianISBN, formatISBN
 } from './isbn.js';
 import { startScanner, stopScanner } from './scanner.js';
 import {
-  renderContentTab, openContentForm, deleteContentItem, updateContentStatus
+  renderContentTab, openContentForm, deleteContentItem, updateContentStatus,
+  platformIcon
 } from './content.js';
 import { renderReviewsTab, openReviewForm, deleteReview } from './review.js';
 import { renderStatsTab, renderCalendarTab } from './stats.js';
@@ -48,6 +54,7 @@ import {
   attachSeriesAutocomplete, getSeriesTotal
 } from './series.js';
 import { captureQuoteByPhoto, checkOcrSupport } from './ocr.js';
+import { checkMicrolinkStatus, clearPreviewCache } from './microlink.js';
 import { registerSW, setupOnlineIndicator } from './sw-register.js';
 
 // ═══════════════════════════════════════════════
@@ -60,15 +67,12 @@ const S = {
   challenges: [],
   tags: [],
   settings: {
-    // ЛитРес (тестовые — замените в Настройках)
     lrAppId: '', lrSecret: '',
     lrPartnerId: '16',
     lrPartnerSecret: '93w4jfhs8imksGo-oa3s85d6Akmkkbnsi9',
-    // Приложение
     confetti: true, sound: true,
     defaultPlatform: 'youtube',
     bloggerMode: true,
-    // Цена
     defaultCurrency: 'RUB',
     showPriceInCards: true,
     showPriceInDetail: true,
@@ -79,15 +83,28 @@ const S = {
   currentTab: 'books',
   bookFilter: 'all',
   searchQuery: '',
+  searchScope: 'all',       // 🆕 скоуп глобального поиска
+  searchBookTag: null,      // 🆕 выбранный книжный тег в поиске
   editingBookId: null,
-  // Активный фильтр: { type, value }
   activeFilter: null,
-  // Открытая серия/подборка
   openSeries: null,
   openCollection: null,
   openChallenge: null,
   deferredPrompt: null,
 };
+
+// Скоупы глобального поиска
+const SEARCH_SCOPES = [
+  { id: 'all',         icon: '🔍', label: 'Всё' },
+  { id: 'books',       icon: '📚', label: 'Книги' },
+  { id: 'content',     icon: '🎬', label: 'Контент' },
+  { id: 'reviews',     icon: '✍️', label: 'Отзывы' },
+  { id: 'quotes',      icon: '💬', label: 'Цитаты' },
+  { id: 'collections', icon: '📂', label: 'Подборки' },
+  { id: 'challenges',  icon: '🏆', label: 'Челленджи' },
+  { id: 'series',      icon: '📚', label: 'Серии' },
+  { id: 'tags',        icon: '🏷️', label: 'Теги' },
+];
 
 // ═══════════════════════════════════════════════
 //  DOM
@@ -99,7 +116,9 @@ const DOM = {};
 
 function cacheDom() {
   ['backdrop','drawer','drawer-close','menu-btn','page-title','main-content',
-   'search-toggle','search-bar','search-input','search-close','add-btn','scan-btn',
+   'search-toggle','search-bar','search-input','search-close',
+   'search-scopes','search-book-tags','search-results',
+   'add-btn','scan-btn',
    'form-overlay','form-title','form-close','form-body',
    'detail-overlay','detail-title','detail-close','detail-body',
    'scanner-overlay','scanner-video','scanner-status','scanner-close',
@@ -107,10 +126,11 @@ function cacheDom() {
    'content-overlay','content-form-title','content-form-close','content-form-body',
    'review-overlay','review-form-title','review-form-close','review-form-body',
    'cover-overlay','cover-close','cover-viewer-img','cover-viewer-title',
-   'cover-photo-btn','cover-photo-input',
+   'cover-photo-btn','cover-photo-input','cover-gallery-btn','cover-gallery-input',
    'toast-el','confetti-canvas','update-banner','install-banner',
    'drawer-version','drawer-offline','active-filters',
    'drawer-collections','drawer-series','drawer-filters','drawer-add-collection',
+   'drawer-title-collections','drawer-title-series','drawer-title-filters',
    'nav-count-books','nav-count-content','nav-count-reviews','nav-count-challenges'
   ].forEach(id => { DOM[camel(id)] = document.getElementById(id); });
 }
@@ -123,17 +143,14 @@ function camel(s) { return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase()); }
 async function init() {
   cacheDom();
   bindEvents();
-
   await openDB();
   S.books = await loadBooks();
   S.collections = await loadCollections();
   S.challenges = await loadChallenges();
   S.tags = await loadTags();
-
   const saved = await loadSettings();
   if (saved) Object.assign(S.settings, saved);
 
-  // Версия
   try {
     const v = await (await fetch('version.json')).json();
     DOM.drawerVersion.textContent = `v${v.version}`;
@@ -143,11 +160,9 @@ async function init() {
   setupOnlineIndicator(showToast);
   setupInstallPrompt();
   updateOfflineIndicator();
-
   renderDrawer();
   renderTab('books');
 
-  // Обновляем данные при изменениях из модулей
   document.addEventListener('data-changed', refreshData);
 }
 
@@ -184,29 +199,37 @@ function bindEvents() {
     });
   });
 
+  // 🆕 Кликабельные заголовки секций drawer
+  DOM.drawerTitleCollections?.addEventListener('click', () => {
+    S.openCollection = null; renderTab('collections'); toggleDrawer(false);
+  });
+  DOM.drawerTitleSeries?.addEventListener('click', () => {
+    S.openSeries = null; renderTab('series'); toggleDrawer(false);
+  });
+  DOM.drawerTitleFilters?.addEventListener('click', () => {
+    S.activeFilter = null; renderTab('books'); toggleDrawer(false);
+  });
+
   DOM.drawerAddCollection.addEventListener('click', () => {
     toggleDrawer(false);
     openCollectionForm(null, async (data) => {
+      data.order = await getNextCollectionOrder();
       await createCollection(data);
       await refreshData();
       showToast('✅ Подборка создана', 'success');
     });
   });
 
-  // Поиск
+  // 🆕 Глобальный поиск
   DOM.searchToggle.addEventListener('click', () => {
-    DOM.searchBar.classList.toggle('hidden');
-    if (!DOM.searchBar.classList.contains('hidden')) DOM.searchInput.focus();
+    if (DOM.searchBar.classList.contains('hidden')) openGlobalSearch();
+    else closeGlobalSearch();
   });
-  DOM.searchClose.addEventListener('click', () => {
-    DOM.searchBar.classList.add('hidden');
-    DOM.searchInput.value = ''; S.searchQuery = '';
-    renderTab(S.currentTab);
-  });
+  DOM.searchClose.addEventListener('click', closeGlobalSearch);
   DOM.searchInput.addEventListener('input', debounce(() => {
     S.searchQuery = DOM.searchInput.value.trim().toLowerCase();
-    renderTab(S.currentTab);
-  }, 300));
+    performGlobalSearch();
+  }, 250));
 
   DOM.addBtn.addEventListener('click', () => openBookForm());
   DOM.scanBtn.addEventListener('click', () => openScanner());
@@ -238,9 +261,11 @@ function bindEvents() {
     if (e.key === 'Enter') { const v = DOM.scannerManualInput.value.trim(); if (v) handleIsbnLookup(v); }
   });
 
-  // Обложка: замена фото
+  // Обложка: замена фото (камера) + 🆕 из галереи
   DOM.coverPhotoBtn.addEventListener('click', () => DOM.coverPhotoInput.click());
   DOM.coverPhotoInput.addEventListener('change', handleCoverPhotoChange);
+  DOM.coverGalleryBtn.addEventListener('click', () => DOM.coverGalleryInput.click());
+  DOM.coverGalleryInput.addEventListener('change', handleCoverPhotoChange);
 
   // Обновление / установка PWA
   $('#update-apply')?.addEventListener('click', () => {
@@ -262,6 +287,7 @@ function bindEvents() {
     else if (!DOM.detailOverlay.classList.contains('hidden')) closeOverlay(DOM.detailOverlay);
     else if (!DOM.contentOverlay.classList.contains('hidden')) closeOverlay(DOM.contentOverlay);
     else if (!DOM.reviewOverlay.classList.contains('hidden')) closeOverlay(DOM.reviewOverlay);
+    else if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
     else if (DOM.drawer.classList.contains('open')) toggleDrawer(false);
     closeStatusDropdown();
   });
@@ -271,6 +297,274 @@ function bindEvents() {
     if (!e.target.closest('.status-dropdown') && !e.target.closest('.status-btn')) {
       closeStatusDropdown();
     }
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  ГЛОБАЛЬНЫЙ ПОИСК (НОВОЕ)
+// ═══════════════════════════════════════════════
+
+function openGlobalSearch() {
+  DOM.searchBar.classList.remove('hidden');
+  renderSearchScopes();
+  renderSearchBookTags();
+  performGlobalSearch();
+  DOM.searchInput.focus();
+}
+
+function closeGlobalSearch() {
+  DOM.searchBar.classList.add('hidden');
+  DOM.searchResults.classList.add('hidden');
+  DOM.mainContent.classList.remove('hidden');
+  DOM.searchInput.value = '';
+  S.searchQuery = '';
+  S.searchBookTag = null;
+}
+
+function renderSearchScopes() {
+  DOM.searchScopes.innerHTML = SEARCH_SCOPES.map(s => `
+    <button class="scope-chip ${S.searchScope === s.id ? 'active' : ''}" data-scope="${s.id}">
+      ${s.icon} ${s.label}
+    </button>
+  `).join('');
+  DOM.searchScopes.querySelectorAll('[data-scope]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      S.searchScope = chip.dataset.scope;
+      if (S.searchScope !== 'books') S.searchBookTag = null;
+      renderSearchScopes();
+      renderSearchBookTags();
+      performGlobalSearch();
+    });
+  });
+}
+
+function renderSearchBookTags() {
+  if (S.searchScope !== 'books') {
+    DOM.searchBookTags.classList.add('hidden');
+    DOM.searchBookTags.innerHTML = '';
+    return;
+  }
+  DOM.searchBookTags.classList.remove('hidden');
+  if (S.tags.length === 0) {
+    DOM.searchBookTags.innerHTML = '<span class="text-small text-muted" style="padding:2px 4px">Тегов пока нет — добавьте в форме книги</span>';
+    return;
+  }
+  DOM.searchBookTags.innerHTML = S.tags.map(t => `
+    <button class="booktag-chip ${S.searchBookTag === t.name ? 'active' : ''}"
+      data-booktag="${esc(t.name)}"
+      style="color:${t.color || 'var(--text-secondary)'};border-color:${(t.color || '#888')}55">
+      🏷️ ${esc(t.name)}
+    </button>
+  `).join('');
+  DOM.searchBookTags.querySelectorAll('[data-booktag]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      S.searchBookTag = S.searchBookTag === chip.dataset.booktag ? null : chip.dataset.booktag;
+      renderSearchBookTags();
+      performGlobalSearch();
+    });
+  });
+}
+
+function matchesBook(b, q) {
+  if (!q) return true;
+  return b.title.toLowerCase().includes(q) ||
+    b.author.toLowerCase().includes(q) ||
+    (b.isbn || '').includes(q) ||
+    (b.genre || '').toLowerCase().includes(q) ||
+    (b.publisher || '').toLowerCase().includes(q) ||
+    (b.series || '').toLowerCase().includes(q) ||
+    (b.tags || []).some(t => t.toLowerCase().includes(q));
+}
+
+function performGlobalSearch() {
+  const q = S.searchQuery;
+  const scope = S.searchScope;
+  const hasQuery = !!q || !!S.searchBookTag;
+
+  const results = { books: [], content: [], reviews: [], quotes: [], collections: [], challenges: [], series: [], tags: [] };
+
+  if (hasQuery) {
+    if (scope === 'all' || scope === 'books') {
+      results.books = S.books.filter(b => matchesBook(b, q));
+      if (S.searchBookTag) results.books = results.books.filter(b => (b.tags || []).includes(S.searchBookTag));
+    }
+    if (scope === 'all' || scope === 'content') {
+      for (const b of S.books) for (const c of (b.contentItems || [])) {
+        if (!q || (c.title || '').toLowerCase().includes(q) || b.title.toLowerCase().includes(q)) {
+          results.content.push({ ...c, bookId: b.id, bookTitle: b.title });
+        }
+      }
+    }
+    if (scope === 'all' || scope === 'reviews') {
+      results.reviews = S.books.filter(b => {
+        const r = b.review || {};
+        if (!(r.text || r.rating > 0)) return false;
+        if (!q) return true;
+        return (r.text || '').toLowerCase().includes(q) ||
+          (r.pros || '').toLowerCase().includes(q) ||
+          (r.cons || '').toLowerCase().includes(q) ||
+          b.title.toLowerCase().includes(q);
+      });
+    }
+    if (scope === 'all' || scope === 'quotes') {
+      for (const b of S.books) for (const qt of (b.review?.quotes || [])) {
+        if (!q || qt.text.toLowerCase().includes(q)) {
+          results.quotes.push({ ...qt, bookId: b.id, bookTitle: b.title });
+        }
+      }
+    }
+    if (scope === 'all' || scope === 'collections') {
+      results.collections = S.collections.filter(c => !q || c.name.toLowerCase().includes(q));
+    }
+    if (scope === 'all' || scope === 'challenges') {
+      results.challenges = S.challenges.filter(c => !q || c.name.toLowerCase().includes(q));
+    }
+    if (scope === 'all' || scope === 'series') {
+      results.series = getSeriesList(S.books).filter(s => !q || s.name.toLowerCase().includes(q));
+    }
+    if (scope === 'all' || scope === 'tags') {
+      results.tags = S.tags.filter(t => !q || t.name.toLowerCase().includes(q));
+    }
+  }
+
+  renderSearchResults(results, hasQuery);
+}
+
+function renderSearchResults(results, hasQuery) {
+  const el = DOM.searchResults;
+  el.classList.remove('hidden');
+  DOM.mainContent.classList.add('hidden');
+
+  if (!hasQuery) {
+    el.innerHTML = '<div class="search-hint">🔍 Начните вводить — поиск идёт по всем разделам сразу</div>';
+    return;
+  }
+
+  const total = Object.values(results).reduce((s, arr) => s + arr.length, 0);
+  if (total === 0) {
+    el.innerHTML = `<div class="search-hint">😔 Ничего не найдено${S.searchQuery ? ` по «${esc(S.searchQuery)}»` : ''}</div>`;
+    return;
+  }
+
+  let html = '';
+
+  if (results.books.length) {
+    html += searchSection('📚 Книги', results.books.length, results.books.map(b => `
+      <div class="sr-item" data-sr-book="${b.id}">
+        ${b.coverUrl ? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy"/>` : '<div class="sr-cover ph">📕</div>'}
+        <div class="sr-info">
+          <div class="sr-title">${esc(b.title)}</div>
+          <div class="sr-sub">${esc(b.author)}${b.series ? ' · ' + esc(b.series) : ''}</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.content.length) {
+    html += searchSection('🎬 Контент', results.content.length, results.content.map(c => `
+      <div class="sr-item" data-sr-content-book="${c.bookId}" data-sr-content-id="${c.id}">
+        <div class="sr-icon">${CONTENT_ICONS[c.type] || '🎬'}</div>
+        <div class="sr-info">
+          <div class="sr-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
+          <div class="sr-sub">📕 ${esc(c.bookTitle)} · ${CONTENT_STATUS_LABELS[c.status] || c.status}</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.reviews.length) {
+    html += searchSection('✍️ Отзывы', results.reviews.length, results.reviews.map(b => `
+      <div class="sr-item" data-sr-book="${b.id}">
+        <div class="sr-icon">✍️</div>
+        <div class="sr-info">
+          <div class="sr-title">${esc(b.title)}</div>
+          <div class="sr-sub">${'⭐'.repeat(b.review?.rating || 0)} ${esc((b.review?.text || '').slice(0, 60))}</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.quotes.length) {
+    html += searchSection('💬 Цитаты', results.quotes.length, results.quotes.map(qt => `
+      <div class="sr-item" data-sr-book="${qt.bookId}">
+        <div class="sr-icon">💬</div>
+        <div class="sr-info">
+          <div class="sr-title">«${esc(qt.text.slice(0, 70))}»</div>
+          <div class="sr-sub">📕 ${esc(qt.bookTitle)}${qt.page ? ' · с. ' + qt.page : ''}</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.collections.length) {
+    html += searchSection('📂 Подборки', results.collections.length, results.collections.map(c => `
+      <div class="sr-item" data-sr-collection="${c.id}">
+        <div class="sr-icon">${c.emoji}</div>
+        <div class="sr-info">
+          <div class="sr-title">${esc(c.name)}</div>
+          <div class="sr-sub">${c.bookIds.length} книг</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.challenges.length) {
+    html += searchSection('🏆 Челленджи', results.challenges.length, results.challenges.map(c => `
+      <div class="sr-item" data-sr-challenge="${c.id}">
+        <div class="sr-icon">${c.emoji || '🏆'}</div>
+        <div class="sr-info">
+          <div class="sr-title">${esc(c.name)}</div>
+          <div class="sr-sub">${c.status === 'active' ? '🟢 Активен' : c.status}</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.series.length) {
+    html += searchSection('📚 Серии', results.series.length, results.series.map(s => `
+      <div class="sr-item" data-sr-series="${esc(s.name)}">
+        <div class="sr-icon">${s.emoji}</div>
+        <div class="sr-info">
+          <div class="sr-title">${esc(s.name)}</div>
+          <div class="sr-sub">${s.read} из ${s.effectiveTotal} прочитано</div>
+        </div>
+      </div>`).join(''));
+  }
+  if (results.tags.length) {
+    html += searchSection('🏷️ Теги', results.tags.length, results.tags.map(t => `
+      <div class="sr-item" data-sr-tag="${esc(t.name)}">
+        <div class="sr-icon" style="color:${t.color || 'var(--accent)'}">🏷️</div>
+        <div class="sr-info">
+          <div class="sr-title" style="color:${t.color || 'var(--text-primary)'}">${esc(t.name)}</div>
+          <div class="sr-sub">Нажмите, чтобы отфильтровать книги</div>
+        </div>
+      </div>`).join(''));
+  }
+
+  el.innerHTML = html;
+  bindSearchResultEvents(el);
+}
+
+function searchSection(title, count, inner) {
+  return `
+    <div class="sr-section">
+      <div class="sr-section-title">${title} <span class="sr-count">${count}</span></div>
+      ${inner}
+    </div>`;
+}
+
+function bindSearchResultEvents(el) {
+  const go = (fn) => { closeGlobalSearch(); fn(); };
+
+  el.querySelectorAll('[data-sr-book]').forEach(item => {
+    item.addEventListener('click', () => go(() => openBookDetail(item.dataset.srBook)));
+  });
+  el.querySelectorAll('[data-sr-content-book]').forEach(item => {
+    item.addEventListener('click', () => {
+      const book = S.books.find(b => b.id === item.dataset.srContentBook);
+      const contentItem = (book?.contentItems || []).find(c => c.id === item.dataset.srContentId);
+      go(() => openContentForm(contentItem, item.dataset.srContentBook));
+    });
+  });
+  el.querySelectorAll('[data-sr-collection]').forEach(item => {
+    item.addEventListener('click', () => go(() => { S.openCollection = item.dataset.srCollection; renderTab('collections'); }));
+  });
+  el.querySelectorAll('[data-sr-challenge]').forEach(item => {
+    item.addEventListener('click', () => go(() => { S.openChallenge = item.dataset.srChallenge; renderTab('challenges'); }));
+  });
+  el.querySelectorAll('[data-sr-series]').forEach(item => {
+    item.addEventListener('click', () => go(() => { S.openSeries = item.dataset.srSeries; renderTab('series'); }));
+  });
+  el.querySelectorAll('[data-sr-tag]').forEach(item => {
+    item.addEventListener('click', () => go(() => { S.activeFilter = { type: 'tag', value: item.dataset.srTag }; renderTab('books'); }));
   });
 }
 
@@ -287,7 +581,6 @@ const TAB_TITLES = {
 function renderTab(tab) {
   S.currentTab = tab;
   DOM.pageTitle.textContent = TAB_TITLES[tab] || tab;
-
   $$('.nav-item[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   renderActiveFilters();
 
@@ -308,7 +601,7 @@ function renderTab(tab) {
     }); break;
     case 'challenges': renderChallenges(); break;
     case 'stats':
-      window._challengesCache = S.challenges;   // ✅ ИСПРАВЛЕНО: внутри case, до рендера
+      window._challengesCache = S.challenges;
       renderStatsTab(mc, S.books, S.settings);
       break;
     case 'settings': renderSettingsTab(); break;
@@ -322,20 +615,18 @@ function renderTab(tab) {
 // ═══════════════════════════════════════════════
 
 function renderDrawer() {
-  // Счётчики
   DOM.navCountBooks.textContent = S.books.length || '';
   DOM.navCountContent.textContent = S.books.reduce((s, b) => s + (b.contentItems || []).length, 0) || '';
   DOM.navCountReviews.textContent = S.books.filter(b => b.review?.text || b.review?.rating > 0).length || '';
   DOM.navCountChallenges.textContent = S.challenges.filter(c => c.status === 'active').length || '';
 
-  // Подборки
+  // Подборки (в порядке order — db.js уже сортирует)
   DOM.drawerCollections.innerHTML = S.collections.map(c => `
     <button class="nav-item sub" data-collection="${c.id}">
       <span class="nav-icon">${c.emoji}</span> ${esc(c.name)}
       <span class="nav-count">${c.bookIds.length}</span>
     </button>
   `).join('');
-
   DOM.drawerCollections.querySelectorAll('[data-collection]').forEach(btn => {
     btn.addEventListener('click', () => {
       S.openCollection = btn.dataset.collection;
@@ -355,7 +646,6 @@ function renderDrawer() {
         <span class="nav-count">${s.read}/${s.effectiveTotal}</span>
       </button>
     `).join('');
-
   DOM.drawerSeries.querySelectorAll('[data-series]').forEach(btn => {
     btn.addEventListener('click', () => {
       S.openSeries = btn.dataset.series;
@@ -391,7 +681,6 @@ function renderDrawer() {
 function renderActiveFilters() {
   const el = DOM.activeFilters;
   if (!S.activeFilter) { el.classList.add('hidden'); el.innerHTML = ''; return; }
-
   const labels = {
     tag: '🏷️', collection: '📂', series: '📚',
     genre: '📂 Жанр', author: '👤 Автор', publisher: '🏢',
@@ -428,18 +717,6 @@ function renderBooksTab() {
     { id: 'pr', label: '📦 PR' },
   ];
 
-  // Поиск
-  if (S.searchQuery) {
-    books = books.filter(b =>
-      b.title.toLowerCase().includes(S.searchQuery) ||
-      b.author.toLowerCase().includes(S.searchQuery) ||
-      (b.isbn || '').includes(S.searchQuery) ||
-      (b.genre || '').toLowerCase().includes(S.searchQuery) ||
-      (b.publisher || '').toLowerCase().includes(S.searchQuery) ||
-      (b.tags || []).some(t => t.toLowerCase().includes(S.searchQuery))
-    );
-  }
-
   // Активный фильтр
   if (S.activeFilter) {
     const { type, value } = S.activeFilter;
@@ -453,7 +730,6 @@ function renderBooksTab() {
       books = col ? books.filter(b => col.bookIds.includes(b.id)) : [];
     }
   }
-  // Фильтр по статусу
   else if (S.bookFilter === 'pr') books = books.filter(b => b.isPR);
   else if (S.bookFilter !== 'all') books = books.filter(b => b.status === S.bookFilter);
 
@@ -463,7 +739,7 @@ function renderBooksTab() {
     <div class="filter-bar no-scrollbar">
       ${filters.map(f => `
         <button class="filter-chip ${S.bookFilter === f.id && !S.activeFilter ? 'active' : ''}"
-                data-filter="${f.id}">${f.label}</button>
+          data-filter="${f.id}">${f.label}</button>
       `).join('')}
     </div>
     <div class="book-list">
@@ -479,7 +755,6 @@ function renderBooksTab() {
     });
   });
 
-  // Клик по карточке
   mc.querySelectorAll('.book-card').forEach(card => {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.status-btn')) return;
@@ -488,7 +763,6 @@ function renderBooksTab() {
     });
   });
 
-  // Dropdown статуса
   mc.querySelectorAll('.status-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -496,7 +770,6 @@ function renderBooksTab() {
     });
   });
 
-  // Кликабельные теги
   mc.querySelectorAll('.tag-chip').forEach(chip => {
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -525,24 +798,16 @@ function renderBookCard(book) {
     wishlist: 'badge-wishlist', added: 'badge-added', reading: 'badge-reading',
     paused: 'badge-paused', finished: 'badge-finished', dropped: 'badge-dropped',
   }[book.status] || 'badge-status';
-
   const contentCount = (book.contentItems || []).length;
   const publishedCount = (book.contentItems || []).filter(c => c.status === 'published').length;
   const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCount) * 100) : 0;
-
   const coverHtml = book.coverUrl
     ? `<img class="book-cover" src="${book.coverUrl}" alt="" loading="lazy"/>`
     : `<div class="book-cover-placeholder">📕</div>`;
-
-  // Цена
   const priceHtml = (S.settings.showPriceInCards && book.price?.amount > 0)
     ? `<span class="book-badge badge-price">💰 ${formatPrice(book.price)}</span>` : '';
-
-  // Серия
   const seriesHtml = book.series
     ? `<span class="book-badge badge-series">📚 ${esc(book.series)}${book.seriesNumber ? ' #' + book.seriesNumber : ''}</span>` : '';
-
-  // Теги
   const tagsHtml = (book.tags || []).slice(0, 3).map(t => {
     const tag = S.tags.find(x => x.name === t);
     const color = tag?.color || 'var(--text-secondary)';
@@ -594,11 +859,9 @@ function openStatusDropdown(anchor, bookId) {
       ${book.status === key ? '<span style="margin-left:auto">✓</span>' : ''}
     </button>
   `).join('');
-
   document.body.appendChild(dd);
   _statusDropdown = dd;
 
-  // Позиция рядом с кнопкой
   const rect = anchor.getBoundingClientRect();
   const ddH = dd.offsetHeight;
   let top = rect.bottom + 6;
@@ -612,12 +875,9 @@ function openStatusDropdown(anchor, bookId) {
       const newStatus = item.dataset.status;
       closeStatusDropdown();
       if (newStatus === book.status) return;
-
       const result = await changeBookStatus(bookId, newStatus);
       if (!result) return;
-
       await refreshData();
-
       if (result.confetti && S.settings.confetti) fireConfetti();
       if (result.askRating) openRatingModal(result.book);
       else showToast(`${BOOK_STATUSES[newStatus].icon} Статус: ${BOOK_STATUSES[newStatus].label}`, 'success');
@@ -630,7 +890,7 @@ function closeStatusDropdown() {
 }
 
 // ═══════════════════════════════════════════════
-//  МОДАЛКА ОЦЕНКИ (после Прочитано/Брошено)
+//  МОДАЛКА ОЦЕНКИ
 // ═══════════════════════════════════════════════
 
 function openRatingModal(book) {
@@ -657,13 +917,11 @@ function openRatingModal(book) {
 
   let rating = 0;
   const stars = modal.querySelector('#rm-stars');
-
   stars.querySelectorAll('.star').forEach(star => {
     star.addEventListener('click', async () => {
       rating = parseInt(star.dataset.star);
       stars.querySelectorAll('.star').forEach(s =>
         s.classList.toggle('filled', parseInt(s.dataset.star) <= rating));
-      // Сохраняем сразу
       book.review = book.review || {};
       book.review.rating = rating;
       await putBook(book);
@@ -680,7 +938,6 @@ function openRatingModal(book) {
   });
 
   const close = () => { modal.remove(); refreshData(); };
-
   modal.querySelector('#rm-later').addEventListener('click', close);
   modal.querySelector('#rm-review').addEventListener('click', () => {
     modal.remove();
@@ -698,6 +955,9 @@ function openBookForm(book = null) {
   DOM.formTitle.textContent = book ? '✏️ Редактировать книгу' : '📚 Новая книга';
   const b = book || {};
   const cur = b.price?.currency || S.settings.defaultCurrency;
+
+  // 🆕 Теги: выбранные из существующих
+  const selectedTags = new Set(b.tags || []);
 
   DOM.formBody.innerHTML = `
     <!-- ISBN -->
@@ -718,6 +978,16 @@ function openBookForm(book = null) {
         <button id="bf-websearch" class="btn-secondary" style="width:auto;flex-shrink:0">🔍 Искать</button>
       </div>
       <div id="bf-webresults" class="web-search-results"></div>
+    </div>
+
+    <!-- 🆕 Вставить ссылку на страницу книги -->
+    <div class="form-group">
+      <label>🔗 Или вставьте ссылку на страницу книги</label>
+      <div class="flex gap-8">
+        <input type="url" id="bf-page-url" placeholder="https://www.litres.ru/book/..."/>
+        <button id="bf-page-extract" class="btn-secondary" style="width:auto;flex-shrink:0">📥</button>
+      </div>
+      <div class="form-hint">ЛитРес, Book24, Ozon — данные извлекутся автоматически (Microlink)</div>
     </div>
 
     <div class="divider"></div>
@@ -741,7 +1011,15 @@ function openBookForm(book = null) {
       <div class="form-group"><label>Возраст</label><input type="text" id="bf-age" value="${esc(b.ageRating || '')}" placeholder="16+"/></div>
     </div>
     <div class="form-group"><label>Описание</label><textarea id="bf-desc" rows="3" placeholder="Аннотация...">${esc(b.description || '')}</textarea></div>
-    <div class="form-group"><label>Обложка (URL)</label><input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://..."/></div>
+
+    <!-- Обложка + 🆕 предпросмотр -->
+    <div class="form-group">
+      <label>Обложка (URL)</label>
+      <input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://..."/>
+      <div id="bf-cover-preview" class="cover-preview hidden">
+        <img id="bf-cover-preview-img" src="" alt="Предпросмотр обложки"/>
+      </div>
+    </div>
 
     <!-- Серия -->
     <div class="form-section">
@@ -780,11 +1058,24 @@ function openBookForm(book = null) {
       </div>
     </div>
 
-    <!-- Теги -->
+    <!-- 🆕 Теги: чипы существующих + новые -->
     <div class="form-section">
       <h3>🏷️ Теги</h3>
-      <div class="form-group"><label>Теги (через запятую)</label>
-        <input type="text" id="bf-tags" value="${esc((b.tags || []).join(', '))}" placeholder="фэнтези, бумажная, перечитать"/>
+      <div class="form-group">
+        <label>Существующие теги</label>
+        <div id="bf-tags-chips" class="tags-chips">
+          ${S.tags.length === 0
+            ? '<span class="text-small text-muted">Тегов пока нет — добавьте новые ниже</span>'
+            : S.tags.map(t => `
+              <button class="tag-pick-chip ${selectedTags.has(t.name) ? 'active' : ''}"
+                data-tag="${esc(t.name)}"
+                style="color:${t.color || 'var(--text-secondary)'};border-color:${(t.color || '#888')}55">
+                ${esc(t.name)}
+              </button>`).join('')}
+        </div>
+      </div>
+      <div class="form-group"><label>Добавить новые (через запятую)</label>
+        <input type="text" id="bf-tags" value="" placeholder="фэнтези, бумажная, перечитать"/>
       </div>
     </div>
 
@@ -842,6 +1133,50 @@ function openBookForm(book = null) {
   fb.querySelector('#bf-websearch').addEventListener('click', () => handleWebSearch());
   fb.querySelector('#bf-webquery').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleWebSearch(); });
 
+  // 🆕 Извлечение по ссылке (Microlink)
+  fb.querySelector('#bf-page-extract').addEventListener('click', async () => {
+    const url = fb.querySelector('#bf-page-url').value.trim();
+    if (!url) { showToast('⚠️ Вставьте ссылку на страницу книги', 'error'); return; }
+    const btn = fb.querySelector('#bf-page-extract');
+    btn.disabled = true; btn.textContent = '⏳';
+    const data = await fetchBookFromUrl(url);
+    btn.disabled = false; btn.textContent = '📥';
+    if (data && data.title) {
+      fillFormFromResult(data);
+      updateCoverPreview();
+      showToast(`✅ Извлечено: ${data.title}`, 'success');
+    } else {
+      showToast('❌ Не удалось извлечь данные', 'error');
+    }
+  });
+
+  // 🆕 Предпросмотр обложки
+  function updateCoverPreview() {
+    const url = fb.querySelector('#bf-cover').value.trim();
+    const box = fb.querySelector('#bf-cover-preview');
+    const img = fb.querySelector('#bf-cover-preview-img');
+    if (url && /^https?:\/\//i.test(url)) {
+      img.src = url;
+      box.classList.remove('hidden');
+    } else {
+      box.classList.add('hidden');
+      img.src = '';
+    }
+  }
+  fb.querySelector('#bf-cover').addEventListener('input', debounce(updateCoverPreview, 400));
+  updateCoverPreview();
+  // Делаем функцию доступной для fillFormFromResult
+  window._updateCoverPreview = updateCoverPreview;
+
+  // 🆕 Чипы тегов
+  fb.querySelectorAll('.tag-pick-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const t = chip.dataset.tag;
+      if (selectedTags.has(t)) selectedTags.delete(t); else selectedTags.add(t);
+      chip.classList.toggle('active');
+    });
+  });
+
   // Автодополнение серии
   attachSeriesAutocomplete(fb.querySelector('#bf-series'), S.books, (name) => {
     const total = getSeriesTotal(S.books, name);
@@ -860,7 +1195,7 @@ function openBookForm(book = null) {
     fb.querySelector('#bf-joint-fields').classList.toggle('hidden');
   });
 
-  fb.querySelector('#bf-save').addEventListener('click', () => saveBookForm());
+  fb.querySelector('#bf-save').addEventListener('click', () => saveBookForm(selectedTags));
 
   const delBtn = fb.querySelector('#bf-delete');
   if (delBtn) delBtn.addEventListener('click', async () => {
@@ -887,7 +1222,6 @@ async function handleWebSearch() {
 
   const litresKeys = S.settings.lrAppId && S.settings.lrSecret
     ? { appId: S.settings.lrAppId, secretKey: S.settings.lrSecret } : null;
-
   const results = await searchBooks(query, litresKeys);
 
   if (results.length === 0) {
@@ -899,6 +1233,7 @@ async function handleWebSearch() {
     google: { label: '📗 Google Books', cls: 'badge-reading' },
     openlibrary: { label: '📘 Open Library', cls: 'badge-status' },
     litres: { label: '📕 ЛитРес', cls: 'badge-pr' },
+    microlink: { label: '🔗 Microlink', cls: 'badge-content' },
   };
 
   resultsEl.innerHTML = results.map((r, i) => {
@@ -919,6 +1254,7 @@ async function handleWebSearch() {
     el.addEventListener('click', () => {
       const r = results[parseInt(el.dataset.idx)];
       fillFormFromResult(r);
+      if (window._updateCoverPreview) window._updateCoverPreview();
       showToast(`✅ Выбрано: ${sourceMeta[r.source]?.label || r.source}`, 'success');
     });
   });
@@ -936,7 +1272,6 @@ function fillFormFromResult(r) {
   set('#bf-desc', r.description);
   set('#bf-cover', r.cover);
   set('#bf-isbn', r.isbn);
-  // Серия из ЛитРес
   if (r.litresSeries?.length > 0) {
     set('#bf-series', r.litresSeries[0].name);
     set('#bf-series-num', r.litresSeries[0].number);
@@ -945,7 +1280,7 @@ function fillFormFromResult(r) {
 }
 
 // ─── Сохранение формы ───
-async function saveBookForm() {
+async function saveBookForm(selectedTags) {
   const f = DOM.formBody;
   const title = f.querySelector('#bf-title').value.trim();
   if (!title) { showToast('⚠️ Введите название книги', 'error'); return; }
@@ -954,7 +1289,9 @@ async function saveBookForm() {
   const isPR = f.querySelector('#bf-pr-toggle').classList.contains('active');
   const isJoint = f.querySelector('#bf-joint-toggle').classList.contains('active');
 
-  const tags = f.querySelector('#bf-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+  // 🆕 Теги: выбранные чипы + новые из поля
+  const freeTags = f.querySelector('#bf-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const tags = [...new Set([...(selectedTags ? [...selectedTags] : []), ...freeTags])];
 
   const bookData = {
     id: S.editingBookId || `book_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -994,7 +1331,6 @@ async function saveBookForm() {
     updatedAt: now,
   };
 
-  // Сохраняем существующие поля при редактировании
   if (S.editingBookId) {
     const ex = S.books.find(b => b.id === S.editingBookId);
     if (ex) {
@@ -1005,7 +1341,6 @@ async function saveBookForm() {
       bookData.dateFinished = ex.dateFinished || '';
       bookData.readingDays = ex.readingDays;
       bookData.source = ex.source || 'manual';
-      // Если статус сменился на reading — ставим dateStarted
       if (bookData.status === 'reading' && !bookData.dateStarted) bookData.dateStarted = now.slice(0, 10);
       if ((bookData.status === 'finished' || bookData.status === 'dropped') && ex.status !== bookData.status) bookData.dateFinished = now.slice(0, 10);
     }
@@ -1034,7 +1369,6 @@ async function saveBookForm() {
   await putBook(bookData);
   closeOverlay(DOM.formOverlay);
   await refreshData();
-
   if (bookData.status === 'finished' && S.settings.confetti) fireConfetti();
   showToast(S.editingBookId ? '✅ Книга обновлена' : '✅ Книга добавлена', 'success');
   S.editingBookId = null;
@@ -1058,12 +1392,12 @@ async function handleIsbnLookup(isbnInput) {
 
   const litresKeys = S.settings.lrAppId && S.settings.lrSecret
     ? { appId: S.settings.lrAppId, secretKey: S.settings.lrSecret } : null;
-
   const book = await fetchBookByIsbn(isbn, litresKeys);
+
   hideLoading();
   closeScanner();
 
-  const sourceLabels = { google: '📗 Google Books', openlibrary: '📘 Open Library', litres: '📕 ЛитРес', cover: '🖼️ Только обложка' };
+  const sourceLabels = { google: '📗 Google Books', openlibrary: '📘 Open Library', litres: '📕 ЛитРес', cover: '🖼️ Только обложка', microlink: '🔗 Microlink' };
   if (book) {
     showToast(`Найдено: ${sourceLabels[book.source] || book.source}`, 'success');
     openBookForm({ ...book, isbn: book.isbn || isbn, status: 'wishlist' });
@@ -1125,23 +1459,23 @@ function openBookDetail(bookId) {
 
     ${book.description ? `<div class="detail-section"><h3>📝 Описание</h3><div class="detail-description">${esc(book.description)}</div></div>` : ''}
 
-    <!-- Контент -->
+    <!-- 🆕 Контент (кликабельный) -->
     <div class="detail-section">
       <h3>🎬 Контент по книге (${contentItems.length})</h3>
       ${contentItems.length === 0 ? '<div class="text-muted text-small">Пока нет контента</div>'
         : contentItems.map(c => `
-          <div class="content-list-item">
+          <div class="content-list-item content-clickable" data-content-id="${c.id}" style="cursor:pointer" title="Открыть контент">
             <span class="content-list-icon">${CONTENT_ICONS[c.type] || '🎬'}</span>
             <div class="content-list-info">
               <div class="content-list-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
-              <div class="content-list-sub">${PLATFORM_LABELS[c.platform] || c.platform}${c.publishedDate ? ' · ' + c.publishedDate : ''}</div>
+              <div class="content-list-sub">${platformIcon(c.platform, 11)} ${PLATFORM_LABELS[c.platform] || c.platform}${c.publishedDate ? ' · ' + c.publishedDate : ''}</div>
             </div>
             <span class="content-list-status status-${c.status}">${CONTENT_STATUS_LABELS[c.status] || c.status}</span>
           </div>`).join('')}
       <button id="detail-add-content" class="btn-secondary mt-8" style="width:100%">＋ Добавить контент</button>
     </div>
 
-    <!-- Цитаты (вне отзыва) -->
+    <!-- Цитаты -->
     <div class="detail-section">
       <h3>💬 Цитаты (${quotes.length})</h3>
       <div id="detail-quotes">
@@ -1198,14 +1532,11 @@ function openBookDetail(bookId) {
     return `<div class="detail-meta-item"><div class="detail-meta-label">${label}</div><div class="detail-meta-value">${esc(String(value))}</div></div>`;
   }
 
-  // События
   const db = DOM.detailBody;
 
-  // Клик по обложке → просмотр
   const coverImg = db.querySelector('#detail-cover-img');
   if (coverImg) coverImg.addEventListener('click', () => openCoverViewer(book));
 
-  // Dropdown статуса
   db.querySelector('.status-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     openStatusDropdown(e.currentTarget, book.id);
@@ -1226,6 +1557,15 @@ function openBookDetail(bookId) {
     openBookCollectionsPicker(book.id, S.books, S.collections, refreshData);
   });
 
+  // 🆕 Кликабельный контент → открыть форму контента
+  db.querySelectorAll('.content-clickable').forEach(el => {
+    el.addEventListener('click', () => {
+      const item = contentItems.find(c => c.id === el.dataset.contentId);
+      closeOverlay(DOM.detailOverlay);
+      openContentForm(item, book.id);
+    });
+  });
+
   // Цитаты
   const addQuote = async (text, page) => {
     if (!text) return;
@@ -1234,26 +1574,20 @@ function openBookDetail(bookId) {
     book.review.quotes.push({ text, page: page || 0, used: false });
     await putBook(book);
     await refreshData();
-    openBookDetail(book.id); // перерисовать
+    openBookDetail(book.id);
     showToast('💬 Цитата добавлена', 'success');
   };
-
   db.querySelector('#dq-add').addEventListener('click', () => {
     addQuote(db.querySelector('#dq-text').value.trim(), parseInt(db.querySelector('#dq-page').value) || 0);
   });
   db.querySelector('#dq-text').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addQuote(db.querySelector('#dq-text').value.trim(), parseInt(db.querySelector('#dq-page').value) || 0);
   });
-
-  // OCR цитата — ИСПРАВЛЕНО: без showLoading (иначе спиннер z-9000 накрывает камеру z-300)
   db.querySelector('#dq-ocr').addEventListener('click', async () => {
     closeOverlay(DOM.detailOverlay);
     const text = await captureQuoteByPhoto();
-    if (text) {
-      await addQuote(text, 0);
-    } else {
-      openBookDetail(book.id);
-    }
+    if (text) await addQuote(text, 0);
+    else openBookDetail(book.id);
   });
 
   openOverlay(DOM.detailOverlay);
@@ -1280,7 +1614,6 @@ async function handleCoverPhotoChange(e) {
 
   showLoading('💾 Сохраняю обложку...');
   try {
-    // Сжатие до ~800px
     const bitmap = await createImageBitmap(file);
     const MAX = 800;
     const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
@@ -1289,7 +1622,6 @@ async function handleCoverPhotoChange(e) {
     canvas.height = Math.round(bitmap.height * scale);
     canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.88));
     await saveCover(_coverBookId, blob);
     hideLoading();
@@ -1393,6 +1725,7 @@ function renderCollectionsScreen() {
     renderCollectionsList(mc, S.books, S.collections, {
       onOpen: (id) => { S.openCollection = id; renderCollectionsScreen(); },
       onAdd: () => openCollectionForm(null, async (data) => {
+        data.order = await getNextCollectionOrder();
         await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success');
       }),
       onEdit: (c) => openCollectionForm(c, async (data) => {
@@ -1402,6 +1735,11 @@ function renderCollectionsScreen() {
         if (confirm('Удалить подборку?')) {
           await deleteCollection(id); await refreshData(); showToast('🗑️ Подборка удалена', 'info');
         }
+      },
+      // 🆕 Перемещение подборок ↑/↓
+      onMove: async (id, direction) => {
+        await moveCollection(id, direction);
+        await refreshData();
       },
       onAddBook: () => {},
     });
@@ -1478,7 +1816,7 @@ function showDayContent(dateStr) {
   }
   if (dayContent.length === 0) { showToast(`📅 ${dateStr}: нет контента`, 'info'); return; }
   const list = dayContent.map(c => `${CONTENT_ICONS[c.type] || '🎬'} ${c.title || CONTENT_LABELS[c.type]} — ${c.bookTitle}`).join('\n');
-  alert(`📅 ${dateStr}\n\n${list}`);
+  alert(`📅 ${dateStr}\n${list}`);
 }
 
 // ═══════════════════════════════════════════════
@@ -1515,9 +1853,14 @@ function renderSettingsTab() {
       <button id="set-rates-update" class="btn-secondary mt-8">🔄 Обновить курсы</button>
     </div>
 
-    <!-- Теги -->
+    <!-- 🆕 Теги: добавление + цвета -->
     <div class="settings-section">
       <h3>🏷️ Теги и цвета</h3>
+      <div class="flex gap-8 mb-16">
+        <input type="text" id="set-tag-new" placeholder="Новый тег..." style="flex:1"/>
+        <input type="color" id="set-tag-new-color" value="#e8a33d" style="width:44px;height:36px;padding:2px;border-radius:8px;cursor:pointer"/>
+        <button id="set-tag-add" class="btn-secondary" style="width:auto;flex-shrink:0">＋</button>
+      </div>
       <div id="set-tags-list">
         ${S.tags.map(t => `
           <div class="flex items-center gap-8 mb-8">
@@ -1525,8 +1868,21 @@ function renderSettingsTab() {
             <span class="flex-1 text-small">${esc(t.name)}</span>
             <button data-tag-del="${esc(t.name)}" class="icon-btn" style="width:30px;height:30px;font-size:.8rem">🗑️</button>
           </div>
-        `).join('') || '<div class="text-small text-muted">Нет тегов. Добавьте теги в форме книги.</div>'}
+        `).join('') || '<div class="text-small text-muted">Нет тегов. Добавьте первый выше или в форме книги.</div>'}
       </div>
+    </div>
+
+    <!-- 🆕 Microlink -->
+    <div class="settings-section">
+      <h3>🔗 Microlink API <span class="badge">превью ссылок</span></h3>
+      <p class="hint">
+        Автоматически подтягивает превью для опубликованного контента
+        и извлекает данные книг по ссылкам на ЛитРес / Book24 / Ozon.<br/>
+        Бесплатно: 50 запросов/день. Ключ не требуется.
+      </p>
+      <button id="set-microlink-check" class="btn-secondary">🔍 Проверить доступность</button>
+      <span id="set-microlink-status" class="status-text"></span>
+      <div class="mt-8"><button id="set-microlink-clear" class="btn-secondary">🗑️ Очистить кеш превью</button></div>
     </div>
 
     <!-- ЛитРес -->
@@ -1560,7 +1916,7 @@ function renderSettingsTab() {
       <span id="set-ocr-status" class="status-text"></span>
     </div>
 
-    <!-- Площадка -->
+    <!-- 🆕 Площадки (+ Pinterest, Threads) -->
     <div class="settings-section">
       <h3>📱 Площадки</h3>
       <div class="form-group"><label>Площадка по умолчанию</label>
@@ -1571,6 +1927,8 @@ function renderSettingsTab() {
           <option value="vk" ${s.defaultPlatform === 'vk' ? 'selected' : ''}>🔵 VK</option>
           <option value="dzen" ${s.defaultPlatform === 'dzen' ? 'selected' : ''}>📰 Дзен</option>
           <option value="instagram" ${s.defaultPlatform === 'instagram' ? 'selected' : ''}>📸 Instagram</option>
+          <option value="pinterest" ${s.defaultPlatform === 'pinterest' ? 'selected' : ''}>📌 Pinterest</option>
+          <option value="threads" ${s.defaultPlatform === 'threads' ? 'selected' : ''}>🧵 Threads</option>
         </select>
       </div>
     </div>
@@ -1596,11 +1954,10 @@ function renderSettingsTab() {
 
     <div class="settings-section">
       <h3>ℹ️ О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.3.0 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.4.0 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
-  // События
   const bind = (id, fn) => mc.querySelector(id)?.addEventListener('click', fn);
   const bindToggle = (id, key) => mc.querySelector(id).addEventListener('click', function() {
     this.classList.toggle('active');
@@ -1622,7 +1979,6 @@ function renderSettingsTab() {
     S.settings.defaultPlatform = this.value; saveAppSettings();
   });
 
-  // Обновление курсов
   bind('#set-rates-update', async () => {
     const status = mc.querySelector('#set-rates-update');
     status.textContent = '⏳ Обновляю...';
@@ -1648,6 +2004,20 @@ function renderSettingsTab() {
     }
   });
 
+  // 🆕 Добавление тега
+  bind('#set-tag-add', async () => {
+    const name = mc.querySelector('#set-tag-new').value.trim();
+    const color = mc.querySelector('#set-tag-new-color').value;
+    if (!name) { showToast('⚠️ Введите название тега', 'error'); return; }
+    if (S.tags.find(t => t.name.toLowerCase() === name.toLowerCase())) {
+      showToast('⚠️ Такой тег уже есть', 'error'); return;
+    }
+    await putTag({ name, color });
+    S.tags = await loadTags();
+    renderSettingsTab();
+    showToast(`✅ Тег «${name}» добавлен`, 'success');
+  });
+
   // Цвета тегов
   mc.querySelectorAll('[data-tag-color]').forEach(inp => {
     inp.addEventListener('change', async () => {
@@ -1663,6 +2033,20 @@ function renderSettingsTab() {
         renderSettingsTab();
       }
     });
+  });
+
+  // 🆕 Microlink
+  bind('#set-microlink-check', async () => {
+    const status = mc.querySelector('#set-microlink-status');
+    status.textContent = '⏳ Проверяю...';
+    const r = await checkMicrolinkStatus();
+    status.textContent = r.ok
+      ? `✅ Работает · осталось ~${r.remaining} запросов`
+      : `❌ ${r.error || 'Недоступен'}`;
+  });
+  bind('#set-microlink-clear', async () => {
+    await clearPreviewCache();
+    showToast('🗑️ Кеш превью очищен', 'info');
   });
 
   // ЛитРес тест
@@ -1696,7 +2080,6 @@ function renderSettingsTab() {
     a.click();
     showToast('📤 Экспортировано', 'success');
   });
-
   const importFile = mc.querySelector('#set-import-file');
   bind('#set-import', () => importFile.click());
   importFile.addEventListener('change', async (e) => {
@@ -1708,11 +2091,10 @@ function renderSettingsTab() {
       showToast('📥 Импортировано', 'success');
     } catch { showToast('❌ Ошибка импорта', 'error'); }
   });
-
   bind('#set-clear', async () => {
     if (confirm('Удалить ВСЕ данные? Это необратимо!')) {
       const db = await openDB();
-      ['books','covers','settings','collections','challenges','tags'].forEach(st => {
+      ['books','covers','settings','collections','challenges','tags','previews'].forEach(st => {
         try { db.transaction(st, 'readwrite').objectStore(st).clear(); } catch {}
       });
       await refreshData();
@@ -1750,7 +2132,8 @@ export const CONTENT_STATUS_LABELS = {
 };
 export const PLATFORM_LABELS = {
   youtube: '▶️ YouTube', tiktok: '🎵 TikTok', telegram: '✈️ Telegram',
-  vk: '🔵 VK', dzen: '📰 Дзен', instagram: '📸 Instagram'
+  vk: '🔵 VK', dzen: '📰 Дзен', instagram: '📸 Instagram',
+  pinterest: '📌 Pinterest', threads: '🧵 Threads'
 };
 
 // ═══════════════════════════════════════════════
@@ -1825,7 +2208,6 @@ function fireConfetti() {
   const ctx = canvas.getContext('2d');
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-
   const colors = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#e0955c','#f0e7d8'];
   const particles = [];
   for (let i = 0; i < 140; i++) {
@@ -1840,7 +2222,6 @@ function fireConfetti() {
       life: 1,
     });
   }
-
   let frame = 0;
   (function animate() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);

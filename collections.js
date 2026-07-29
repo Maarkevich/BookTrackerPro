@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — collections.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 Подборки книг
 //
 //    Типы:
@@ -9,12 +9,17 @@
 //      🌊 Пользовательские — создаёт пользователь
 //
 //    Системные фильтры (не хранятся, генерируются):
-//      📂 По жанрам
-//      📂 По авторам
-//      📂 По издательствам
+//      📂 По жанрам · 📂 По авторам · 📂 По издательствам
+//
+//    Новое в 3.4.0:
+//      — Предсозданные подборки можно редактировать
+//        (название, эмодзи, описание). Удалить — нельзя.
+//      — Изменение порядка подборок кнопками ↑/↓
+//        (поле order в db.js, moveCollection).
+//      — Единый список без разделения на «системные/свои».
 //
 //    Функции:
-//      — Список подборок
+//      — Список подборок (единый, по order)
 //      — Экран подборки (книги)
 //      — Создание / редактирование / удаление
 //      — Добавление книги в подборку (чекбоксы)
@@ -30,54 +35,55 @@ import { esc, showToast } from './app.js';
 // ═══════════════════════════════════════════════
 
 /**
- * Рендерит экран подборок.
+ * Рендерит экран подборок (единый список в порядке order).
  * @param {HTMLElement} container
  * @param {object[]} books
- * @param {object[]} collections
- * @param {object} callbacks — { onOpen, onAdd, onEdit, onDelete, onAddBook }
+ * @param {object[]} collections — уже отсортированы по order (db.js)
+ * @param {object} callbacks — { onOpen, onAdd, onEdit, onDelete, onAddBook, onMove }
  */
 export function renderCollectionsList(container, books, collections, callbacks) {
-  // Разделяем на системные и пользовательские
-  const system = collections.filter(c => c.isSystem);
-  const user = collections.filter(c => !c.isSystem);
+  const total = collections.length;
 
   container.innerHTML = `
-    <!-- Системные -->
-    ${system.length > 0 ? `
-      <div class="mb-16">
-        <div class="text-small text-muted mb-8" style="font-weight:700">
-          Предсозданные
-        </div>
-        ${system.map(c => renderCollectionCard(c, books)).join('')}
-      </div>
-    ` : ''}
-
-    <!-- Пользовательские -->
-    <div class="mb-16">
-      <div class="text-small text-muted mb-8" style="font-weight:700">
-        Мои подборки (${user.length})
-      </div>
-      ${user.length === 0 ? `
-        <div class="text-center text-muted text-small" style="padding:20px">
-          Пока нет подборок. Создайте первую!
-        </div>
-      ` : user.map(c => renderCollectionCard(c, books)).join('')}
+    <div class="text-small text-muted mb-8" style="font-weight:700">
+      📂 Подборки (${total})
+      <span style="font-weight:500;opacity:.7">· ↑↓ — изменить порядок</span>
     </div>
 
-    <button id="col-add-btn" class="btn-primary">
+    ${total === 0 ? `
+      <div class="text-center text-muted text-small" style="padding:20px">
+        Пока нет подборок. Создайте первую!
+      </div>
+    ` : collections.map((c, idx) => renderCollectionCard(c, books, idx, total)).join('')}
+
+    <button id="col-add-btn" class="btn-primary mt-16">
       ＋ Новая подборка
     </button>
   `;
 
-  // События
+  // Клик по карточке → открыть подборку
   container.querySelectorAll('.collection-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('[data-col-edit]')) return;
-      if (e.target.closest('[data-col-del]')) return;
+      if (e.target.closest('button')) return;
       callbacks.onOpen(card.dataset.colId);
     });
   });
 
+  // Перемещение ↑ / ↓
+  container.querySelectorAll('[data-col-up]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      callbacks.onMove(btn.dataset.colUp, 'up');
+    });
+  });
+  container.querySelectorAll('[data-col-down]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      callbacks.onMove(btn.dataset.colDown, 'down');
+    });
+  });
+
+  // Редактирование (теперь и у системных)
   container.querySelectorAll('[data-col-edit]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -86,6 +92,7 @@ export function renderCollectionsList(container, books, collections, callbacks) 
     });
   });
 
+  // Удаление (только пользовательские — кнопка у системных не рендерится)
   container.querySelectorAll('[data-col-del]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -98,27 +105,42 @@ export function renderCollectionsList(container, books, collections, callbacks) 
   });
 }
 
-function renderCollectionCard(col, books) {
+/**
+ * Карточка подборки с кнопками порядка и редактирования.
+ * @param {object} col
+ * @param {object[]} books
+ * @param {number} idx — позиция в списке
+ * @param {number} total — всего подборок
+ */
+function renderCollectionCard(col, books, idx, total) {
   const count = col.bookIds.length;
   const isSystem = col.isSystem;
+  const isFirst = idx === 0;
+  const isLast = idx === total - 1;
 
   return `
     <div class="collection-card" data-col-id="${col.id}">
       <div class="collection-emoji">${col.emoji}</div>
       <div class="collection-info">
-        <div class="collection-name">${esc(col.name)}</div>
+        <div class="collection-name">
+          ${esc(col.name)}
+          ${isSystem ? '<span class="col-system-badge">системная</span>' : ''}
+        </div>
         <div class="collection-count">${count} ${pluralize(count, 'книга', 'книги', 'книг')}</div>
       </div>
-      ${!isSystem ? `
+
+      <div class="collection-actions">
+        <button data-col-up="${col.id}" class="col-move-btn"
+          ${isFirst ? 'disabled' : ''} title="Выше">↑</button>
+        <button data-col-down="${col.id}" class="col-move-btn"
+          ${isLast ? 'disabled' : ''} title="Ниже">↓</button>
         <button data-col-edit="${col.id}" class="icon-btn"
-                style="width:32px;height:32px;font-size:.85rem" title="Редактировать">
-          ✏️
-        </button>
-        <button data-col-del="${col.id}" class="icon-btn"
-                style="width:32px;height:32px;font-size:.85rem" title="Удалить">
-          🗑️
-        </button>
-      ` : ''}
+          style="width:32px;height:32px;font-size:.85rem" title="Редактировать">✏️</button>
+        ${!isSystem ? `
+          <button data-col-del="${col.id}" class="icon-btn"
+            style="width:32px;height:32px;font-size:.85rem" title="Удалить">🗑️</button>
+        ` : ''}
+      </div>
     </div>
   `;
 }
@@ -137,7 +159,7 @@ function renderCollectionCard(col, books) {
 export function renderCollectionDetail(container, collection, books, callbacks) {
   const colBooks = books.filter(b => collection.bookIds.includes(b.id));
 
-  // Сортировка: по дате добавления в подборку (порядок bookIds)
+  // Сортировка: по порядку добавления в подборку (порядок bookIds)
   colBooks.sort((a, b) => {
     const ai = collection.bookIds.indexOf(a.id);
     const bi = collection.bookIds.indexOf(b.id);
@@ -156,11 +178,11 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
           : ''}
         <div class="text-small text-muted mt-8">
           ${colBooks.length} ${pluralize(colBooks.length, 'книга', 'книги', 'книг')}
+          ${collection.isSystem ? ' · системная' : ''}
         </div>
       </div>
-      ${!collection.isSystem ? `
-        <button id="col-edit-hero" class="btn-secondary" style="flex-shrink:0">✏️</button>
-      ` : ''}
+      <!-- v3.4.0: редактирование доступно и для системных подборок -->
+      <button id="col-edit-hero" class="btn-secondary" style="flex-shrink:0" title="Редактировать">✏️</button>
     </div>
 
     ${colBooks.length === 0 ? `
@@ -181,10 +203,8 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
               <div class="book-author">${esc(b.author)}</div>
             </div>
             <button data-col-remove="${b.id}" class="icon-btn"
-                    style="width:32px;height:32px;font-size:.85rem;flex-shrink:0"
-                    title="Убрать из подборки">
-              ✕
-            </button>
+              style="width:32px;height:32px;font-size:.85rem;flex-shrink:0"
+              title="Убрать из подборки">✕</button>
           </div>
         `).join('')}
       </div>
@@ -226,6 +246,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
 
 /**
  * Открывает форму создания/редактирования подборки.
+ * Работает и для системных (isSystem сохраняется).
  * @param {object|null} collection — null для новой
  * @param {function} onSave — (data) => void
  */
@@ -242,26 +263,32 @@ export function openCollectionForm(collection, onSave) {
         <button class="icon-btn col-form-close">✕</button>
       </div>
       <div class="overlay-body">
+        ${c.isSystem ? `
+          <div class="text-small" style="padding:8px 12px;background:var(--accent-dim);
+            border-radius:var(--radius-sm);color:var(--accent);margin-bottom:14px">
+            🔒 Это предсозданная подборка — можно изменить название,
+            эмодзи и описание, но нельзя удалить.
+          </div>
+        ` : ''}
         <div class="form-group">
           <label>Эмодзи</label>
           <input type="text" id="col-f-emoji" value="${esc(c.emoji || '📂')}"
-                 maxlength="4" style="width:60px;text-align:center;font-size:1.5rem"/>
+            maxlength="4" style="width:60px;text-align:center;font-size:1.5rem"/>
         </div>
         <div class="form-group">
           <label>Название *</label>
           <input type="text" id="col-f-name" value="${esc(c.name || '')}"
-                 placeholder="Летнее чтение" required/>
+            placeholder="Летнее чтение" required/>
         </div>
         <div class="form-group">
           <label>Описание</label>
           <textarea id="col-f-desc" rows="2"
-                    placeholder="Книги для отпуска на море...">${esc(c.description || '')}</textarea>
+            placeholder="Книги для отпуска на море...">${esc(c.description || '')}</textarea>
         </div>
         <button id="col-f-save" class="btn-primary">💾 Сохранить</button>
       </div>
     </div>
   `;
-
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
 
@@ -279,7 +306,6 @@ export function openCollectionForm(collection, onSave) {
       showToast('⚠️ Введите название', 'error');
       return;
     }
-
     const data = {
       id: c.id || `col_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name,
@@ -287,16 +313,17 @@ export function openCollectionForm(collection, onSave) {
       description: overlay.querySelector('#col-f-desc').value.trim(),
       bookIds: c.bookIds || [],
       isSystem: c.isSystem || false,
+      // v3.4.0: сохраняем порядок (для новых — назначит app.js)
+      order: typeof c.order === 'number' ? c.order : undefined,
       createdAt: c.createdAt || new Date().toISOString(),
     };
-
     onSave(data);
     close();
   });
 }
 
 // ═══════════════════════════════════════════════
-//  4. ВЫБОР КНИГ ДЛЯ ПОДБОРКИ (чекбоксы)
+//  4. ВЫБОР ПОДБОРОК ДЛЯ КНИГИ (чекбоксы)
 // ═══════════════════════════════════════════════
 
 /**
@@ -328,7 +355,7 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
             return `
               <label class="picker-row">
                 <input type="checkbox" data-col-id="${col.id}"
-                       ${checked ? 'checked' : ''}/>
+                  ${checked ? 'checked' : ''}/>
                 <span class="picker-emoji">${col.emoji}</span>
                 <span class="picker-name">${esc(col.name)}</span>
                 <span class="picker-count">(${col.bookIds.length})</span>
@@ -340,7 +367,6 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
       </div>
     </div>
   `;
-
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
 
@@ -399,8 +425,8 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
         ` : `
           <div class="form-group">
             <input type="text" id="add-books-search"
-                   placeholder="🔍 Поиск по названию или автору..."
-                   autocomplete="off"/>
+              placeholder="🔍 Поиск по названию или автору..."
+              autocomplete="off"/>
           </div>
           <div id="add-books-list">
             ${available.map(b => `
@@ -420,7 +446,6 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
       </div>
     </div>
   `;
-
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
 
@@ -528,8 +553,8 @@ export function renderDrawerFilters(books) {
         <div class="drawer-filter-items hidden" data-fitems="${filterType}">
           ${items.map(item => `
             <button class="drawer-filter-item"
-                    data-filter-type="${filterType}"
-                    data-filter-value="${esc(item.name)}">
+              data-filter-type="${filterType}"
+              data-filter-value="${esc(item.name)}">
               ${esc(item.name)}
               <span class="drawer-filter-count">(${item.count})</span>
             </button>
@@ -564,86 +589,123 @@ function pluralize(n, one, few, many) {
 // ═══════════════════════════════════════════════
 
 const COLLECTION_STYLES = `
-  .collection-card {
-    display:flex; align-items:center; gap:12px;
-    padding:12px 14px;
-    background:var(--bg-card);
-    border:1px solid var(--border);
-    border-radius:var(--radius);
-    cursor:pointer;
-    transition:all .2s;
-    margin-bottom:8px;
-  }
-  .collection-card:hover {
-    border-color:var(--accent);
-    background:var(--bg-card-hover);
-  }
-  .collection-emoji { font-size:1.5rem; flex-shrink:0; }
-  .collection-info { flex:1; min-width:0; }
-  .collection-name { font-size:.92rem; font-weight:600; }
-  .collection-count { font-size:.78rem; color:var(--text-secondary); }
+.collection-card {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 14px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  cursor:pointer;
+  transition:all .2s;
+  margin-bottom:8px;
+}
+.collection-card:hover {
+  border-color:var(--accent);
+  background:var(--bg-card-hover);
+}
+.collection-emoji { font-size:1.5rem; flex-shrink:0; }
+.collection-info { flex:1; min-width:0; }
+.collection-name {
+  font-size:.92rem; font-weight:600;
+  display:flex; align-items:center; gap:7px;
+}
+.collection-count { font-size:.78rem; color:var(--text-secondary); }
 
-  .collection-hero {
-    display:flex; align-items:center; gap:14px;
-    padding:18px;
-    background:linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
-    border:1px solid var(--border);
-    border-radius:var(--radius-lg);
-    margin-bottom:16px;
-  }
-  .collection-hero-emoji { font-size:2.5rem; }
-  .collection-hero-info { flex:1; }
-  .collection-hero-info h2 { font-size:1.15rem; font-weight:800; }
+/* v3.4.0: бейдж системной подборки */
+.col-system-badge {
+  font-size:.6rem; font-weight:800;
+  padding:2px 7px; border-radius:8px;
+  background:var(--accent-dim); color:var(--accent);
+  text-transform:uppercase; letter-spacing:.05em;
+  flex-shrink:0;
+}
 
-  /* Picker */
-  .picker-row {
-    display:flex; align-items:center; gap:10px;
-    padding:10px 12px;
-    border-radius:var(--radius-sm);
-    cursor:pointer;
-    transition:background .15s;
-  }
-  .picker-row:hover { background:var(--bg-card); }
-  .picker-row input[type="checkbox"] {
-    width:18px; height:18px;
-    accent-color:var(--accent);
-    flex-shrink:0;
-  }
-  .picker-emoji { font-size:1.1rem; }
-  .picker-name { font-size:.9rem; font-weight:500; }
-  .picker-count { font-size:.78rem; color:var(--text-muted); }
+/* v3.4.0: блок действий (порядок + правка + удаление) */
+.collection-actions {
+  display:flex; align-items:center; gap:4px;
+  flex-shrink:0;
+}
+.col-move-btn {
+  width:28px; height:28px;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:8px;
+  background:var(--bg-input);
+  border:1px solid var(--border-soft);
+  color:var(--text-secondary);
+  font-size:.85rem; font-weight:800;
+  cursor:pointer;
+  transition:all .15s var(--ease);
+}
+.col-move-btn:hover:not(:disabled) {
+  border-color:var(--accent); color:var(--accent);
+  transform:translateY(-1px);
+}
+.col-move-btn:active:not(:disabled) { transform:scale(.9); }
+.col-move-btn:disabled {
+  opacity:.25; cursor:not-allowed;
+}
 
-  /* Drawer filters */
-  .drawer-filter-group { border-bottom:1px solid var(--border); }
-  .drawer-filter-toggle {
-    display:flex; align-items:center; justify-content:space-between;
-    width:100%; padding:10px 16px;
-    font-size:.88rem; font-weight:600;
-    color:var(--text-secondary);
-    transition:color .2s;
-  }
-  .drawer-filter-toggle:hover { color:var(--text-primary); }
-  .drawer-filter-arrow {
-    font-size:.7rem; transition:transform .2s;
-  }
-  .drawer-filter-toggle.open .drawer-filter-arrow {
-    transform:rotate(90deg);
-  }
-  .drawer-filter-items { padding:0 8px 8px; }
-  .drawer-filter-item {
-    display:flex; align-items:center; justify-content:space-between;
-    width:100%; padding:8px 12px;
-    font-size:.85rem; color:var(--text-secondary);
-    border-radius:6px;
-    transition:all .15s;
-  }
-  .drawer-filter-item:hover {
-    background:var(--accent-dim);
-    color:var(--accent);
-  }
-  .drawer-filter-count {
-    font-size:.75rem; color:var(--text-muted);
-  }
+.collection-hero {
+  display:flex; align-items:center; gap:14px;
+  padding:18px;
+  background:linear-gradient(135deg, var(--bg-card), var(--bg-secondary));
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  margin-bottom:16px;
+}
+.collection-hero-emoji { font-size:2.5rem; }
+.collection-hero-info { flex:1; }
+.collection-hero-info h2 { font-size:1.15rem; font-weight:800; }
+
+/* Picker */
+.picker-row {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px;
+  border-radius:var(--radius-sm);
+  cursor:pointer;
+  transition:background .15s;
+}
+.picker-row:hover { background:var(--bg-card); }
+.picker-row input[type="checkbox"] {
+  width:18px; height:18px;
+  accent-color:var(--accent);
+  flex-shrink:0;
+}
+.picker-emoji { font-size:1.1rem; }
+.picker-name { font-size:.9rem; font-weight:500; }
+.picker-count { font-size:.78rem; color:var(--text-muted); }
+
+/* Drawer filters */
+.drawer-filter-group { border-bottom:1px solid var(--border); }
+.drawer-filter-toggle {
+  display:flex; align-items:center; justify-content:space-between;
+  width:100%; padding:10px 16px;
+  font-size:.88rem; font-weight:600;
+  color:var(--text-secondary);
+  transition:color .2s;
+}
+.drawer-filter-toggle:hover { color:var(--text-primary); }
+.drawer-filter-arrow {
+  font-size:.7rem; transition:transform .2s;
+}
+.drawer-filter-toggle.open .drawer-filter-arrow {
+  transform:rotate(90deg);
+}
+.drawer-filter-items { padding:0 8px 8px; }
+.drawer-filter-item {
+  display:flex; align-items:center; justify-content:space-between;
+  width:100%; padding:8px 12px;
+  font-size:.85rem; color:var(--text-secondary);
+  border-radius:6px;
+  transition:all .15s;
+}
+.drawer-filter-item:hover {
+  background:var(--accent-dim);
+  color:var(--accent);
+}
+.drawer-filter-count {
+  font-size:.75rem; color:var(--text-muted);
+}
 `;
 
 if (!document.getElementById('collection-styles')) {

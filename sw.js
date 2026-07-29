@@ -1,21 +1,25 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — sw.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 Service Worker: полный оффлайн
 //
 //    Стратегии кеширования:
 //      📄 Навигация (HTML)   → network-first → кеш
 //      🎨 Ассеты (CSS/JS)    → cache-first + фоновое обновление
 //      📋 version.json       → всегда сеть (проверка обновлений)
-//      🌐 API (Google/OL/LR) → сеть, без кеширования
+//      🌐 API (Google/OL/LR/Microlink) → сеть, без кеширования
 //      🖼️ Обложки (CDN)      → cache-first (долгое хранение)
 //      📷 OCR (Tesseract)    → precache (полный оффлайн)
+//
+//    Новое в 3.4.0:
+//      — microlink.js в app shell
+//      — api.microlink.io в списке API (network-only)
 //
 // ⚠️ При обновлении версии:
 //    1. Измените CACHE_NAME ниже
 //    2. Измените ?v= в index.html
 //    3. Измените version в version.json
-//    Или: bash bump.sh 3.4.0
+//    Или: bash bump.sh 3.5.0
 // ─────────────────────────────────────────────
 
 // ═══════════════════════════════════════════════
@@ -23,7 +27,7 @@
 // ═══════════════════════════════════════════════
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
-const CACHE_NAME = 'btp-v3.3.0';
+const CACHE_NAME = 'btp-v3.4.0';
 
 // Базовый путь (GitHub Pages: /BookTrackerPro; свой домен: '')
 const BASE = '/BookTrackerPro';
@@ -44,6 +48,7 @@ const SHELL_ASSETS = [
   `${BASE}/challenges.js`,
   `${BASE}/series.js`,
   `${BASE}/ocr.js`,
+  `${BASE}/microlink.js`,        // 🆕 v3.4.0
   `${BASE}/sw-register.js`,
   `${BASE}/manifest.json`,
   `${BASE}/version.json`,
@@ -77,7 +82,8 @@ const API_ORIGINS = [
   'openlibrary.org',
   'catalit.litres.ru',
   'api.litres.ru',
-  'open.er-api.com', // курсы валют
+  'open.er-api.com',      // курсы валют
+  'api.microlink.io',     // 🆕 v3.4.0 — превью ссылок (кеш в IndexedDB)
 ];
 
 // Отдельный кеш для обложек
@@ -112,7 +118,6 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   const validCaches = [CACHE_NAME, COVER_CACHE_NAME];
-
   event.waitUntil(
     caches.keys()
       .then((keys) =>
@@ -208,7 +213,6 @@ function handleAsset(event, request) {
           return response;
         })
         .catch(() => cached);
-
       return cached || networkFetch;
     })
   );
@@ -278,12 +282,10 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
     return;
   }
-
   if (event.data === 'GET_CACHE_VERSION') {
     event.source?.postMessage({ type: 'CACHE_VERSION', version: CACHE_NAME });
     return;
   }
-
   if (event.data === 'CLEAR_COVER_CACHE') {
     caches.delete(COVER_CACHE_NAME).then(() => {
       event.source?.postMessage({ type: 'COVER_CACHE_CLEARED' });

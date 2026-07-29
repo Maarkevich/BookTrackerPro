@@ -1,16 +1,22 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 IndexedDB: книги, обложки, настройки,
-//    подборки, челленджи, теги
-//    Версия БД: 4
+//    подборки, челленджи, теги, превью ссылок
+//    Версия БД: 5
 //    Stores: books, covers, settings,
-//            collections, challenges, tags
+//            collections, challenges, tags,
+//            previews (новое в v5 — кеш Microlink)
+//
+//    Новое в 3.4.0:
+//      — Store 'previews' для кеша превью Microlink
+//      — Поле order у подборок (изменение порядка)
+//      — moveCollection() — перестановка ↑/↓
+//      — loadCollections() сортирует по order
 // ─────────────────────────────────────────────
 
 const DB_NAME = 'book-tracker-pro';
-const DB_VER = 4;
-
+const DB_VER = 5;
 let _db = null;
 
 // ═══════════════════════════════════════════════
@@ -88,10 +94,17 @@ export function openDB() {
         if (!db.objectStoreNames.contains('tags')) {
           db.createObjectStore('tags', { keyPath: 'name' });
         }
-
         const books = tx.objectStore('books');
         if (!books.indexNames.contains('series')) books.createIndex('series', 'series', { unique: false });
         if (!books.indexNames.contains('dateFinished')) books.createIndex('dateFinished', 'dateFinished', { unique: false });
+      }
+
+      // v4 → v5: кеш превью Microlink
+      if (oldVer < 5) {
+        if (!db.objectStoreNames.contains('previews')) {
+          const previews = db.createObjectStore('previews', { keyPath: 'id' });
+          previews.createIndex('cachedAt', 'cachedAt', { unique: false });
+        }
       }
     };
 
@@ -105,7 +118,6 @@ export function openDB() {
       };
       resolve(_db);
     };
-
     request.onerror = () => reject(request.error);
     request.onblocked = () => console.warn('[DB] Blocked — закройте другие вкладки');
   });
@@ -120,10 +132,8 @@ export async function loadBooks() {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readonly');
     const req = tx.objectStore('books').getAll();
-
     req.onsuccess = async () => {
       const books = req.result || [];
-
       for (const book of books) {
         // Обложка
         try {
@@ -135,7 +145,6 @@ export async function loadBooks() {
         }
         ensureBookFields(book);
       }
-
       resolve(books);
     };
     req.onerror = () => reject(req.error);
@@ -146,7 +155,6 @@ export async function putBook(book) {
   const db = await openDB();
   ensureBookFields(book);
   book.updatedAt = new Date().toISOString();
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     tx.objectStore('books').put(book);
@@ -157,11 +165,9 @@ export async function putBook(book) {
 
 export async function delBook(id) {
   const db = await openDB();
-
   // Убираем из всех подборок и челленджей
   await removeFromAllCollections(id);
   await removeFromAllChallenges(id);
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     tx.objectStore('books').delete(id);
@@ -220,7 +226,6 @@ export async function changeBookStatus(bookId, newStatus) {
     book.dateFinished = today;
     confetti = true;
     askRating = true;
-
     // Считаем дни чтения
     if (book.dateStarted) {
       const start = new Date(book.dateStarted);
@@ -231,7 +236,6 @@ export async function changeBookStatus(bookId, newStatus) {
 
   book.status = newStatus;
   await putBook(book);
-
   return { book, confetti, askRating };
 }
 
@@ -309,9 +313,10 @@ export async function saveSettings(settings) {
 // ═══════════════════════════════════════════════
 
 /**
- * Загрузить все подборки.
+ * Загрузить все подборки, отсортированные по order.
  * При первом запуске создаёт предсозданные:
  *   ❤️ Любимые, 💩 Книги-какахи
+ * Миграция v5: добавляет поле order старым записям.
  */
 export async function loadCollections() {
   const db = await openDB();
@@ -327,7 +332,6 @@ export async function loadCollections() {
     { id: 'fav', name: 'Любимые',      emoji: '❤️', isSystem: true },
     { id: 'bad', name: 'Книги-какахи', emoji: '💩', isSystem: true },
   ];
-
   let changed = false;
   for (const preset of presets) {
     if (!collections.find(c => c.id === preset.id)) {
@@ -341,10 +345,24 @@ export async function loadCollections() {
     }
   }
 
+  // Миграция v5: гарантируем поле order у всех подборок
+  if (collections.some(c => typeof c.order !== 'number')) {
+    // Базовый порядок: системные первыми, далее по дате создания
+    collections.sort((a, b) => {
+      if (a.isSystem && !b.isSystem) return -1;
+      if (!a.isSystem && b.isSystem) return 1;
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
+    });
+    collections.forEach((c, i) => { c.order = i; });
+    changed = true;
+  }
+
   if (changed) {
     for (const c of collections) await putCollection(c);
   }
 
+  // Сортировка по order
+  collections.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   return collections;
 }
 
@@ -366,6 +384,47 @@ export async function delCollection(id) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+}
+
+/**
+ * Переместить подборку вверх/вниз в списке (новое в v3.4.0).
+ * Меняет order местами с соседней подборкой.
+ * @param {string} id
+ * @param {'up'|'down'} direction
+ * @returns {Promise<boolean>} — удалось ли переместить
+ */
+export async function moveCollection(id, direction) {
+  const collections = await loadCollections(); // уже отсортированы по order
+  const idx = collections.findIndex(c => c.id === id);
+  if (idx < 0) return false;
+
+  const j = direction === 'up' ? idx - 1 : idx + 1;
+  if (j < 0 || j >= collections.length) return false;
+
+  const a = collections[idx];
+  const b = collections[j];
+
+  // Нормализация при дубликатах order (на всякий случай)
+  if (a.order === b.order) {
+    collections.forEach((c, i) => { c.order = i; });
+    for (const c of collections) await putCollection(c);
+  }
+
+  const tmp = a.order;
+  a.order = b.order;
+  b.order = tmp;
+  await putCollection(a);
+  await putCollection(b);
+  return true;
+}
+
+/**
+ * Следующий order для новой подборки (максимум + 1).
+ */
+export async function getNextCollectionOrder() {
+  const collections = await loadCollections();
+  if (collections.length === 0) return 0;
+  return Math.max(...collections.map(c => c.order ?? 0)) + 1;
 }
 
 /**
@@ -667,6 +726,7 @@ export async function exportAll() {
     }
   }
 
+  // Превью Microlink не экспортируем — это кеш, он пересоздастся сам
   return {
     version: DB_VER,
     exportDate: new Date().toISOString(),
@@ -676,7 +736,6 @@ export async function exportAll() {
 
 export async function importAll(data) {
   if (data.books) await putBooks(data.books);
-
   if (data.covers) {
     for (const c of data.covers) {
       if (c.data) {
@@ -685,7 +744,6 @@ export async function importAll(data) {
       }
     }
   }
-
   if (data.collections) for (const c of data.collections) await putCollection(c);
   if (data.challenges) for (const c of data.challenges) await putChallenge(c);
   if (data.tags) for (const t of data.tags) await putTag(t);
@@ -697,7 +755,7 @@ export async function importAll(data) {
 // ═══════════════════════════════════════════════
 
 /**
- * Гарантирует наличие всех полей книги (v3.3.0).
+ * Гарантирует наличие всех полей книги (v3.4.0).
  * Мигрирует старые записи.
  */
 function ensureBookFields(book) {

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — isbn.js
-// 🔖 v3.3.0 | 2026-07-25
+// 🔖 v3.4.0 | 2026-07-29
 // 📝 ISBN валидация + каскадный поиск книг
 //
 //    Каскад по ISBN:
@@ -14,12 +14,19 @@
 //      2. Open Library
 //      3. ЛитРес Catalit
 //
+//    Новое в 3.4.0:
+//      — fetchBookFromUrl() — книга по ссылке на магазин (Microlink)
+//      — litresTime() — корректный формат времени для Catalit
+//      — postCatalit() — прямой запрос + CORS-прокси фолбэк
+//
 // ⚠️ ТЕСТОВЫЕ КЛЮЧИ ЛИТРЕС:
 //    Catalit:  анонимный доступ (login: Anonymous, pwd: 0)
 //    Partner:  partner_id = 16
 //              secret_key = 93w4jfhs8imksGo-oa3s85d6Akmkkbnsi9
 //    📋 Как заменить — README.md, раздел «ЛитРес API»
 // ─────────────────────────────────────────────
+
+import { extractBookFromPage } from './microlink.js';
 
 // ═══ 1. ВАЛИДАЦИЯ ISBN ═══
 
@@ -101,12 +108,35 @@ export async function fetchBookByIsbn(isbn, litres = null) {
   return null;
 }
 
-// ═══ 3. ПОИСК ПО НАЗВАНИЮ / АВТОРУ ═══
+// ═══ 3. КНИГА ПО ССЫЛКЕ НА МАГАЗИН (НОВОЕ, Microlink) ═══
+
+/**
+ * Извлекает данные книги по URL страницы магазина
+ * (ЛитРес, Book24, Ozon, Читай-город и т.п.).
+ *
+ * Microlink выступает как CORS-прокси + парсер OG-тегов и JSON-LD,
+ * поэтому работает из браузера без собственного сервера.
+ * Покрывает ВСЕ книги РФ, включая новинки, которых нет в Google/OL.
+ *
+ * @param {string} url — ссылка на страницу книги
+ * @returns {Promise<object|null>} — формат как у fetchBookByIsbn (source: 'microlink')
+ */
+export async function fetchBookFromUrl(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  try {
+    const data = await extractBookFromPage(url);
+    if (data && data.title) return data;
+  } catch (e) {
+    console.warn('[ISBN] fetchBookFromUrl:', e.message);
+  }
+  return null;
+}
+
+// ═══ 4. ПОИСК ПО НАЗВАНИЮ / АВТОРУ ═══
 
 export async function searchBooks(query, litres = null) {
   const results = [];
   const seen = new Set();
-
   const add = (book) => {
     if (!book || !book.title) return;
     const key = (book.title + '|' + book.author).toLowerCase().trim();
@@ -166,7 +196,7 @@ export async function searchBooks(query, litres = null) {
   return results;
 }
 
-// ═══ 4. GOOGLE BOOKS ═══
+// ═══ 5. GOOGLE BOOKS ═══
 
 async function tryGoogleBooks(isbn) {
   try {
@@ -182,11 +212,9 @@ async function tryGoogleBooks(isbn) {
 function normalizeGoogle(v) {
   let cover = v.imageLinks?.extraLarge || v.imageLinks?.large || v.imageLinks?.medium || v.imageLinks?.thumbnail || '';
   if (cover) cover = cover.replace(/^http:/, 'https:').replace('&edge=curl', '');
-
   const ids = v.industryIdentifiers || [];
   const isbn = ids.find(i => i.type === 'ISBN_13')?.identifier
-    || ids.find(i => i.type === 'ISBN_10')?.identifier || '';
-
+            || ids.find(i => i.type === 'ISBN_10')?.identifier || '';
   return {
     title: v.title + (v.subtitle ? `. ${v.subtitle}` : ''),
     author: (v.authors || []).join(', '),
@@ -201,7 +229,7 @@ function normalizeGoogle(v) {
   };
 }
 
-// ═══ 5. OPEN LIBRARY ═══
+// ═══ 6. OPEN LIBRARY ═══
 
 async function tryOpenLibrary(isbn) {
   try {
@@ -212,7 +240,6 @@ async function tryOpenLibrary(isbn) {
     if (!key) return null;
     const d = data[key];
     if (!d.title) return null;
-
     return {
       title: d.title,
       author: (d.authors || []).map(a => a.name).join(', ') || d.by_statement || '',
@@ -245,9 +272,12 @@ async function tryCoverOnly(isbn) {
   return null;
 }
 
-// ═══ 6. ЛИТРЕС CATALIT API ═══
+// ═══ 7. ЛИТРЕС CATALIT API ═══
 
 const CATALIT_URL = 'https://catalit.litres.ru/catalitv2';
+
+// CORS-прокси, поддерживающий POST (corsproxy.io)
+const CATALIT_PROXY = (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
 
 let _sid = null;
 let _sidExpires = 0;
@@ -255,6 +285,54 @@ let _sidKeys = null;
 
 function getAnonymousLitresKeys() {
   return { appId: '', secretKey: '', anonymous: true };
+}
+
+/**
+ * Время в формате, который ожидает ЛитРес:
+ *   2026-07-29T15:00:00+03:00  (без миллисекунд, с таймзоной)
+ * new Date().toISOString() даёт .000Z — сервер такое отклоняет.
+ */
+function litresTime() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const offset = -now.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const h = pad(Math.floor(Math.abs(offset) / 60));
+  const m = pad(Math.abs(offset) % 60);
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+         `T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}` +
+         `${sign}${h}:${m}`;
+}
+
+/**
+ * POST-запрос к Catalit: сначала напрямую, затем через CORS-прокси.
+ * Браузер блокирует прямой запрос (нет Access-Control-Allow-Origin),
+ * поэтому прокси — рабочий фолбэк без собственного сервера.
+ *
+ * @param {object} bodyData — объект jdata
+ * @returns {Promise<object|null>} — распарсенный JSON или null
+ */
+async function postCatalit(bodyData) {
+  const body = new URLSearchParams({ jdata: JSON.stringify(bodyData) }).toString();
+  const opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  };
+
+  // 1. Напрямую (вдруг CORS разрешат)
+  try {
+    const r = await fetchT(CATALIT_URL, 8000, opts);
+    if (r.ok) return await r.json();
+  } catch { /* CORS blocked */ }
+
+  // 2. Через CORS-прокси (поддерживает POST)
+  try {
+    const r = await fetchT(CATALIT_PROXY(CATALIT_URL), 10000, opts);
+    if (r.ok) return await r.json();
+  } catch { /* ignore */ }
+
+  return null;
 }
 
 async function getLitresSid(keys) {
@@ -268,7 +346,7 @@ async function getLitresSid(keys) {
         requests: [{ func: 'w_create_sid', id: 'auth', param: { login: 'Anonymous', pwd: '0' } }]
       };
     } else {
-      const time = new Date().toISOString();
+      const time = litresTime();
       const sha = await sha256(time + keys.secretKey);
       bodyData = {
         app: keys.appId, time, sha,
@@ -276,14 +354,7 @@ async function getLitresSid(keys) {
       };
     }
 
-    const body = new URLSearchParams({ jdata: JSON.stringify(bodyData) });
-    const r = await fetchT(CATALIT_URL, 8000, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString()
-    });
-
-    const data = await r.json();
+    const data = await postCatalit(bodyData);
     const sid = data?.auth?.sid;
     if (sid) {
       _sid = sid;
@@ -298,11 +369,9 @@ async function tryLitresSearch(isbn, keys) {
   try {
     const sid = await getLitresSid(keys);
     if (!sid) return null;
-
     const result = await litresRequest(sid, keys, 'r_search_arts', {
       q: isbn, strict: 'exact', limit: ['0', '3'], anno: '1'
     });
-
     const arts = result?.arts || [];
     const match = arts.find(a => a.isbn && cleanISBN(a.isbn) === cleanISBN(isbn)) || arts[0];
     if (!match?.title) return null;
@@ -313,11 +382,9 @@ async function tryLitresSearch(isbn, keys) {
 async function litresSearch(keys, query, limit = 5) {
   const sid = await getLitresSid(keys);
   if (!sid) return [];
-
   const result = await litresRequest(sid, keys, 'r_search_arts', {
     q: query, strict: 'no', limit: ['0', String(limit)], anno: '1'
   });
-
   return (result?.arts || []).filter(a => a.title).map(normalizeLitres);
 }
 
@@ -326,19 +393,12 @@ async function litresRequest(sid, keys, func, param) {
   if (keys.anonymous || (!keys.appId && !keys.secretKey)) {
     bodyData = { sid, requests: [{ func, id: 'req', param }] };
   } else {
-    const time = new Date().toISOString();
+    const time = litresTime();
     const sha = await sha256(time + keys.secretKey);
     bodyData = { app: keys.appId, time, sha, sid, requests: [{ func, id: 'req', param }] };
   }
 
-  const body = new URLSearchParams({ jdata: JSON.stringify(bodyData) });
-  const r = await fetchT(CATALIT_URL, 10000, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString()
-  });
-
-  const data = await r.json();
+  const data = await postCatalit(bodyData);
   if (!data?.success && data?.error_code) {
     _sid = null; _sidExpires = 0; _sidKeys = null;
     return null;
@@ -350,11 +410,9 @@ function normalizeLitres(art) {
   const id = String(art.id);
   const tens = id.length >= 2 ? id[id.length - 2] : '0';
   const cover = `https://cv${tens}.litres.ru/pub/c/cover_415/${id}.jpg`;
-
   const authors = (art.persons || []).filter(p => String(p.type) === '1').map(p => p.full_name).join(', ');
   const genre = (art.genres || [])[0]?.name || '';
   const description = art.annotation ? stripHtml(art.annotation) : '';
-
   return {
     title: art.title + (art.subtitle ? `. ${art.subtitle}` : ''),
     author: authors,
@@ -374,24 +432,21 @@ function normalizeLitres(art) {
   };
 }
 
-// ═══ 7. ЛИТРЕС PARTNER API ═══
+// ═══ 8. ЛИТРЕС PARTNER API ═══
 
 const PARTNER_URL = 'https://api.litres.ru/integrations';
 
 export async function litresGetByIds(ids, partner) {
   if (!ids.length || ids.length > 10) return [];
   if (!partner?.partnerId || !partner?.secretKey) return [];
-
   try {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = await hmacSha256(`${timestamp}.${partner.partnerId}`, partner.secretKey);
-
     const r = await fetchT(
       `${PARTNER_URL}/api/partner/catalog/list?partner_id=${partner.partnerId}&ids=${ids.join(',')}`,
       10000,
       { headers: { 'Timestamp': String(timestamp), 'Signature': signature } }
     );
-
     if (!r.ok) return [];
     const data = await r.json();
     return (data?.payload?.data || []).map(normalizePartnerBook);
@@ -401,7 +456,6 @@ export async function litresGetByIds(ids, partner) {
 function normalizePartnerBook(book) {
   const cover = book.cover_url ? `https://cv0.litres.ru${book.cover_url}` : '';
   const authors = (book.persons || []).filter(p => p.role === 0).map(p => p.full_name).join(', ');
-
   return {
     title: book.title + (book.subtitle ? `. ${book.subtitle}` : ''),
     author: authors,
@@ -431,7 +485,7 @@ export async function fetchLitresGenres() {
   } catch { return []; }
 }
 
-// ═══ 8. УТИЛИТЫ ═══
+// ═══ 9. УТИЛИТЫ ═══
 
 function fetchT(url, ms, opts = {}) {
   const ctrl = new AbortController();
