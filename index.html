@@ -244,64 +244,6 @@
   </div>
 
   <!-- JS модуль -->
-  <script type="module">
-  // 🔧 Диагностика v3.4.1 — показывает ошибку прямо в UI.
-  // Вставьте ВМЕСТО строки <script type="module" src="app.js?v=3.4.1"></script>
-  // После починки удалите этот блок и верните обычную строку.
-
-  const show = (title, body) => {
-    let p = document.getElementById('__diag');
-    if (!p) {
-      p = document.createElement('div');
-      p.id = '__diag';
-      p.style.cssText =
-        'position:fixed;inset:0;z-index:99999;overflow:auto;' +
-        'background:#161210;color:#f0e7d8;' +
-        'font:13px/1.5 ui-monospace,Menlo,monospace;' +
-        'padding:18px;box-sizing:border-box';
-      document.body.appendChild(p);
-    }
-    const h = document.createElement('div');
-    h.style.cssText = 'font:800 15px system-ui;color:#e8a33d;margin-bottom:10px';
-    h.textContent = title;
-
-    const pre = document.createElement('pre');
-    pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;color:#d98aa8;margin:0 0 14px';
-    pre.textContent = body || '';
-
-    p.insertBefore(pre, p.firstChild);
-    p.insertBefore(h, p.firstChild);
-  };
-
-  // 1) Смерть модуля (синтаксис / отсутствующий импорт)
-  try {
-    await import('./app.js?v=3.4.1');
-  } catch (e) {
-    show('💥 app.js не загрузился', (e && e.stack) || (e && e.message) || String(e));
-    ping();
-  }
-
-  // 2) Рантайм-ошибки (модуль загрузился, но init() упал)
-  window.addEventListener('error', e =>
-    show('⚠️ Ошибка выполнения',
-      (e.error && e.error.stack) || e.message + ' @ ' + e.filename + ':' + e.lineno));
-  window.addEventListener('unhandledrejection', e =>
-    show('⚠️ Unhandled rejection',
-      (e.reason && e.reason.stack) || String(e.reason)));
-
-  // 3) Пинг ключевых файлов
-  async function ping() {
-    const files = ['microlink.js','isbn.js','content.js','collections.js','db.js','app.css','version.json'];
-    const rows = await Promise.all(files.map(async f => {
-      try {
-        const r = await fetch('./' + f, { method: 'HEAD', cache: 'no-store' });
-        return (r.ok ? '✅ ' : '❌ ' + r.status + ' ') + f;
-      } catch (err) {
-        return '❌ net ' + f;
-      }
-    }));
-    show('📦 Проверка файлов на сервере', rows.join('\n'));
-  }
-</script>
+  <script type="module" src="app.js?v=3.4.1">
 </body>
 </html>

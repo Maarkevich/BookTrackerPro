@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — sw.js
-// 🔖 v3.4.0 | 2026-07-29
+// 🔖 v3.4.1 | 2026-07-29
 // 📝 Service Worker: полный оффлайн
 //
 //    Стратегии кеширования:
@@ -11,7 +11,8 @@
 //      🖼️ Обложки (CDN)      → cache-first (долгое хранение)
 //      📷 OCR (Tesseract)    → precache (полный оффлайн)
 //
-//    Новое в 3.4.0:
+//    Новое в 3.4.1:
+//      — CACHE_NAME → btp-v3.4.1 (сброс кеша при обновлении)
 //      — microlink.js в app shell
 //      — api.microlink.io в списке API (network-only)
 //
@@ -27,7 +28,7 @@
 // ═══════════════════════════════════════════════
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
-const CACHE_NAME = 'btp-v3.4.0';
+const CACHE_NAME = 'btp-v3.4.1';
 
 // Базовый путь (GitHub Pages: /BookTrackerPro; свой домен: '')
 const BASE = '/BookTrackerPro';
@@ -48,7 +49,7 @@ const SHELL_ASSETS = [
   `${BASE}/challenges.js`,
   `${BASE}/series.js`,
   `${BASE}/ocr.js`,
-  `${BASE}/microlink.js`,        // 🆕 v3.4.0
+  `${BASE}/microlink.js`,        // 🆕 превью ссылок + извлечение книг
   `${BASE}/sw-register.js`,
   `${BASE}/manifest.json`,
   `${BASE}/version.json`,
@@ -83,7 +84,7 @@ const API_ORIGINS = [
   'catalit.litres.ru',
   'api.litres.ru',
   'open.er-api.com',      // курсы валют
-  'api.microlink.io',     // 🆕 v3.4.0 — превью ссылок (кеш в IndexedDB)
+  'api.microlink.io',     // 🆕 превью ссылок (кеш в IndexedDB, не в SW)
 ];
 
 // Отдельный кеш для обложек

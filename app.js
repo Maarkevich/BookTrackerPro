@@ -127,7 +127,7 @@ function cacheDom() {
    'review-overlay','review-form-title','review-form-close','review-form-body',
    'cover-overlay','cover-close','cover-viewer-img','cover-viewer-title',
    'cover-photo-btn','cover-photo-input','cover-gallery-btn','cover-gallery-input',
-   'toast-el','confetti-canvas','update-banner','install-banner',
+   'toast','confetti-canvas','update-banner','install-banner',
    'drawer-version','drawer-offline','active-filters',
    'drawer-collections','drawer-series','drawer-filters','drawer-add-collection',
    'drawer-title-collections','drawer-title-series','drawer-title-filters',
