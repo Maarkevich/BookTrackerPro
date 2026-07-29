@@ -1277,7 +1277,7 @@ function fillFormFromResult(r) {
     set('#bf-series-num', r.litresSeries[0].number);
   }
   if (r.litresMinAge) set('#bf-age', r.litresMinAge + '+');
-  }
+  // 🆕 Цена из магазина (Microlink / JSON-LD offers)
   if (r.price?.amount > 0) {
     set('#bf-price', r.price.amount);
     set('#bf-currency', r.price.currency);
