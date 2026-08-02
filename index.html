@@ -244,6 +244,65 @@
 </div>
 
 <!-- JS модуль -->
-<script type="module" src="app.js?v=3.5.0"></script>
+<!-- ═══ ВРЕМЕННАЯ ДИАГНОСТИКА v3.5.0 (удалить после починки) ═══ -->
+<script>
+(function () {
+  var box = document.createElement('div');
+  box.id = '__diag';
+  box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
+    'background:#1d1815;color:#f0e7d8;border-top:2px solid #e8a33d;' +
+    'padding:12px 14px 16px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;' +
+    'white-space:pre-wrap;max-height:62vh;overflow:auto;' +
+    'box-shadow:0 -8px 30px rgba(0,0,0,.5)';
+  document.body.appendChild(box);
+  var out = '🔍  Диагностика BookTrackerPro v3.5.0\n──────────────────────────────\n';
+  function paint() { box.firstChild ? box.firstChild.nodeValue = out : box.appendChild(document.createTextNode(out)); }
+  function log(s) { out += s + '\n'; paint(); }
+  paint();
+
+  // 1) Есть ли файлы на сервере (HEAD-запросы, без кеша)
+  var files = ['icons.js','search.js','app.js','db.js','content.js','review.js',
+    'stats.js','collections.js','challenges.js','series.js','microlink.js',
+    'isbn.js','ocr.js','scanner.js','sw-register.js','sw.js','app.css',
+    'version.json','manifest.json'];
+  log('📦  Файлы на сервере:');
+  files.forEach(function (f) {
+    fetch(f, { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) { log((r.ok ? '   ✅ ' : '   ❌ [' + r.status + '] ') + f); })
+      .catch(function (e) { log('   ⚠️  ' + f + ' → ' + e.message); });
+  });
+
+  // 2) Попытка запустить app.js и поймать ТОЧНУЮ ошибку
+  log('\n🚀  Запуск app.js:');
+  import('./app.js')
+    .then(function () { log('   ✅ app.js загрузился и выполнился'); })
+    .catch(function (e) { log('   ❌ ' + (e && e.message ? e.message : e)); });
+
+  // 3) Ловушки на любые поздние ошибки
+  window.addEventListener('error', function (e) {
+    log('\n⚠️  error: ' + e.message + '\n     ' + (e.filename || '') + ':' + (e.lineno || ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    log('\n⚠️  rejection: ' + (e.reason && (e.reason.message || e.reason) || e.reason));
+  });
+
+  // 4) Кнопка полного сброса кеша + Service Worker
+  var btn = document.createElement('button');
+  btn.textContent = '🧹  Сбросить кеш и Service Worker';
+  btn.style.cssText = 'margin-top:12px;width:100%;padding:11px;border:1px solid #e8a33d;' +
+    'border-radius:9px;background:#251f1a;color:#e8a33d;font:700 13px inherit;cursor:pointer';
+  btn.onclick = function () {
+    btn.disabled = true; btn.textContent = '⏳  Чищу…';
+    Promise.all([
+      (navigator.serviceWorker ? navigator.serviceWorker.getRegistrations()
+        .then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })
+        : Promise.resolve()),
+      (window.caches ? caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })
+        : Promise.resolve())
+    ]).then(function () { location.reload(true); });
+  };
+  box.appendChild(btn);
+})();
+</script>
 </body>
 </html>
