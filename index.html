@@ -244,64 +244,52 @@
 </div>
 
 <!-- JS модуль -->
-<!-- ═══ ВРЕМЕННАЯ ДИАГНОСТИКА v3.5.0 (удалить после починки) ═══ -->
+<!-- ═══ ДИАГНОСТИКА v2: ищет файл с синтаксической ошибкой (удалить после починки) ═══ -->
 <script>
-(function () {
-  var box = document.createElement('div');
-  box.id = '__diag';
-  box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
-    'background:#1d1815;color:#f0e7d8;border-top:2px solid #e8a33d;' +
-    'padding:12px 14px 16px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;' +
-    'white-space:pre-wrap;max-height:62vh;overflow:auto;' +
-    'box-shadow:0 -8px 30px rgba(0,0,0,.5)';
+(function(){
+  var old=document.getElementById('__diag'); if(old) old.remove();
+  var box=document.createElement('div'); box.id='__diag';
+  box.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d1815;color:#f0e7d8;border-top:2px solid #e8a33d;padding:12px 14px 16px;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;max-height:72vh;overflow:auto;box-shadow:0 -8px 30px rgba(0,0,0,.5)';
   document.body.appendChild(box);
-  var out = '🔍  Диагностика BookTrackerPro v3.5.0\n──────────────────────────────\n';
-  function paint() { box.firstChild ? box.firstChild.nodeValue = out : box.appendChild(document.createTextNode(out)); }
-  function log(s) { out += s + '\n'; paint(); }
+  var out='';
+  var btnHtml='<button id="__diag_btn" style="width:100%;padding:12px;border:1px solid #e8a33d;border-radius:9px;background:#251f1a;color:#e8a33d;font:700 13px ui-monospace,monospace;cursor:pointer;transition:background .15s,transform .1s">🧹  Сбросить кеш и Service Worker</button>';
+  function paint(){ box.innerHTML='<pre style="margin:0 0 10px;white-space:pre-wrap;word-break:break-word">'+out+'</pre>'+btnHtml; bindBtn(); }
+  function log(s){ out+=s+'\n'; }
+  function bindBtn(){ var b=document.getElementById('__diag_btn'); if(!b) return; b.onmouseenter=function(){b.style.background='#2d2620';}; b.onmouseleave=function(){b.style.background='#251f1a';}; b.onmousedown=function(){b.style.transform='scale(.98)';}; b.onmouseup=function(){b.style.transform='none';}; b.onclick=function(){ b.disabled=true;b.textContent='⏳  Чищу…'; Promise.all([(navigator.serviceWorker?navigator.serviceWorker.getRegistrations().then(function(rs){return Promise.all(rs.map(function(r){return r.unregister();}));}):Promise.resolve()),(window.caches?caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}):Promise.resolve())]).then(function(){location.reload(true);}); }; }
+  log('🔎  Ищу файл с синтаксической ошибкой…\n    (каждый модуль проверяется отдельно)\n');
   paint();
-
-  // 1) Есть ли файлы на сервере (HEAD-запросы, без кеша)
-  var files = ['icons.js','search.js','app.js','db.js','content.js','review.js',
-    'stats.js','collections.js','challenges.js','series.js','microlink.js',
-    'isbn.js','ocr.js','scanner.js','sw-register.js','sw.js','app.css',
-    'version.json','manifest.json'];
-  log('📦  Файлы на сервере:');
-  files.forEach(function (f) {
-    fetch(f, { method: 'HEAD', cache: 'no-store' })
-      .then(function (r) { log((r.ok ? '   ✅ ' : '   ❌ [' + r.status + '] ') + f); })
-      .catch(function (e) { log('   ⚠️  ' + f + ' → ' + e.message); });
-  });
-
-  // 2) Попытка запустить app.js и поймать ТОЧНУЮ ошибку
-  log('\n🚀  Запуск app.js:');
-  import('./app.js')
-    .then(function () { log('   ✅ app.js загрузился и выполнился'); })
-    .catch(function (e) { log('   ❌ ' + (e && e.message ? e.message : e)); });
-
-  // 3) Ловушки на любые поздние ошибки
-  window.addEventListener('error', function (e) {
-    log('\n⚠️  error: ' + e.message + '\n     ' + (e.filename || '') + ':' + (e.lineno || ''));
-  });
-  window.addEventListener('unhandledrejection', function (e) {
-    log('\n⚠️  rejection: ' + (e.reason && (e.reason.message || e.reason) || e.reason));
-  });
-
-  // 4) Кнопка полного сброса кеша + Service Worker
-  var btn = document.createElement('button');
-  btn.textContent = '🧹  Сбросить кеш и Service Worker';
-  btn.style.cssText = 'margin-top:12px;width:100%;padding:11px;border:1px solid #e8a33d;' +
-    'border-radius:9px;background:#251f1a;color:#e8a33d;font:700 13px inherit;cursor:pointer';
-  btn.onclick = function () {
-    btn.disabled = true; btn.textContent = '⏳  Чищу…';
-    Promise.all([
-      (navigator.serviceWorker ? navigator.serviceWorker.getRegistrations()
-        .then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })
-        : Promise.resolve()),
-      (window.caches ? caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })
-        : Promise.resolve())
-    ]).then(function () { location.reload(true); });
-  };
-  box.appendChild(btn);
+  var order=['icons.js','db.js','microlink.js','isbn.js','scanner.js','sw-register.js','ocr.js','series.js','challenges.js','collections.js','content.js','review.js','stats.js','search.js','app.js'];
+  function fileFromStack(st){ if(!st) return ''; var m=st.match(/([A-Za-z0-9_\-]+\.js):(\d+):(\d+)/); return m?(m[1]+'  →  строка '+m[2]+', символ '+m[3]):''; }
+  var i=0;
+  function step(){
+    if(i>=order.length){ finish(); return; }
+    var f=order[i]; i++;
+    import('./'+f).then(function(){ log('✅  '+f); paint(); setTimeout(step,0); })
+    .catch(function(e){
+      var loc=fileFromStack(e&&e.stack);
+      log('❌  '+f+'   '+(e&&e.message?e.message:e));
+      if(loc) log('     🎯  внутри файла: '+loc);
+      if(e&&e.stack) log('     stack: '+e.stack.split('\n').slice(0,3).join('  |  '));
+      log('');
+      paint(); setTimeout(step,0);
+    });
+  }
+  function finish(){
+    log('──────────────────────────────────────');
+    log('📌  Готово. Пришли скрин этой панели:');
+    log('    по строке «🎯 внутри файла» я назову точное');
+    log('    место и пришлю исправленный файл целиком.');
+    log('');
+    log('💡  Быстрый чек «вслепую» (можно прямо сейчас):');
+    log('    открой на GitHub каждый файл со ❌ и проверь,');
+    log('    что нигде строка в кавычках \'...\' или "..." не');
+    log('    разорвана переносом строки. Частое место —');
+    log('    lines.join(...) — должно идти в ОДНУ строку:');
+    log('    lines.join(\'\\n\')   (обратный слеш + n, не Enter).');
+    log('    Также проверь, нет ли «умных» кавычек “ ” вместо ".');
+    paint();
+  }
+  step();
 })();
 </script>
 </body>
