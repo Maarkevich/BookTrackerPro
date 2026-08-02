@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#161210"/>
-<meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, контент-план, отзывы, статистика. Новое в 3.5.0: переработанный глобальный поиск с клавиатурной навигацией, SVG-иконки, генеративные обложки, карточка контента со статус-степпером. Работает полностью оффлайн."/>
+<meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, превью публикаций (Microlink), 8 площадок. Работает оффлайн."/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="BookTracker"/>
@@ -19,30 +19,30 @@
 <!-- Стили -->
 <link rel="stylesheet" href="app.css?v=3.5.0"/>
 
-<!-- Шрифты: заголовочный + текстовый -->
+<!-- Шрифты -->
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
-<!-- Preload критических ресурсов (v3.5.0: + icons.js, search.js) -->
-<link rel="preload" href="app.js" as="script" crossorigin/>
-<link rel="preload" href="db.js" as="script" crossorigin/>
-<link rel="preload" href="icons.js" as="script" crossorigin/>
-<link rel="preload" href="search.js" as="script" crossorigin/>
+<!-- Preload критических модулей (v3.5.0: + icons.js, search.js) -->
+<link rel="preload" href="app.js?v=3.5.0" as="script" crossorigin/>
+<link rel="preload" href="db.js?v=3.5.0" as="script" crossorigin/>
+<link rel="preload" href="icons.js?v=3.5.0" as="script" crossorigin/>
+<link rel="preload" href="search.js?v=3.5.0" as="script" crossorigin/>
 </head>
 <body>
 
-<!-- ═══ Фоновая атмосфера ═══ -->
+<!-- Фоновая атмосфера -->
 <div class="ambient" aria-hidden="true">
   <div class="ambient-glow ambient-glow-1"></div>
   <div class="ambient-glow ambient-glow-2"></div>
   <div class="ambient-grain"></div>
 </div>
 
-<!-- ═══ Конфетти ═══ -->
+<!-- Конфетти -->
 <canvas id="confetti-canvas"></canvas>
 
-<!-- ═══ Боковое меню (Drawer) ═══ -->
+<!-- Боковое меню -->
 <div id="backdrop" class="backdrop"></div>
 <aside id="drawer" class="drawer">
   <div class="drawer-header">
@@ -52,9 +52,7 @@
     </div>
     <button id="drawer-close" class="icon-btn" aria-label="Закрыть">✕</button>
   </div>
-
   <nav class="drawer-nav">
-    <!-- Основные разделы (иконки подставляются из icons.js) -->
     <button class="nav-item active" data-tab="books">
       <span class="nav-icon">📚</span> Мои книги
       <span class="nav-count" id="nav-count-books"></span>
@@ -78,43 +76,36 @@
       <span class="nav-icon">📊</span> Статистика
     </button>
 
-    <!-- Подборки (динамические) — заголовок кликабелен -->
     <div class="drawer-section">
       <button class="drawer-section-title" id="drawer-title-collections" title="Открыть подборки">📂 Подборки</button>
-      <div id="drawer-collections"><!-- заполняется из collections.js --></div>
+      <div id="drawer-collections"></div>
       <button class="nav-item sub" id="drawer-add-collection">
         <span class="nav-icon">＋</span> Новая подборка
       </button>
     </div>
 
-    <!-- Серии (динамические) — заголовок кликабелен -->
     <div class="drawer-section">
       <button class="drawer-section-title" id="drawer-title-series" title="Открыть серии">📚 Серии</button>
-      <div id="drawer-series"><!-- заполняется из series.js --></div>
+      <div id="drawer-series"></div>
     </div>
 
-    <!-- Системные фильтры (динамические) — заголовок кликабелен -->
     <div class="drawer-section">
       <button class="drawer-section-title" id="drawer-title-filters" title="Книги с фильтрами">🔎 Фильтры</button>
-      <div id="drawer-filters"><!-- заполняется из collections.js --></div>
+      <div id="drawer-filters"></div>
     </div>
 
-    <!-- Настройки -->
     <button class="nav-item" data-tab="settings">
       <span class="nav-icon">⚙️</span> Настройки
     </button>
   </nav>
-
   <div class="drawer-footer">
     <span id="drawer-version">v3.5.0</span>
     <span class="drawer-offline hidden" id="drawer-offline">📴 оффлайн</span>
   </div>
 </aside>
 
-<!-- ═══ Основное приложение ═══ -->
+<!-- Приложение -->
 <div id="app">
-
-  <!-- Верхняя панель -->
   <header class="topbar">
     <button id="menu-btn" class="icon-btn" aria-label="Меню">☰</button>
     <h1 id="page-title" class="topbar-title">Мои книги</h1>
@@ -125,52 +116,46 @@
     </div>
   </header>
 
-  <!-- Глобальный поиск: строка + скоупы + теги книг (v3.5.0, search.js) -->
+  <!-- Глобальный поиск -->
   <div id="search-bar" class="search-bar hidden">
     <div class="search-input-row">
       <input type="text" id="search-input" placeholder="Поиск по названию, автору, ISBN, тегу..."
              autocomplete="off" enterkeyhint="search"/>
-      <button id="search-close" class="icon-btn" aria-label="Закрыть поиск">✕</button>
+      <button id="search-close" class="icon-btn">✕</button>
     </div>
-    <div id="search-scopes" class="search-scopes"><!-- скоупы из search.js --></div>
-    <div id="search-book-tags" class="search-book-tags hidden"><!-- теги книг из search.js --></div>
+    <div id="search-scopes" class="search-scopes"></div>
+    <div id="search-book-tags" class="search-book-tags hidden"></div>
   </div>
 
-  <!-- Активные фильтры (теги, подборки, серии) -->
   <div id="active-filters" class="active-filters hidden"></div>
-
-  <!-- Панель результатов глобального поиска -->
   <div id="search-results" class="search-results hidden"></div>
 
-  <!-- Контент страницы -->
-  <main id="main-content" class="main-content">
-    <!-- Заполняется через JS -->
-  </main>
+  <main id="main-content" class="main-content"></main>
 </div>
 
-<!-- ═══ Оверлей: Форма книги ═══ -->
+<!-- Оверлей: форма книги -->
 <div id="form-overlay" class="overlay end hidden">
   <div class="overlay-panel">
     <div class="overlay-header">
       <h2 id="form-title">Новая книга</h2>
       <button id="form-close" class="icon-btn">✕</button>
     </div>
-    <div id="form-body" class="overlay-body"><!-- JS --></div>
+    <div id="form-body" class="overlay-body"></div>
   </div>
 </div>
 
-<!-- ═══ Оверлей: Карточка книги ═══ -->
+<!-- Оверлей: карточка книги -->
 <div id="detail-overlay" class="overlay end hidden">
   <div class="overlay-panel">
     <div class="overlay-header">
       <h2 id="detail-title">Книга</h2>
       <button id="detail-close" class="icon-btn">✕</button>
     </div>
-    <div id="detail-body" class="overlay-body"><!-- JS --></div>
+    <div id="detail-body" class="overlay-body"></div>
   </div>
 </div>
 
-<!-- ═══ Оверлей: Сканер ISBN ═══ -->
+<!-- Оверлей: сканер -->
 <div id="scanner-overlay" class="overlay hidden">
   <div class="scanner-container">
     <div class="scanner-header">
@@ -180,36 +165,35 @@
     <video id="scanner-video" autoplay playsinline muted></video>
     <div id="scanner-status" class="scanner-status">Наведите камеру на штрихкод</div>
     <div class="scanner-manual">
-      <input type="text" id="scanner-manual-input"
-             placeholder="Или введите ISBN вручную" inputmode="numeric"/>
+      <input type="text" id="scanner-manual-input" placeholder="Или введите ISBN вручную" inputmode="numeric"/>
       <button id="scanner-manual-btn" class="btn-primary">Найти</button>
     </div>
   </div>
 </div>
 
-<!-- ═══ Оверлей: Контент ═══ -->
+<!-- Оверлей: контент -->
 <div id="content-overlay" class="overlay end hidden">
   <div class="overlay-panel">
     <div class="overlay-header">
       <h2 id="content-form-title">Новый контент</h2>
       <button id="content-form-close" class="icon-btn">✕</button>
     </div>
-    <div id="content-form-body" class="overlay-body"><!-- JS --></div>
+    <div id="content-form-body" class="overlay-body"></div>
   </div>
 </div>
 
-<!-- ═══ Оверлей: Отзыв ═══ -->
+<!-- Оверлей: отзыв -->
 <div id="review-overlay" class="overlay end hidden">
   <div class="overlay-panel">
     <div class="overlay-header">
       <h2 id="review-form-title">Отзыв</h2>
       <button id="review-form-close" class="icon-btn">✕</button>
     </div>
-    <div id="review-form-body" class="overlay-body"><!-- JS --></div>
+    <div id="review-form-body" class="overlay-body"></div>
   </div>
 </div>
 
-<!-- ═══ Оверлей: Просмотр обложки ═══ -->
+<!-- Оверлей: просмотр обложки -->
 <div id="cover-overlay" class="overlay hidden">
   <div class="cover-viewer">
     <button id="cover-close" class="icon-btn cover-close-btn">✕</button>
@@ -226,71 +210,24 @@
   </div>
 </div>
 
-<!-- ═══ Тост ═══ -->
+<!-- Тост -->
 <div id="toast" class="toast hidden"></div>
 
-<!-- ═══ Баннер обновления PWA ═══ -->
+<!-- Баннер обновления -->
 <div id="update-banner" class="update-banner hidden">
   <span>🔄 Доступна новая версия</span>
   <button id="update-apply" class="btn-small">Обновить</button>
   <button id="update-dismiss" class="icon-btn">✕</button>
 </div>
 
-<!-- ═══ Баннер установки PWA ═══ -->
+<!-- Баннер установки -->
 <div id="install-banner" class="install-banner hidden">
   <span>📱 Установить приложение?</span>
   <button id="install-apply" class="btn-small">Установить</button>
   <button id="install-dismiss" class="icon-btn">✕</button>
 </div>
 
-<!-- JS модуль -->
-<!-- ═══ ДИАГНОСТИКА v2: ищет файл с синтаксической ошибкой (удалить после починки) ═══ -->
-<script>
-(function(){
-  var old=document.getElementById('__diag'); if(old) old.remove();
-  var box=document.createElement('div'); box.id='__diag';
-  box.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d1815;color:#f0e7d8;border-top:2px solid #e8a33d;padding:12px 14px 16px;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;max-height:72vh;overflow:auto;box-shadow:0 -8px 30px rgba(0,0,0,.5)';
-  document.body.appendChild(box);
-  var out='';
-  var btnHtml='<button id="__diag_btn" style="width:100%;padding:12px;border:1px solid #e8a33d;border-radius:9px;background:#251f1a;color:#e8a33d;font:700 13px ui-monospace,monospace;cursor:pointer;transition:background .15s,transform .1s">🧹  Сбросить кеш и Service Worker</button>';
-  function paint(){ box.innerHTML='<pre style="margin:0 0 10px;white-space:pre-wrap;word-break:break-word">'+out+'</pre>'+btnHtml; bindBtn(); }
-  function log(s){ out+=s+'\n'; }
-  function bindBtn(){ var b=document.getElementById('__diag_btn'); if(!b) return; b.onmouseenter=function(){b.style.background='#2d2620';}; b.onmouseleave=function(){b.style.background='#251f1a';}; b.onmousedown=function(){b.style.transform='scale(.98)';}; b.onmouseup=function(){b.style.transform='none';}; b.onclick=function(){ b.disabled=true;b.textContent='⏳  Чищу…'; Promise.all([(navigator.serviceWorker?navigator.serviceWorker.getRegistrations().then(function(rs){return Promise.all(rs.map(function(r){return r.unregister();}));}):Promise.resolve()),(window.caches?caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}):Promise.resolve())]).then(function(){location.reload(true);}); }; }
-  log('🔎  Ищу файл с синтаксической ошибкой…\n    (каждый модуль проверяется отдельно)\n');
-  paint();
-  var order=['icons.js','db.js','microlink.js','isbn.js','scanner.js','sw-register.js','ocr.js','series.js','challenges.js','collections.js','content.js','review.js','stats.js','search.js','app.js'];
-  function fileFromStack(st){ if(!st) return ''; var m=st.match(/([A-Za-z0-9_\-]+\.js):(\d+):(\d+)/); return m?(m[1]+'  →  строка '+m[2]+', символ '+m[3]):''; }
-  var i=0;
-  function step(){
-    if(i>=order.length){ finish(); return; }
-    var f=order[i]; i++;
-    import('./'+f).then(function(){ log('✅  '+f); paint(); setTimeout(step,0); })
-    .catch(function(e){
-      var loc=fileFromStack(e&&e.stack);
-      log('❌  '+f+'   '+(e&&e.message?e.message:e));
-      if(loc) log('     🎯  внутри файла: '+loc);
-      if(e&&e.stack) log('     stack: '+e.stack.split('\n').slice(0,3).join('  |  '));
-      log('');
-      paint(); setTimeout(step,0);
-    });
-  }
-  function finish(){
-    log('──────────────────────────────────────');
-    log('📌  Готово. Пришли скрин этой панели:');
-    log('    по строке «🎯 внутри файла» я назову точное');
-    log('    место и пришлю исправленный файл целиком.');
-    log('');
-    log('💡  Быстрый чек «вслепую» (можно прямо сейчас):');
-    log('    открой на GitHub каждый файл со ❌ и проверь,');
-    log('    что нигде строка в кавычках \'...\' или "..." не');
-    log('    разорвана переносом строки. Частое место —');
-    log('    lines.join(...) — должно идти в ОДНУ строку:');
-    log('    lines.join(\'\\n\')   (обратный слеш + n, не Enter).');
-    log('    Также проверь, нет ли «умных» кавычек “ ” вместо ".');
-    paint();
-  }
-  step();
-})();
-</script>
+<!-- ⬇⬇ ЭТО НЕ ДИАГНОСТИКА — это запуск приложения. НЕ УДАЛЯТЬ. ⬇⬇ -->
+<script type="module" src="app.js?v=3.5.0"></script>
 </body>
 </html>
