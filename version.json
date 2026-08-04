@@ -1,66 +1,75 @@
 {
-  "version": "3.5.0",
-  "build": "20260801",
-  "cache": "btp-v3.5.0",
-  "date": "2026-08-01",
-  "changes": [
-    "Глобальный поиск полностью переработан и вынесен в search.js: явное состояние (фикс «неработающей лупы»), автозакрытие при любой навигации, клавиатура (↑ ↓ Enter Esc), подсветка совпадений <mark>, скоупы и теги с иконками",
-    "Единая система иконок icons.js: монолинейные SVG вместо эмодзи в интерфейсе (навигация, статусы книг, типы и статусы контента, кнопки, пустые состояния)",
-    "Read-only карточка контента со статус-степпером (💡→📅→🎥→✂️→📤): открывается из карточки книги, календаря и контент-плана; редактор — только по кнопке",
-    "Кликабельный контент в календаре: в данные дня добавлен bookId, тап открывает карточку контента",
-    "Фикс обложек по ссылке: валидация blob (image/* + ≥200 байт), лечение уже сохранённого «мусора» (repairCovers), referrerPolicy no-referrer, фоновая загрузка с таймаутом 8с, onerror-фолбэк blob→URL→плейсхолдер",
-    "Генеративный плейсхолдер обложки: детерминированный градиент по названию + заголовок шрифтом Unbounded + «корешок»",
-    "Кнопка «Копировать отзыв» рядом с отзывом в карточке книги",
-    "Жест «назад» (History API): закрывает оверлеи по одному, на главном экране — тост «Нажмите ещё раз для выхода» и выход по повторному жесту",
-    "Microlink: бесплатный лимит 25 запросов/день, поддержка API-ключа (pro.microlink.io + x-api-key) — ключ задаётся в Настройках",
-    "Стилизованные dropdown вместо системных select (валюта, статусы, рекомендация, выбор книги с поиском)",
-    "Площадки в Настройках: сетка кнопок с SVG-иконками вместо select",
-    "Самодиагностика DOM при старте + экранный репортёр ошибок (toast на uncaught error / unhandledrejection)",
-    "Фикс утечки objectURL: revokeObjectURL при перезагрузке и удалении обложек",
-    "Убраны глобалы window._updateCoverPreview и window._challengesCache"
-  ],
-  "api": {
-    "google_books": "бесплатно, без ключа",
-    "open_library": "бесплатно, без ключа",
-    "litres_catalit": "тестовый анонимный доступ (замените на свои ключи)",
-    "litres_partner": "тестовый partner_id=16 (замените на свои ключи)",
-    "microlink": "бесплатно 25 запросов/день без ключа; с ключом — pro.microlink.io (лимит по тарифу)",
-    "exchange_rates": "open.er-api.com — бесплатно, без ключа"
-  },
-  "microlink": {
-    "endpoint_free": "https://api.microlink.io",
-    "endpoint_pro": "https://pro.microlink.io",
-    "auth_header": "x-api-key",
-    "daily_limit_free": 25,
-    "app_guard_free": 20,
-    "app_guard_pro": 1000,
-    "cache_store": "previews",
-    "cache_ttl_days": 7,
-    "uses": [
-      "превью publishedUrl в контент-плане",
-      "глубокое извлечение книги по ссылке (html=true)"
-    ]
-  },
-  "icons": {
-    "module": "icons.js",
-    "style": "монолинейные SVG 24×24, stroke 1.8, currentColor",
-    "sets": ["UI (контурные)", "BRAND (фирменные, fill)", "STATUS_ICONS", "CONTENT_TYPE_ICONS", "CONTENT_STATUS_ICONS", "GOAL_ICONS"]
-  },
-  "search": {
-    "module": "search.js",
-    "scopes": ["all", "books", "content", "reviews", "quotes", "collections", "challenges", "series", "tags"],
-    "keyboard": ["↑", "↓", "Enter", "Esc"],
-    "highlight": "mark"
-  },
-  "ocr": {
-    "engine": "Tesseract.js v5",
-    "languages": ["rus", "eng (опционально)"],
-    "offline": true,
-    "files": [
-      "tesseract.min.js",
-      "worker.min.js",
-      "tesseract-core-simd.wasm.js",
-      "rus.traineddata.gz"
-    ]
-  }
+"version": "3.6.0",
+"build": "20260804",
+"cache": "btp-v3.6.0",
+"date": "2026-08-04",
+"changes": [
+"Кастомный дата-пикер (uikit.js) вместо нативных <input type=date>: всплывающий календарь в стиле приложения, навигация по месяцам, кнопки «Сегодня» и «Очистить»",
+"Кастомные селекты (uikit.js) вместо нативных <select>: стилизованный dropdown, поиск по опциям (выбор книги по названию И автору), SVG-иконки статусов",
+"Стилизованный confirm-диалог (uikit.js) вместо нативного confirm(): единый стиль приложения для всех подтверждений удаления",
+"Окно предпросмотра Microlink: при извлечении книги по ссылке открывается модалка со ВСЕМИ найденными полями, возможностью менять назначение каждого поля (title, author, isbn, publisher, year, pages, genre, description, cover, price, age, series) перед применением к форме",
+"Фикс обложек в поиске: referrerpolicy=no-referrer + onerror-фолбэк на генеративный плейсхолдер (обложки видны в результатах поиска и при переходе в карточку)",
+"Иконки меню разного размера: осмысленная шкала (ключевые разделы 22px, основные 20px, служебные 18px) для визуального отличия",
+"Отчётность по контенту: поле reportSent + reportDate на контент-элементе, отображение в карточке контента (openContentCard) со стилизованными галочкой/крестиком, переключение прямо из карточки",
+"Дата получения PR-книги (receivedDate) отображается в карточке книги (detail-meta-grid)",
+"Фильтр отзывов по звёздам: точные значения 5, 4, 3, 2, 1 вместо накопительных «4+», «3+», «≤2»",
+"SVG-иконки в UI-хроме: логотип drawer, кнопки поиска/камеры/добавления, заголовки секций drawer (Подборки, Серии, Фильтры) — всё через icons.js",
+"Вынесен utils.js: esc, debounce, formatPrice, convertToDefault, CURRENCIES, BOOK_STATUSES — разрыв циклических импортов",
+"Доступность: aria-live=polite на тосте, aria-label на кнопках, focus-management в оверлеях",
+"Контраст text-muted повышен с #7d6f5c до #8d7f6b (4.5:1 WCAG AA)"
+],
+"api": {
+"google_books": "бесплатно, без ключа",
+"open_library": "бесплатно, без ключа",
+"litres_catalit": "тестовый анонимный доступ (замените на свои ключи)",
+"litres_partner": "тестовый partner_id=16 (замените на свои ключи)",
+"microlink": "бесплатно 25 запросов/день без ключа; с ключом — pro.microlink.io (лимит по тарифу)",
+"exchange_rates": "open.er-api.com — бесплатно, без ключа"
+},
+"microlink": {
+"endpoint_free": "https://api.microlink.io",
+"endpoint_pro": "https://pro.microlink.io",
+"auth_header": "x-api-key",
+"daily_limit_free": 25,
+"app_guard_free": 20,
+"app_guard_pro": 1000,
+"cache_store": "previews",
+"cache_ttl_days": 7,
+"uses": [
+"превью publishedUrl в контент-плане",
+"глубокое извлечение книги по ссылке (html=true)",
+"окно предпросмотра с маппингом полей (v3.6.0)"
+]
+},
+"icons": {
+"module": "icons.js",
+"style": "монолинейные SVG 24×24, stroke 1.8, currentColor",
+"sets": ["UI (контурные)", "BRAND (фирменные, fill)", "STATUS_ICONS", "CONTENT_TYPE_ICONS", "CONTENT_STATUS_ICONS", "GOAL_ICONS"]
+},
+"search": {
+"module": "search.js",
+"scopes": ["all", "books", "content", "reviews", "quotes", "collections", "challenges", "series", "tags"],
+"keyboard": ["↑", "↓", "Enter", "Esc"],
+"highlight": "mark",
+"cover_fix": "referrerpolicy + onerror fallback (v3.6.0)"
+},
+"uikit": {
+"module": "uikit.js",
+"components": [
+"DatePicker — кастомный календарь",
+"Select — кастомный dropdown с поиском",
+"Confirm — стилизованный диалог подтверждения"
+]
+},
+"ocr": {
+"engine": "Tesseract.js v5",
+"languages": ["rus", "eng (опционально)"],
+"offline": true,
+"files": [
+"tesseract.min.js",
+"worker.min.js",
+"tesseract-core-simd.wasm.js",
+"rus.traineddata.gz"
+]
+}
 }

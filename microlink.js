@@ -1,16 +1,17 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — microlink.js
-// 🔖 v3.5.0 | 2026-08-01
+// 🔖 v3.6.0 | 2026-08-04
 // 📝 Microlink API:
 //      — превью ссылок (контент-план)
 //      — ГЛУБОКОЕ извлечение книги по ссылке на магазин
 //        (html=true → локальный парсинг JSON-LD + OG + microdata)
+//      — НОВОЕ: extractBookPreview() — извлечение ВСЕХ найденных
+//        полей для окна предпросмотра с ручным маппингом
 //
-//    Лимиты (v3.5.0):
+//    Лимиты:
 //      — Бесплатно: 25 запросов/день без ключа
-//        (предохранитель приложения — 20, чтобы не выжечь квоту)
-//      — С ключом: pro.microlink.io + заголовок x-api-key,
-//        лимит снимается (зависит от тарифа)
+//        (предохранитель приложения — 20)
+//      — С ключом: pro.microlink.io + заголовок x-api-key
 //
 //    Ключ задаётся в Настройках → «Microlink API».
 //    app.js вызывает setMicrolinkApiKey() при старте и сохранении.
@@ -18,50 +19,44 @@
 //    Кеш: IndexedDB store 'previews' (db.js v5), TTL 7 дней.
 // ─────────────────────────────────────────────
 import { openDB } from './db.js';
+
 // ═══════════════════════════════════════════════
 //  КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════
 const MICROLINK_FREE = 'https://api.microlink.io';
 const MICROLINK_PRO  = 'https://pro.microlink.io';
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
-// Бесплатный тариф: реально 25/день, держим запас
 const DAILY_LIMIT_FREE = 20;
-// С ключом лимит определяет тариф — ставим высокий предохранитель
 const DAILY_LIMIT_PRO = 1000;
+
 let _dailyCount = 0;
 let _dailyReset = startOfDay() + 86400000;
 const _memCache = new Map();
-// 🆕 v3.5.0: API-ключ (пусто = бесплатный тариф)
 let _apiKey = '';
+
 function startOfDay() { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); }
+
 // ═══════════════════════════════════════════════
-//  0. API-КЛЮЧ (новое в v3.5.0)
+//  0. API-КЛЮЧ
 // ═══════════════════════════════════════════════
-/**
-* Устанавливает API-ключ Microlink (из Настроек).
-* Пустая строка = бесплатный тариф.
-* @param {string} key
-*/
 export function setMicrolinkApiKey(key) {
 _apiKey = (key || '').trim();
-// Сбрасываем дневной счётчик при смене тарифа
 _dailyCount = 0;
 _dailyReset = startOfDay() + 86400000;
 }
-export function getMicrolinkApiKey() {
-return _apiKey;
-}
+export function getMicrolinkApiKey() { return _apiKey; }
 function hasKey() { return _apiKey.length > 0; }
 function baseUrl() { return hasKey() ? MICROLINK_PRO : MICROLINK_FREE; }
 function dailyLimit() { return hasKey() ? DAILY_LIMIT_PRO : DAILY_LIMIT_FREE; }
-/** Заголовки запроса (с x-api-key при наличии ключа) */
-function authHeaders() {
-return hasKey() ? { 'x-api-key': _apiKey } : {};
-}
+function authHeaders() { return hasKey() ? { 'x-api-key': _apiKey } : {}; }
 function canRequest() {
 if (Date.now() > _dailyReset) { _dailyCount = 0; _dailyReset = startOfDay() + 86400000; }
 return _dailyCount < dailyLimit();
 }
+async function microlinkFetch(path, timeout) {
+return fetchT(`${baseUrl()}${path}`, timeout, { headers: authHeaders() });
+}
+
 // ═══════════════════════════════════════════════
 //  1. ПРЕВЬЮ ССЫЛКИ (для контент-плана, без html)
 // ═══════════════════════════════════════════════
@@ -104,72 +99,104 @@ if (host.includes('instagram.com')) return 'instagram';
 if (host.includes('pinterest.')) return 'pinterest';
 if (host.includes('threads.net')) return 'threads';
 if (host.includes('litres.ru')) return 'litres';
+if (host.includes('book24')) return 'book24';
+if (host.includes('ozon')) return 'ozon';
 return 'web';
 } catch { return 'web'; }
 }
+
 // ═══════════════════════════════════════════════
 //  2. ГЛУБОКОЕ ИЗВЛЕЧЕНИЕ КНИГИ (html=true)
+//     Возвращает ТОЛЬКО готовый объект (для isbn.js)
+// ═══════════════════════════════════════════════
+export async function extractBookFromPage(url, opts = {}) {
+const full = await extractBookPreview(url, opts);
+return full ? full.merged : null;
+}
+
+// ═══════════════════════════════════════════════
+//  3. ПОЛНЫЙ ПРЕДПРОСМОТР (НОВОЕ в v3.6.0)
+//     Возвращает { merged, fields, url, source }
+//     fields — ВСЕ найденные поля для ручного маппинга
 // ═══════════════════════════════════════════════
 /**
-* Извлекает МАКСИМУМ данных книги со страницы магазина.
-* Запрашивает у Microlink отрендеренный HTML и парсит его локально:
-*   JSON-LD (schema.org) → Open Graph → microdata → дефолты Microlink.
+* Извлекает МАКСИМУМ данных со страницы магазина и возвращает
+* как готовый объект, так и полный список найденных полей.
 *
 * @param {string} url — ссылка на страницу книги
 * @param {{force?: boolean}} opts
-* @returns {Promise<object|null>} — формат, совместимый с fillFormFromResult
+* @returns {Promise<{merged: object, fields: Array, url: string, source: string}|null>}
 */
-export async function extractBookFromPage(url, opts = {}) {
+export async function extractBookPreview(url, opts = {}) {
 if (!url || !/^https?:\/\//i.test(url)) return null;
 const key = 'book:' + url.toLowerCase();
+
 if (!opts.force) {
 const c = await getCached(key);
-if (c && c.type === 'book') return c.book;
+if (c && c.type === 'book') return { merged: c.book, fields: c.fields || [], url, source: detectSource(url) };
 }
 if (!canRequest()) {
 const c = await getCached(key);
-return c && c.type === 'book' ? c.book : null;
+return c && c.type === 'book' ? { merged: c.book, fields: c.fields || [], url, source: detectSource(url) } : null;
 }
 try {
 const params = new URLSearchParams({
 url,
-html: 'true',          // ← ключевое: вернуть полный HTML
-waitForTimeout: '2000' // дать JS дорисоваться (ЛитРес — React)
+html: 'true',
+waitForTimeout: '2000'
 });
 const r = await microlinkFetch(`/?${params}`, 20000);
-if (r.status === 429) { const c = await getCached(key); return c && c.type === 'book' ? c.book : null; }
+if (r.status === 429) {
+const c = await getCached(key);
+return c && c.type === 'book' ? { merged: c.book, fields: c.fields || [], url, source: detectSource(url) } : null;
+}
 if (!r.ok) return null;
 const json = await r.json();
 if (json.status !== 'success' || !json.data) return null;
 _dailyCount++;
+
 const html = json.data.html || '';
-const book = parseBookHtml(html, json.data, url);
+const { book, fields } = parseBookHtmlFull(html, json.data, url);
+
 if (book && book.title && !looksBlocked(html, book.title)) {
-await putCached(key, { type: 'book', book, cachedAt: Date.now() });
-return book;
+await putCached(key, { type: 'book', book, fields, cachedAt: Date.now() });
+return { merged: book, fields, url, source: detectSource(url) };
 }
 return null;
 } catch (e) {
-console.warn('[Microlink] extractBook:', e.message);
+console.warn('[Microlink] extractBookPreview:', e.message);
 return null;
 }
 }
-/**
-* Единая точка запроса к Microlink: выбирает эндпоинт
-* (free/pro) и добавляет x-api-key при наличии ключа.
-*/
-async function microlinkFetch(path, timeout) {
-return fetchT(`${baseUrl()}${path}`, timeout, { headers: authHeaders() });
-}
-// ─── Парсер HTML ───
-function parseBookHtml(html, mlData, url) {
+
+// ═══════════════════════════════════════════════
+//  4. ПАРСЕР HTML (полный: merged + fields)
+// ═══════════════════════════════════════════════
+function parseBookHtmlFull(html, mlData, url) {
 const doc = new DOMParser().parseFromString(html, 'text/html');
-const jsonLd = mapJsonLd(findJsonLdBook(doc));
+
+const jsonLdNode = findJsonLdBook(doc);
+const jsonLd = mapJsonLd(jsonLdNode);
 const og = extractOpenGraph(doc);
 const micro = extractMicrodata(doc);
-return mergeBookData(jsonLd, og, micro, mlData, url);
+
+const merged = mergeBookData(jsonLd, og, micro, mlData, url);
+
+// Собираем ВСЕ найденные поля для предпросмотра
+const fields = [
+...collectJsonLdFields(jsonLdNode),
+...collectOpenGraphFields(doc),
+...collectMicrodataFields(doc),
+...collectMicrolinkFields(mlData),
+];
+
+// Нумеруем для стабильных ключей в UI
+fields.forEach((f, i) => { f.id = `f${i}`; });
+
+return { book: merged, fields };
 }
-// ─── 2.1 JSON-LD (schema.org) — самый надёжный ───
+
+// ─── 4.1 JSON-LD ───
 function findJsonLdBook(doc) {
 const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
 for (const s of scripts) {
@@ -191,14 +218,115 @@ const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']];
 if (types.some(t => ['Book','Product','CreativeWork','Audiobook'].includes(t))) return node;
 return null;
 }
+
+/** Маппинг известных полей JSON-LD → целевые поля книги */
+const JSONLD_FIELD_MAP = {
+name:            { label: 'Название',        target: 'title' },
+alternateName:   { label: 'Альтерн. название', target: null },
+author:          { label: 'Автор',           target: 'author' },
+illustrator:     { label: 'Иллюстратор',      target: null },
+translator:      { label: 'Переводчик',       target: null },
+editor:          { label: 'Редактор',         target: null },
+publisher:       { label: 'Издательство',     target: 'publisher' },
+datePublished:   { label: 'Дата публикации',  target: 'publishedDate' },
+dateCreated:     { label: 'Дата создания',    target: null },
+isbn:            { label: 'ISBN',            target: 'isbn' },
+sku:             { label: 'Артикул (SKU)',    target: 'isbn' },
+gtin:            { label: 'GTIN',            target: null },
+numberOfPages:   { label: 'Кол-во страниц',   target: 'pageCount' },
+genre:           { label: 'Жанр',            target: 'genre' },
+about:           { label: 'Тема',            target: 'genre' },
+keywords:        { label: 'Ключевые слова',   target: null },
+description:     { label: 'Описание',        target: 'description' },
+image:           { label: 'Изображение',      target: 'cover' },
+url:             { label: 'URL',             target: null },
+bookFormat:      { label: 'Формат книги',     target: null },
+bookEdition:     { label: 'Издание',         target: null },
+inLanguage:      { label: 'Язык',            target: null },
+typicalAgeRange: { label: 'Возраст',         target: 'ageRating' },
+contentRating:   { label: 'Возрастной рейтинг', target: 'ageRating' },
+award:           { label: 'Награды',         target: null },
+};
+
+/** Собирает ВСЕ поля JSON-LD узла для предпросмотра */
+function collectJsonLdFields(node) {
+const fields = [];
+if (!node) return fields;
+
+const SKIP = new Set(['@context','@type','@id','potentialAction','sameAs','workExample','mainEntityOfPage']);
+
+const push = (key, value, target) => {
+if (value === undefined || value === null || value === '') return;
+const s = String(value).trim();
+if (!s) return;
+const meta = JSONLD_FIELD_MAP[key] || { label: key, target: null };
+fields.push({
+source: 'json-ld',
+key,
+label: meta.label,
+value: s.length > 500 ? s.slice(0, 500) + '…' : s,
+target: target !== undefined ? target : meta.target,
+});
+};
+
+for (const [key, raw] of Object.entries(node)) {
+if (SKIP.has(key)) continue;
+
+// Специальная обработка составных объектов
+if (key === 'offers') {
+const offer = Array.isArray(raw) ? raw[0] : raw;
+if (offer) {
+if (offer.price) push('price', `${offer.price} ${offer.priceCurrency || ''}`, 'price');
+if (offer.availability) push('availability', offer.availability.split('/').pop(), null);
+}
+continue;
+}
+if (key === 'aggregateRating') {
+if (raw?.ratingValue) push('rating', raw.ratingValue, 'rating');
+if (raw?.reviewCount) push('reviewCount', raw.reviewCount, null);
+continue;
+}
+if (key === 'isPartOf') {
+const part = Array.isArray(raw) ? raw[0] : raw;
+if (part?.name) push('series', part.name + (part.position ? ` #${part.position}` : ''), 'series');
+continue;
+}
+if (key === 'author' || key === 'publisher' || key === 'editor' ||
+key === 'illustrator' || key === 'translator' || key === 'contributor') {
+push(key, personName(raw));
+continue;
+}
+if (key === 'image') {
+push(key, imageUrl(raw));
+continue;
+}
+if (key === 'genre' || key === 'about' || key === 'keywords') {
+push(key, firstOf(raw));
+continue;
+}
+
+// Примитивы и простые массивы
+const v = readableValue(raw);
+if (v) push(key, v);
+}
+return fields;
+}
+
+/** Читает значение произвольного JSON-LD поля в строку */
+function readableValue(raw) {
+if (raw === undefined || raw === null) return '';
+if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+if (Array.isArray(raw)) return readableValue(raw[0]);
+if (typeof raw === 'object') {
+if (raw.name) return String(raw.name);
+if (raw['@value']) return String(raw['@value']);
+return '';
+}
+return '';
+}
+
 function mapJsonLd(node) {
 if (!node) return {};
-const personName = (p) => {
-if (!p) return '';
-if (typeof p === 'string') return p;
-if (Array.isArray(p)) return p.map(personName).filter(Boolean).join(', ');
-return p.name || '';
-};
 let price = null;
 const offer = node.offers ? (Array.isArray(node.offers) ? node.offers[0] : node.offers) : null;
 if (offer && offer.price) {
@@ -225,14 +353,41 @@ ageRating: node.typicalAgeRange || node.contentRating || '',
 rating: node.aggregateRating?.ratingValue ? parseFloat(node.aggregateRating.ratingValue) : 0,
 };
 }
-// ─── 2.2 Open Graph ───
+
+// ─── 4.2 Open Graph ───
+const OG_FIELD_MAP = {
+'og:title':               { label: 'Заголовок (OG)',     target: 'title' },
+'og:description':         { label: 'Описание (OG)',      target: 'description' },
+'og:image':               { label: 'Изображение (OG)',   target: 'cover' },
+'og:site_name':           { label: 'Сайт',              target: null },
+'og:type':                { label: 'Тип (OG)',          target: null },
+'og:url':                 { label: 'URL (OG)',          target: null },
+'og:locale':              { label: 'Локаль',            target: null },
+'book:author':            { label: 'Автор (book)',      target: 'author' },
+'og:book:author':         { label: 'Автор (OG book)',   target: 'author' },
+'article:author':         { label: 'Автор (article)',   target: 'author' },
+'book:isbn':              { label: 'ISBN (book)',       target: 'isbn' },
+'books:isbn':             { label: 'ISBN (books)',      target: 'isbn' },
+'book:tag':               { label: 'Тег (book)',        target: 'genre' },
+'article:tag':            { label: 'Тег (article)',     target: 'genre' },
+'book:release_date':      { label: 'Дата выхода (book)', target: 'publishedDate' },
+'product:release_date':   { label: 'Дата выхода',       target: 'publishedDate' },
+'product:price:amount':   { label: 'Цена',              target: 'price' },
+'og:price:amount':        { label: 'Цена (OG)',         target: 'price' },
+'product:price:currency': { label: 'Валюта',            target: null },
+'twitter:title':          { label: 'Заголовок (Twitter)', target: 'title' },
+'twitter:description':    { label: 'Описание (Twitter)',  target: 'description' },
+'twitter:image':          { label: 'Изображение (Twitter)', target: 'cover' },
+'description':            { label: 'Описание (meta)',    target: 'description' },
+'keywords':               { label: 'Ключевые слова (meta)', target: null },
+};
+
 function extractOpenGraph(doc) {
 const og = (prop) =>
 doc.querySelector(`meta[property="${prop}"]`)?.content ||
 doc.querySelector(`meta[name="${prop}"]`)?.content || '';
 let title = og('og:title');
 let author = og('book:author') || og('og:book:author') || og('article:author') || '';
-// Паттерн ЛитРес: «Название — Автор — купить...»
 if (title.includes(' — ') && !author) {
 const parts = title.split(' — ');
 title = parts[0].trim();
@@ -254,7 +409,31 @@ price,
 siteName: og('og:site_name'),
 };
 }
-// ─── 2.3 Microdata (itemprop) ───
+
+/** Собирает ВСЕ meta-теги (OG + book + twitter + обычные) для предпросмотра */
+function collectOpenGraphFields(doc) {
+const fields = [];
+const seen = new Set();
+const metas = doc.querySelectorAll('meta[property], meta[name]');
+for (const m of metas) {
+const prop = m.getAttribute('property') || m.getAttribute('name');
+const content = (m.getAttribute('content') || '').trim();
+if (!prop || !content) continue;
+if (seen.has(prop)) continue;
+seen.add(prop);
+const meta = OG_FIELD_MAP[prop] || { label: prop, target: null };
+fields.push({
+source: 'open-graph',
+key: prop,
+label: meta.label,
+value: content.length > 500 ? content.slice(0, 500) + '…' : content,
+target: meta.target,
+});
+}
+return fields;
+}
+
+// ─── 4.3 Microdata (itemprop) ───
 function extractMicrodata(doc) {
 const get = (sel) => doc.querySelector(sel)?.textContent?.trim() || '';
 return {
@@ -267,7 +446,48 @@ isbn: cleanIsbn(get('[itemprop="isbn"]')),
 description: stripTags(get('[itemprop="description"]')),
 };
 }
-// ─── 2.4 Слияние с приоритетом ───
+
+/** Собирает ВСЕ itemprop-элементы для предпросмотра */
+function collectMicrodataFields(doc) {
+const fields = [];
+const seen = new Set();
+const items = doc.querySelectorAll('[itemprop]');
+for (const el of items) {
+const prop = el.getAttribute('itemprop');
+if (!prop || seen.has(prop)) continue;
+seen.add(prop);
+const content = (el.textContent || '').trim();
+if (!content) continue;
+const meta = JSONLD_FIELD_MAP[prop] || { label: prop, target: null };
+fields.push({
+source: 'microdata',
+key: prop,
+label: meta.label + ' (itemprop)',
+value: content.length > 500 ? content.slice(0, 500) + '…' : content,
+target: meta.target,
+});
+}
+return fields;
+}
+
+// ─── 4.4 Дефолты Microlink ───
+function collectMicrolinkFields(mlData) {
+const fields = [];
+const push = (key, label, value, target) => {
+if (!value) return;
+fields.push({ source: 'microlink', key, label, value: String(value), target });
+};
+if (mlData?.title) push('title', 'Заголовок (Microlink)', mlData.title, 'title');
+if (mlData?.description) push('description', 'Описание (Microlink)', mlData.description, 'description');
+if (mlData?.image?.url) push('image', 'Изображение (Microlink)', mlData.image.url, 'cover');
+if (mlData?.author) push('author', 'Автор (Microlink)', mlData.author, 'author');
+if (mlData?.publisher) push('publisher', 'Издатель/сайт (Microlink)', mlData.publisher, null);
+if (mlData?.date) push('date', 'Дата (Microlink)', mlData.date, null);
+if (mlData?.lang) push('lang', 'Язык (Microlink)', mlData.lang, null);
+return fields;
+}
+
+// ─── 4.5 Слияние с приоритетом ───
 function mergeBookData(jsonLd, og, micro, mlData, url) {
 const pick = (...vals) => vals.find(v => v !== undefined && v !== null && v !== '' && v !== 0) || '';
 let title = pick(jsonLd.title, og.title, micro.title, mlData.title);
@@ -279,7 +499,6 @@ author = parts.slice(1).join(' — ').trim();
 }
 title = cleanStoreTitle(title);
 author = cleanStoreTitle(author);
-// publisher из OG — это часто сам магазин, а не издательство
 const publisher = pick(
 jsonLd.publisher,
 micro.publisher,
@@ -295,7 +514,6 @@ publisher,
 publishedDate: pick(jsonLd.publishedDate, og.publishedDate),
 pageCount: jsonLd.pageCount || micro.pageCount || 0,
 isbn: pick(jsonLd.isbn, og.isbn, micro.isbn),
-// формат, совместимый с fillFormFromResult (app.js)
 litresMinAge: normalizeAge(jsonLd.ageRating),
 litresSeries: jsonLd.series ? [jsonLd.series] : [],
 price: jsonLd.price || og.price || null,
@@ -304,6 +522,7 @@ source: 'microlink',
 litresUrl: url,
 };
 }
+
 // ─── Хелперы ───
 const BLOCK_MARKERS = ['captcha','cloudflare','access denied','just a moment','проверка браузера','robot check'];
 function looksBlocked(html, title) {
@@ -327,6 +546,12 @@ if (!s) return '';
 const m = String(s).match(/(\d+)/);
 return m ? m[1] : '';
 }
+function personName(p) {
+if (!p) return '';
+if (typeof p === 'string') return p;
+if (Array.isArray(p)) return p.map(personName).filter(Boolean).join(', ');
+return p.name || '';
+}
 function imageUrl(img) {
 if (!img) return '';
 if (typeof img === 'string') return img;
@@ -345,15 +570,10 @@ const div = document.createElement('div');
 div.innerHTML = s;
 return div.textContent || '';
 }
+
 // ═══════════════════════════════════════════════
-//  3. ПРОВЕРКА ДОСТУПНОСТИ (для Настроек)
+//  5. ПРОВЕРКА ДОСТУПНОСТИ (для Настроек)
 // ═══════════════════════════════════════════════
-/**
-* Проверяет работоспособность Microlink и возвращает остаток лимита.
-* Учитывает текущий тариф (free/pro по наличию ключа).
-* @param {string} [apiKey] — опционально переопределить ключ
-* @returns {Promise<{ok, remaining?, mode?, error?}>}
-*/
 export async function checkMicrolinkStatus(apiKey) {
 const prevKey = _apiKey;
 if (apiKey !== undefined) _apiKey = (apiKey || '').trim();
@@ -372,8 +592,9 @@ return { ok: false, error: e.message || 'Нет подключения', mode: h
 if (apiKey !== undefined) _apiKey = prevKey;
 }
 }
+
 // ═══════════════════════════════════════════════
-//  4. КЕШ (IndexedDB + память)
+//  6. КЕШ (IndexedDB + память)
 // ═══════════════════════════════════════════════
 async function getCached(key) {
 if (_memCache.has(key)) {
@@ -415,8 +636,9 @@ tx.oncomplete = () => resolve(); tx.onerror = () => resolve();
 });
 } catch { /* ignore */ }
 }
+
 // ═══════════════════════════════════════════════
-//  5. УТИЛИТЫ
+//  7. УТИЛИТЫ
 // ═══════════════════════════════════════════════
 function fetchT(url, ms, opts = {}) {
 const ctrl = new AbortController();
