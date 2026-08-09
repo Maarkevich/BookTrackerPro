@@ -30,7 +30,7 @@
 // ═══════════════════════════════════════════════
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
-const CACHE_NAME = 'btp-v3.7.0';
+const CACHE_NAME = 'btp-v3.7.1';
 
 // Базовый путь (GitHub Pages: /BookTrackerPro; свой домен: '')
 const BASE = '/BookTrackerPro';
