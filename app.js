@@ -127,7 +127,8 @@ function cacheDom() {
 'search-toggle','search-bar','search-input','search-close',
 'search-scopes','search-book-tags','search-results',
 'add-btn','scan-btn',
-'form-overlay','form-title','form-close','form-back','form-body',
+'form-overlay','form-title','form-back','form-close','form-body',
+'detail-overlay','detail-title','detail-back','detail-close','detail-body',
 'detail-overlay','detail-title','detail-close','detail-back','detail-body',
 'scanner-overlay','scanner-video','scanner-status','scanner-close',
 'scanner-manual-input','scanner-manual-btn',
@@ -173,9 +174,11 @@ registerSW();
 setupOnlineIndicator(showToast);
 setupInstallPrompt();
 updateOfflineIndicator();
+injectNavIcons();
 renderDrawer();
 renderTab('books');
 document.addEventListener('data-changed', refreshData);
+handleManifestShortcuts();
 }
 
 async function refreshData() {
@@ -246,9 +249,9 @@ DOM.scanBtn.addEventListener('click', () => openScanner());
 
 // Закрытие оверлеев
 DOM.formClose.addEventListener('click', () => closeOverlay(DOM.formOverlay));
-DOM.formBack.addEventListener('click', () => closeOverlay(DOM.formOverlay));
+DOM.formBack?.addEventListener('click', () => closeOverlay(DOM.formOverlay));
 DOM.detailClose.addEventListener('click', () => closeOverlay(DOM.detailOverlay));
-DOM.detailBack.addEventListener('click', () => closeOverlay(DOM.detailOverlay));
+DOM.detailBack?.addEventListener('click', () => closeOverlay(DOM.detailOverlay));
 DOM.scannerClose.addEventListener('click', () => closeScanner());
 DOM.contentFormClose.addEventListener('click', () => closeOverlay(DOM.contentOverlay));
 DOM.reviewFormClose.addEventListener('click', () => closeOverlay(DOM.reviewOverlay));
@@ -583,6 +586,54 @@ books: '📚 Мои книги', content: '🎬 Контент-план', review
 calendar: '📅 Календарь', challenges: '🏆 Челленджи', stats: '📊 Статистика',
 settings: '⚙️ Настройки', series: '📚 Серии', collections: '📂 Подборки',
 };
+
+const TAB_ICONS = {
+books: 'library', content: 'film', reviews: 'pen', calendar: 'calendar',
+challenges: 'trophy', stats: 'chart', settings: 'gear', series: 'layers', collections: 'folder',
+};
+// Осмысленная шкала размеров: ключевые разделы крупнее, служебные мельче
+const NAV_ICON_SIZES = {
+books: 22, content: 22,           // ключевые
+reviews: 20, calendar: 20, challenges: 20, stats: 20,  // основные
+settings: 18,                      // служебные
+series: 20, collections: 20,
+};
+function injectNavIcons() {
+$$('.nav-item[data-tab]').forEach(btn => {
+const ic = btn.querySelector('.nav-icon');
+const name = TAB_ICONS[btn.dataset.tab];
+const size = NAV_ICON_SIZES[btn.dataset.tab] || 20;
+if (ic && name) ic.innerHTML = icon(name, size);
+});
+// drawer logo на SVG
+const logo = $('.drawer-logo');
+if (logo) logo.innerHTML = icon('bookOpen', 26);
+// Иконки кнопок топбара
+DOM.searchToggle.innerHTML = icon('search', 20);
+DOM.scanBtn.innerHTML = icon('camera', 20);
+DOM.addBtn.innerHTML = icon('plus', 22);
+DOM.menuBtn.innerHTML = icon('menu', 20);
+DOM.drawerClose.innerHTML = icon('close', 18);
+// Заголовки секций drawer
+if (DOM.drawerTitleCollections) DOM.drawerTitleCollections.innerHTML = icon('folder', 13) + ' Подборки';
+if (DOM.drawerTitleSeries) DOM.drawerTitleSeries.innerHTML = icon('layers', 13) + ' Серии';
+if (DOM.drawerTitleFilters) DOM.drawerTitleFilters.innerHTML = icon('filter', 13) + ' Фильтры';
+}
+// 🆕 v3.6.0: обработка shortcuts манифеста (?action=add, ?tab=...)
+function handleManifestShortcuts() {
+const params = new URLSearchParams(location.search);
+const action = params.get('action');
+const tab = params.get('tab');
+if (action === 'add') {
+setTimeout(() => openBookForm(), 300);
+} else if (action === 'scan') {
+setTimeout(() => openScanner(), 300);
+} else if (tab && ['books','content','reviews','calendar','challenges','stats','settings','series','collections'].includes(tab)) {
+renderTab(tab);
+}
+// Чистим URL
+if (action || tab) history.replaceState({}, '', location.pathname);
+}
 
 function renderTab(tab) {
 S.currentTab = tab;
