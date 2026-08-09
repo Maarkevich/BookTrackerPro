@@ -770,4 +770,59 @@ export async function getDBSize() {
   if (!navigator.storage?.estimate) return 'N/A';
   const est = await navigator.storage.estimate();
   return `${((est.usage || 0) / (1024 * 1024)).toFixed(1)} МБ`;
+  // ═══════════════════════════════════════════════
+//  12. ВАЛИДАЦИЯ И ВОССТАНОВЛЕНИЕ ОБЛОЖЕК (v3.7.0)
+// ═══════════════════════════════════════════════
+/**
+ * Проверяет, что blob — валидное изображение (JPEG/PNG).
+ * Используется при сохранении обложек, чтобы не записать
+ * HTML-заглушку или битый файл вместо картинки.
+ *
+ * @param {Blob} blob
+ * @returns {boolean}
+ */
+export function isValidCoverBlob(blob) {
+  if (!blob || typeof blob !== 'object') return false;
+  if (blob.size < 200) return false;
+  const type = (blob.type || '').toLowerCase();
+  return type.startsWith('image/jpeg') ||
+         type.startsWith('image/png') ||
+         type.startsWith('image/webp');
+}
+
+/**
+ * Проходит по всем обложкам в БД и удаляет битые.
+ * Вызывается при старте приложения — лечит старые данные,
+ * где вместо JPEG могла сохраниться HTML-заглушка или
+ * пустой blob.
+ *
+ * @returns {Promise<number>} — количество удалённых битых обложек
+ */
+export async function repairCovers() {
+  const db = await openDB();
+  if (!db.objectStoreNames.contains('covers')) return 0;
+
+  const covers = await new Promise((resolve) => {
+    const req = db.transaction('covers', 'readonly').objectStore('covers').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+
+  let removed = 0;
+  for (const cover of covers) {
+    const blob = cover.blob;
+    if (!isValidCoverBlob(blob)) {
+      try {
+        await new Promise((resolve) => {
+          const tx = db.transaction('covers', 'readwrite');
+          tx.objectStore('covers').delete(cover.bookId);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        });
+        removed++;
+      } catch { /* ignore */ }
+    }
+  }
+  return removed;
+}
 }
