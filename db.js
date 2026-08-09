@@ -1,32 +1,30 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.7.0 | 2026-08-04
+// 🔖 v3.7.1-fix | 2026-08-09
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
-//    Версия БД: 5 (схема не меняется в 3.7.0)
+//    Версия БД: 5 (схема не меняется)
 //    Stores: books, covers, settings,
 //            collections, challenges, tags, previews
 //
-//    Новое в 3.7.0:
-//      — ensureContentItemFields(): дефолты для reportSent /
-//        reportDate при загрузке книг (отчётность издательству)
-//      — Подтверждена совместимость со всеми полями v3.6.0:
-//        receivedDate, jointReading, price, series, ageRating,
-//        source, readingDays, dateStarted, dateFinished
-//      — Схема БД не менялась → DB_VER остаётся 5,
-//        миграция данных не требуется
-//
-//    Сохранено из 3.6.0:
-//      — Store 'previews' для кеша Microlink
-//      — Поле order у подборок + moveCollection()
-//      — loadCollections() сортирует по order
+//    Функции:
+//      — CRUD книг с миграцией старых записей
+//      — Обложки (Blob) + валидация + ремонт
+//      — Подборки с полем order
+//      — Челленджи с заметками
+//      — Теги
+//      — Контент и отзывы (вложенные в книгу)
+//      — Экспорт/импорт (JSON)
+//      — Отчётность (reportSent / reportDate) v3.7.0
+//      — isValidCoverBlob / repairCovers v3.5.0+
 // ─────────────────────────────────────────────
+
 const DB_NAME = 'book-tracker-pro';
 const DB_VER = 5;
 let _db = null;
 
 // ═══════════════════════════════════════════════
-//  СТАТУСЫ КНИГ (7 штук)
+//  СТАТУСЫ КНИГ
 // ═══════════════════════════════════════════════
 export const BOOK_STATUSES = {
   wishlist: { icon: '🌟', label: 'Wishlist',      order: 0 },
@@ -37,7 +35,6 @@ export const BOOK_STATUSES = {
   dropped:  { icon: '❌', label: 'Брошено',       order: 5 },
 };
 
-// Валюты
 export const CURRENCIES = {
   RUB: { symbol: '₽', name: 'Рубли' },
   USD: { symbol: '$', name: 'Доллары' },
@@ -128,12 +125,11 @@ export async function loadBooks() {
         try {
           const blob = await getCover(book.id);
           if (blob) book.coverUrl = URL.createObjectURL(blob);
-          else if (book.cover?.startsWith('http')) book.coverUrl = book.cover;
+          else if (book.cover && book.cover.startsWith('http')) book.coverUrl = book.cover;
         } catch {
-          if (book.cover?.startsWith('http')) book.coverUrl = book.cover;
+          if (book.cover && book.cover.startsWith('http')) book.coverUrl = book.cover;
         }
         ensureBookFields(book);
-        // 🆕 v3.7.0: дефолты отчётности для каждого контент-элемента
         (book.contentItems || []).forEach(ensureContentItemFields);
       }
       resolve(books);
@@ -199,10 +195,6 @@ export async function putBooks(books) {
   });
 }
 
-/**
- * Обновление статуса книги с автоматическими датами.
- * Возвращает { confetti, askRating } для UI.
- */
 export async function changeBookStatus(bookId, newStatus) {
   const book = await getBook(bookId);
   if (!book) return null;
@@ -224,7 +216,7 @@ export async function changeBookStatus(bookId, newStatus) {
   }
   book.status = newStatus;
   await putBook(book);
-  return { book, confetti, askRating };
+  return { book: book, confetti: confetti, askRating: askRating };
 }
 
 // ═══════════════════════════════════════════════
@@ -234,7 +226,7 @@ export async function saveCover(bookId, blob) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('covers', 'readwrite');
-    tx.objectStore('covers').put({ bookId, blob, savedAt: Date.now() });
+    tx.objectStore('covers').put({ bookId: bookId, blob: blob, savedAt: Date.now() });
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -256,7 +248,7 @@ export async function getCover(bookId) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('covers', 'readonly');
     const req = tx.objectStore('covers').get(bookId);
-    req.onsuccess = () => resolve(req.result?.blob || null);
+    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
     req.onerror = () => reject(req.error);
   });
 }
@@ -279,7 +271,7 @@ export async function loadSettings() {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('settings', 'readonly');
     const req = tx.objectStore('settings').get('app');
-    req.onsuccess = () => resolve(req.result?.data || null);
+    req.onsuccess = () => resolve(req.result ? req.result.data : null);
     req.onerror = () => reject(req.error);
   });
 }
@@ -357,9 +349,6 @@ export async function delCollection(id) {
   });
 }
 
-/**
- * Переместить подборку вверх/вниз в списке.
- */
 export async function moveCollection(id, direction) {
   const collections = await loadCollections();
   const idx = collections.findIndex(c => c.id === id);
@@ -380,9 +369,6 @@ export async function moveCollection(id, direction) {
   return true;
 }
 
-/**
- * Следующий order для новой подборки (максимум + 1).
- */
 export async function getNextCollectionOrder() {
   const collections = await loadCollections();
   if (collections.length === 0) return 0;
@@ -644,7 +630,50 @@ export async function removeReviewFromBook(bookId) {
 }
 
 // ═══════════════════════════════════════════════
-//  10. ЭКСПОРТ / ИМПОРТ
+//  10. ВАЛИДАЦИЯ ОБЛОЖЕК (v3.5.0+)
+// ═══════════════════════════════════════════════
+export function isValidCoverBlob(blob) {
+  if (!blob || typeof blob !== 'object') return false;
+  if (blob.size < 200) return false;
+  const type = (blob.type || '').toLowerCase();
+  return type.startsWith('image/jpeg') ||
+         type.startsWith('image/png') ||
+         type.startsWith('image/webp');
+}
+
+// ═══════════════════════════════════════════════
+//  11. РЕМОНТ БИТЫХ ОБЛОЖЕК (v3.5.0+)
+// ═══════════════════════════════════════════════
+export async function repairCovers() {
+  const db = await openDB();
+  if (!db.objectStoreNames.contains('covers')) return 0;
+
+  const covers = await new Promise((resolve) => {
+    const req = db.transaction('covers', 'readonly').objectStore('covers').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+
+  let removed = 0;
+  for (const cover of covers) {
+    const blob = cover.blob;
+    if (!isValidCoverBlob(blob)) {
+      try {
+        await new Promise((resolve) => {
+          const tx = db.transaction('covers', 'readwrite');
+          tx.objectStore('covers').delete(cover.bookId);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        });
+        removed++;
+      } catch { /* ignore */ }
+    }
+  }
+  return removed;
+}
+
+// ═══════════════════════════════════════════════
+//  12. ЭКСПОРТ / ИМПОРТ
 // ═══════════════════════════════════════════════
 export async function exportAll() {
   const db = await openDB();
@@ -666,7 +695,7 @@ export async function exportAll() {
   const settings = await loadSettings();
   const coversB64 = [];
   for (const c of covers) {
-    if (c.blob) {
+    if (isValidCoverBlob(c.blob)) {
       const b64 = await blobToBase64(c.blob);
       coversB64.push({ bookId: c.bookId, data: b64, savedAt: c.savedAt });
     }
@@ -674,7 +703,12 @@ export async function exportAll() {
   return {
     version: DB_VER,
     exportDate: new Date().toISOString(),
-    books, covers: coversB64, collections, challenges, tags, settings
+    books: books,
+    covers: coversB64,
+    collections: collections,
+    challenges: challenges,
+    tags: tags,
+    settings: settings
   };
 }
 
@@ -695,12 +729,8 @@ export async function importAll(data) {
 }
 
 // ═══════════════════════════════════════════════
-//  11. СЛУЖЕБНОЕ
+//  13. СЛУЖЕБНОЕ
 // ═══════════════════════════════════════════════
-/**
- * Гарантирует наличие всех полей книги (v3.7.0).
- * Мигрирует старые записи.
- */
 function ensureBookFields(book) {
   if (!book.contentItems) book.contentItems = [];
   if (!book.review) book.review = {};
@@ -730,16 +760,11 @@ function ensureBookFields(book) {
   }
 }
 
-/**
- * 🆕 v3.7.0: дефолты для контент-элемента.
- * Добавляет поля отчётности издательству (reportSent / reportDate),
- * если их ещё нет (старые записи из v3.6.0 и ранее).
- */
 function ensureContentItemFields(item) {
   if (!item) return;
   if (item.reportSent === undefined) item.reportSent = false;
   if (!item.reportDate) item.reportDate = '';
-  if (!item.id) item.id = `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (!item.id) item.id = 'content_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   if (!item.type) item.type = 'review';
   if (!item.status) item.status = 'idea';
   if (!item.platform) item.platform = 'youtube';
@@ -757,8 +782,11 @@ function blobToBase64(blob) {
 
 function base64ToBlob(dataUrl) {
   try {
-    const [header, data] = dataUrl.split(',');
-    const mime = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
+    const parts = dataUrl.split(',');
+    const header = parts[0];
+    const data = parts[1];
+    const mimeMatch = header.match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
     const binary = atob(data);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -767,62 +795,7 @@ function base64ToBlob(dataUrl) {
 }
 
 export async function getDBSize() {
-  if (!navigator.storage?.estimate) return 'N/A';
+  if (!navigator.storage || !navigator.storage.estimate) return 'N/A';
   const est = await navigator.storage.estimate();
-  return `${((est.usage || 0) / (1024 * 1024)).toFixed(1)} МБ`;
-  // ═══════════════════════════════════════════════
-//  12. ВАЛИДАЦИЯ И ВОССТАНОВЛЕНИЕ ОБЛОЖЕК (v3.7.0)
-// ═══════════════════════════════════════════════
-/**
- * Проверяет, что blob — валидное изображение (JPEG/PNG).
- * Используется при сохранении обложек, чтобы не записать
- * HTML-заглушку или битый файл вместо картинки.
- *
- * @param {Blob} blob
- * @returns {boolean}
- */
-export function isValidCoverBlob(blob) {
-  if (!blob || typeof blob !== 'object') return false;
-  if (blob.size < 200) return false;
-  const type = (blob.type || '').toLowerCase();
-  return type.startsWith('image/jpeg') ||
-         type.startsWith('image/png') ||
-         type.startsWith('image/webp');
-}
-
-/**
- * Проходит по всем обложкам в БД и удаляет битые.
- * Вызывается при старте приложения — лечит старые данные,
- * где вместо JPEG могла сохраниться HTML-заглушка или
- * пустой blob.
- *
- * @returns {Promise<number>} — количество удалённых битых обложек
- */
-export async function repairCovers() {
-  const db = await openDB();
-  if (!db.objectStoreNames.contains('covers')) return 0;
-
-  const covers = await new Promise((resolve) => {
-    const req = db.transaction('covers', 'readonly').objectStore('covers').getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
-  });
-
-  let removed = 0;
-  for (const cover of covers) {
-    const blob = cover.blob;
-    if (!isValidCoverBlob(blob)) {
-      try {
-        await new Promise((resolve) => {
-          const tx = db.transaction('covers', 'readwrite');
-          tx.objectStore('covers').delete(cover.bookId);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        });
-        removed++;
-      } catch { /* ignore */ }
-    }
-  }
-  return removed;
-}
+  return ((est.usage || 0) / (1024 * 1024)).toFixed(1) + ' МБ';
 }
