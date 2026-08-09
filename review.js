@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — review.js
-// 🔖 v3.7.0 | 2026-08-09
+// 🔖 v3.7.0-fix | 2026-08-09
 // 📝 Отзывы бук-блогера
 //
 //    Структура отзыва:
@@ -448,7 +448,6 @@ return hints[n] || hints[0];
 }
 
 // ═══════════════════════════════════════════════
-// ═══════════════════════════════════════════════
 //  6. КОПИРОВАНИЕ ОТЗЫВА
 // ═══════════════════════════════════════════════
 export function copyReviewToClipboard(book) {
@@ -480,8 +479,8 @@ if (r.recommendation) lines.push('🎯 Рекомендация: ' + r.recommend
 if (r.targetAudience) lines.push('👥 Для: ' + r.targetAudience);
 if (r.spoilerFree !== false) lines.push('🔞 Без спойлеров');
 
-const text = lines.join('
-');
+// ИСПРАВЛЕНО: \n записано двумя символами, без реального переноса
+const text = lines.join('\n');
 
 navigator.clipboard?.writeText(text).then(() => {
 showToast('📋 Отзыв скопирован! Вставьте в описание видео', 'success');
