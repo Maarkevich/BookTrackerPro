@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — review.js
-// 🔖 v3.6.0 | 2026-08-04
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 Отзывы бук-блогера
 //
 //    Структура отзыва:
@@ -10,18 +10,13 @@
 //      💬 Цитаты (страница + «использована»)
 //      🎯 Рекомендация · 👥 Для кого · 🔞 Без спойлеров
 //
-//    Новое в 3.6.0:
-//      — Фильтр по звёздам: точные значения 5, 4, 3, 2, 1
-//        (вместо «4+», «3+», «≤ 2» из v3.5.0)
+//    Новое в 3.7.0:
+//      — Сохранено из 3.6.0: точный фильтр по звёздам (5,4,3,2,1)
 //      — Кастомный селект рекомендации (uikit.js)
 //      — SVG-иконки из icons.js в хроме
 //      — Живой рейтинг с предпросмотром при наведении
-//      — Цитата по фото (OCR, полный оффлайн)
+//      — Кнопка «📷 Цитата по фото» (OCR, полный оффлайн)
 //      — Копирование отзыва для описания видео
-//
-//    ВАЖНО (фикс бага «Invalid or unexpected token»):
-//      в copyReviewToClipboard переносы внутри строки
-//      записаны как '\n' в ОДНУ строку, НЕ как живой Enter.
 // ─────────────────────────────────────────────
 import { saveReviewForBook, removeReviewFromBook, loadBooks } from './db.js';
 import { esc, showToast } from './app.js';
@@ -40,7 +35,7 @@ const withReviews = books
 if (!container._reviewFilter) container._reviewFilter = 'all';
 const filter = container._reviewFilter;
 
-// 🆕 v3.6.0: точные значения рейтинга (5, 4, 3, 2, 1)
+// Точные значения рейтинга: 5, 4, 3, 2, 1
 const filters = [
 { id: 'all', label: `Все (${withReviews.length})` },
 { id: 'rated5', label: '⭐ 5' },
@@ -121,7 +116,7 @@ return `
 <div class="review-card" data-book-id="${book.id}">
 <div class="review-header">
 ${book.coverUrl
-? `<img class="review-cover" src="${book.coverUrl}" alt="" loading="lazy"/>`
+? `<img class="review-cover" src="${book.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
 : `<div class="review-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
 <div style="flex:1;min-width:0">
 <div class="review-title">${esc(book.title)}</div>
@@ -174,7 +169,7 @@ body.innerHTML = `
 <!-- Книга -->
 <div class="flex gap-8 items-center mb-16">
 ${book.coverUrl
-? `<img src="${book.coverUrl}" style="width:48px;height:72px;border-radius:6px;object-fit:cover;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>`
+? `<img src="${book.coverUrl}" referrerpolicy="no-referrer" style="width:48px;height:72px;border-radius:6px;object-fit:cover;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>`
 : `<div style="width:48px;height:72px;border-radius:6px;background:var(--bg-input);display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
 <div>
 <div style="font-weight:700;font-size:.95rem">${esc(book.title)}</div>
@@ -315,7 +310,7 @@ rerenderQuotes();
 quotesList.querySelectorAll('[data-quote-copy]').forEach(btn => {
 btn.addEventListener('click', () => {
 const q = currentQuotes[parseInt(btn.dataset.quoteCopy)];
-const text = '«' + q.text + '»' + (q.page ? ' (с. ' + q.page + ')' : '') + ' — ' + book.title + ', ' + book.author;
+const text = `«${q.text}»${q.page ? ` (с. ${q.page})` : ''} — ${book.title}, ${book.author}`;
 navigator.clipboard?.writeText(text).then(() => showToast('📋 Цитата скопирована', 'success'));
 });
 });
@@ -355,7 +350,7 @@ body.querySelector('#rf-spoiler').addEventListener('click', function() {
 this.classList.toggle('active');
 });
 
-// 🆕 v3.6.0: кастомный селект рекомендации
+// Кастомный селект рекомендации
 attachCustomSelect(body.querySelector('#rf-recommendation'), {});
 
 // ── Сохранение ──
@@ -454,7 +449,8 @@ return hints[n] || hints[0];
 
 // ═══════════════════════════════════════════════
 //  6. КОПИРОВАНИЕ ОТЗЫВА
-//  ⚠️  Переносы — это '\n' в ОДНУ строку (backslash + n),
+//  ⚠️  Переносы — это '
+' в ОДНУ строку (backslash + n),
 //      НЕ живой Enter внутри кавычек. Иначе SyntaxError.
 // ═══════════════════════════════════════════════
 export function copyReviewToClipboard(book) {
@@ -486,7 +482,8 @@ if (r.recommendation) lines.push('🎯 Рекомендация: ' + r.recommend
 if (r.targetAudience) lines.push('👥 Для: ' + r.targetAudience);
 if (r.spoilerFree !== false) lines.push('🔞 Без спойлеров');
 
-const text = lines.join('\n');
+const text = lines.join('
+');
 
 navigator.clipboard?.writeText(text).then(() => {
 showToast('📋 Отзыв скопирован! Вставьте в описание видео', 'success');

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — series.js
-// 🔖 v3.5.0 | 2026-08-01
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 Серии книг
 //
 //    Серия — поля в книге: series, seriesNumber, seriesTotal
@@ -13,10 +13,14 @@
 //      — Автодополнение названия серии в форме
 //      — Прогресс серии (прочитано X из Y)
 //
-//    Новое в 3.5.0:
+//    Новое в 3.7.0:
+//      — Сохранены SVG-иконки из icons.js (v3.5.0)
+//      — Эмодзи серий (guessSeriesEmoji) — контентная фича
+//      — Обложки: referrerpolicy no-referrer + onerror-фолбэк
+//
+//    Сохранено из 3.5.0:
 //      — UI-иконки из icons.js (SVG вместо эмодзи в хроме)
-//      — Эмодзи серий (guessSeriesEmoji) сохранены как
-//        контентная фича, подбираемая по названию/жанру
+//      — Эмодзи серий подбираются по названию/жанру
 // ─────────────────────────────────────────────
 import { esc } from './app.js';
 import { BOOK_STATUSES } from './db.js';
@@ -70,7 +74,7 @@ return series;
 }
 /**
 * Пытается подобрать эмодзи для серии по названию/жанру.
-* (Контентная фича — сохранена в v3.5.0)
+* (Контентная фича — сохранена в v3.5.0+)
 */
 function guessSeriesEmoji(name, books) {
 const lower = name.toLowerCase();
@@ -266,13 +270,16 @@ return `
 const b = slot.book;
 const st = BOOK_STATUSES[b.status] || { icon: '📕', label: b.status };
 const isCurrent = b.status === 'reading';
+// 🆕 v3.7.0: обложка с referrerpolicy no-referrer + onerror-фолбэк
+const coverHtml = b.coverUrl
+? `<img class="series-slot-cover" src="${b.coverUrl}" alt="" loading="lazy"
+referrerpolicy="no-referrer" onerror="this.style.display='none'"/>`
+: `<div class="series-slot-cover placeholder">${icon('bookClosed', 22)}</div>`;
 return `
 <div class="series-slot book ${isCurrent ? 'current' : ''}"
 data-series-book="${b.id}">
 <div class="series-slot-number">${slot.number || '—'}</div>
-${b.coverUrl
-? `<img class="series-slot-cover" src="${b.coverUrl}" alt="" loading="lazy"/>`
-: `<div class="series-slot-cover placeholder">${icon('bookClosed', 22)}</div>`}
+${coverHtml}
 <div class="series-slot-info">
 <div class="series-slot-title">${esc(b.title)}</div>
 <div class="series-slot-sub">
@@ -373,6 +380,7 @@ border:1px solid var(--border);
 border-radius:var(--radius);
 cursor:pointer;
 transition:all .2s;
+margin-bottom:8px;
 }
 .series-card:hover {
 border-color:var(--accent);

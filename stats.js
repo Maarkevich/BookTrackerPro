@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — stats.js
-// 🔖 v3.6.0 | 2026-08-04
+// 🔖 v3.7.0 | 2026-08-07
 // 📝 Статистика + Календарь
 //
 //    Подвкладки:
@@ -11,11 +11,13 @@
 //
 //    Живая статистика: count-up чисел, анимация баров
 //
-//    Новое в 3.6.0:
+//    Новое в 3.7.0:
 //      — ФИКС РЕГРЕССИИ: renderStatsTab(container, books, settings, challenges)
-//        принимает челленджи 4-м параметром и передаёт в renderBlogStats.
-//        Убран window._challengesCache (глобал удалён в 3.5.0).
-//      — SVG-иконки из icons.js в хроме (статусы, типы, площадки)
+//        принимает челленджи 4-м параметром (убран window._challengesCache)
+//      — Навигация назад по подвкладкам: экспортируется STATS_SUB_ORDER
+//        и диспатчится событие 'btp-stats-sub' при переключении,
+//        чтобы app.js мог pushState для жеста «назад»
+//      — SVG-иконки из icons.js в хроме
 //      — referrerpolicy no-referrer на обложках
 //      — Сохранено: кликабельный контент в календаре → onOpenContent
 // ─────────────────────────────────────────────
@@ -28,6 +30,24 @@ import { getSeriesList } from './series.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_STATUS_ICONS } from './icons.js';
 
 // ═══════════════════════════════════════════════
+//  ПОРЯДОК ПОДВКЛАДОК (для навигации «назад»)
+// ═══════════════════════════════════════════════
+export const STATS_SUB_ORDER = ['books', 'content', 'money', 'blog'];
+
+/**
+* Возвращает предыдущую подвкладку статистики или null,
+* если текущая — первая (books). Используется app.js
+* для обработки жеста «назад».
+* @param {string} currentSub
+* @returns {string|null}
+*/
+export function getPrevStatsSub(currentSub) {
+const idx = STATS_SUB_ORDER.indexOf(currentSub);
+if (idx <= 0) return null;
+return STATS_SUB_ORDER[idx - 1];
+}
+
+// ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «СТАТИСТИКА»
 // ═══════════════════════════════════════════════
 /**
@@ -35,7 +55,7 @@ import { icon, statusIcon, contentTypeIcon, CONTENT_STATUS_ICONS } from './icons
 * @param {HTMLElement} container
 * @param {object[]} books
 * @param {object} settings
-* @param {object[]} challenges — 🆕 v3.6.0: передаются из app.js
+* @param {object[]} challenges — 🆕 v3.7.0: передаются из app.js явно
 */
 export function renderStatsTab(container, books, settings, challenges = []) {
 if (!container._statsSub) container._statsSub = 'books';
@@ -55,7 +75,10 @@ const body = container.querySelector('#stats-body');
 
 container.querySelectorAll('[data-ssub]').forEach(btn => {
 btn.addEventListener('click', () => {
-container._statsSub = btn.dataset.ssub;
+const newSub = btn.dataset.ssub;
+container._statsSub = newSub;
+// 🆕 v3.7.0: уведомляем app.js для pushState (жест «назад»)
+document.dispatchEvent(new CustomEvent('btp-stats-sub', { detail: { sub: newSub } }));
 renderStatsTab(container, books, settings, challenges);
 });
 });
@@ -431,7 +454,7 @@ ${Object.entries(byCurrency).map(([cur, d]) => `
 * @param {HTMLElement} container
 * @param {object[]} books
 * @param {object} settings
-* @param {object[]} challenges — 🆕 v3.6.0: передаются явно, без глобала
+* @param {object[]} challenges — 🆕 v3.7.0: передаются явно, без глобала
 */
 function renderBlogStats(container, books, settings, challenges = []) {
 const prBooks = books.filter(b => b.isPR);
@@ -448,7 +471,7 @@ const totalReviews = books.filter(b => b.review?.text || b.review?.rating > 0).l
 const totalQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).length, 0);
 const usedQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).filter(q => q.used).length, 0);
 
-// Челленджи — берутся из параметра, не из window
+// 🆕 v3.7.0: челленджи из параметра, не из window
 const activeCh = challenges.filter(c => c.status === 'active');
 const doneCh = challenges.filter(c => c.status === 'completed');
 
@@ -552,12 +575,13 @@ const now = new Date();
 container._calYear = now.getFullYear();
 container._calMonth = now.getMonth();
 }
+
 const year = container._calYear;
 const month = container._calMonth;
 const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const dayNames = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-// 🆕 v3.5.0+: добавляем bookId — нужен для открытия карточки контента
+// 🆕 v3.7.0: добавляем bookId — нужен для открытия карточки контента
 const contentByDate = {};
 for (const book of books) {
 for (const c of (book.contentItems || [])) {
@@ -572,8 +596,8 @@ const firstDay = new Date(year, month, 1);
 const daysInMonth = new Date(year, month + 1, 0).getDate();
 let startDow = firstDay.getDay() - 1;
 if (startDow < 0) startDow = 6;
-const todayStr = new Date().toISOString().slice(0, 10);
 
+const todayStr = new Date().toISOString().slice(0, 10);
 const cells = [];
 const prevLast = new Date(year, month, 0).getDate();
 for (let i = startDow - 1; i >= 0; i--) cells.push({ day: prevLast - i, other: true });
@@ -644,7 +668,7 @@ if (dayContent.length === 0) {
 dayEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:20px">${icon('calendar', 14)} ${formatDateRu(dateStr)}: нет контента</div>`;
 return;
 }
-// 🆕 v3.5.0+: кликабельные карточки → read-only карточка контента
+// 🆕 v3.7.0: кликабельные карточки → read-only карточка контента
 dayEl.innerHTML = `
 <div class="text-small text-muted mb-8" style="font-weight:700">${icon('calendar', 13)} ${formatDateRu(dateStr)}</div>
 ${dayContent.map(c => {
@@ -783,19 +807,19 @@ return new Date(dateStr + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numer
 //  9. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
 const STATS_STYLES = `
-/* v3.5.0+: кликабельный контент в календаре */
+/* v3.7.0: кликабельный контент в календаре */
 .cal-content-item { position: relative; }
 .cal-content-arrow {
-font-size:1.3rem; font-weight:700; color:var(--text-muted);
-flex-shrink:0; margin-left:auto;
-transition:transform .18s var(--ease), color .18s var(--ease);
+font-size: 1.3rem; font-weight: 700; color: var(--text-muted);
+flex-shrink: 0; margin-left: auto;
+transition: transform .18s var(--ease), color .18s var(--ease);
 }
 .cal-content-item:hover .cal-content-arrow {
-transform:translateX(4px); color:var(--accent);
+transform: translateX(4px); color: var(--accent);
 }
 .cal-content-item:hover {
-border-color:var(--accent);
-background:var(--bg-card-hover);
+border-color: var(--accent);
+background: var(--bg-card-hover);
 }
 `;
 if (!document.getElementById('stats-styles')) {

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — content.js
-// 🔖 v3.6.0 | 2026-08-04
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 Контент-план для бук-блогера
 //
 //    Типы контента:
@@ -14,24 +14,22 @@
 //      ▶️ YouTube · 🎵 TikTok · ✈️ Telegram · 🔵 VK · 📰 Дзен
 //      📸 Instagram · 📌 Pinterest · 🧵 Threads
 //
-//    Новое в 3.6.0:
-//      — Кастомные селекты и дата-пикеры (uikit.js) вместо системных:
-//          cf-book  — поиск по названию И автору
-//          cf-status — SVG-иконки статусов
-//          cf-planned / cf-published / cf-report-date — календарь
-//      — Отчётность издательству/автору: reportSent + reportDate
-//      — Весь хром формы на SVG-иконках (icons.js)
-//
-//    Сохранено из 3.5.0:
-//      — SVG-иконки из icons.js, platformIcon → brandIcon
+//    Новое в 3.7.0:
+//      — Отчётность издательству в форме контента:
+//        toggle reportSent + дата-пикер reportDate
+//      — Индикатор отчётности в карточке списка
+//      — Кастомные селекты и дата-пикеры (uikit.js)
+//      — SVG-иконки соцсетей (icons.js)
 //      — Превью публикаций через Microlink (лениво, с кешем)
+//      — esc из utils.js (разрыв цикла)
+//
+//    Стили .p-icon и .link-preview-* — в app.css
 // ─────────────────────────────────────────────
 import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
-import { esc, showToast } from './app.js';
+import { esc, showToast } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
-import { brandIcon, contentTypeIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
+import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker } from './uikit.js';
-
 // ═══════════════════════════════════════════════
 //  КОНСТАНТЫ
 // ═══════════════════════════════════════════════
@@ -45,7 +43,6 @@ quote:        { icon: '✨', label: 'Цитата',                color: 'quote
 comparison:   { icon: '⚖️', label: 'Сравнение',            color: 'comparison' },
 haul:         { icon: '🛒', label: 'Книжный haul',          color: 'haul' },
 };
-
 export const CONTENT_STATUSES = {
 idea:      { icon: '💡', label: 'Идея',          class: 'status-idea' },
 planned:   { icon: '📅', label: 'Запланировано', class: 'status-planned' },
@@ -53,7 +50,7 @@ filming:   { icon: '🎥', label: 'Снимаю',        class: 'status-filming'
 editing:   { icon: '✂️', label: 'Монтаж',        class: 'status-editing' },
 published: { icon: '📤', label: 'Опубликовано',  class: 'status-published' },
 };
-
+// Площадки: иконка (эмодзи-фолбэк) + фирменный цвет
 export const PLATFORMS = {
 youtube:   { icon: '▶️', label: 'YouTube',   color: '#ff5b5b' },
 tiktok:    { icon: '🎵', label: 'TikTok',    color: '#7fb8b0' },
@@ -64,10 +61,9 @@ instagram: { icon: '📸', label: 'Instagram', color: '#d98aa8' },
 pinterest: { icon: '📌', label: 'Pinterest', color: '#e06a5c' },
 threads:   { icon: '🧵', label: 'Threads',   color: '#b3a48e' },
 };
-
 /**
 * Фирменная SVG-иконка площадки (обёртка над brandIcon из icons.js).
-* @param {string} key — youtube / tiktok / telegram / ...
+* @param {string} key — youtube, tiktok, ...
 * @param {number} size — размер в px
 * @returns {string} HTML
 */
@@ -75,13 +71,12 @@ export function platformIcon(key, size = 16) {
 const p = PLATFORMS[key];
 return brandIcon(key, size, p?.color || 'currentColor');
 }
-
 const STATUS_ORDER = ['idea', 'planned', 'filming', 'editing', 'published'];
-
 // ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «КОНТЕНТ-ПЛАН»
 // ═══════════════════════════════════════════════
 export function renderContentTab(container, books, settings, callbacks) {
+// Собираем весь контент из всех книг
 const allContent = [];
 for (const book of books) {
 for (const item of (book.contentItems || [])) {
@@ -94,15 +89,14 @@ bookCover: book.coverUrl || '',
 });
 }
 }
+// Сортировка: по дате (новые сверху)
 allContent.sort((a, b) => {
 const da = a.plannedDate || a.publishedDate || a.createdAt || '';
 const db = b.plannedDate || b.publishedDate || b.createdAt || '';
 return db.localeCompare(da);
 });
-
 if (!container._contentFilter) container._contentFilter = 'all';
 const currentFilter = container._contentFilter;
-
 const filters = [
 { id: 'all',       label: `Все (${allContent.length})`, ic: '' },
 { id: 'idea',      label: 'Идеи',          ic: 'lightbulb' },
@@ -111,12 +105,10 @@ const filters = [
 { id: 'editing',   label: 'Монтаж',        ic: 'scissors' },
 { id: 'published', label: 'Опубликовано',  ic: 'send' },
 ];
-
 const filtered = currentFilter === 'all'
 ? allContent
 : allContent.filter(c => c.status === currentFilter);
 const groups = groupByDate(filtered);
-
 container.innerHTML = `
 <div class="filter-bar no-scrollbar">
 ${filters.map(f => `
@@ -147,19 +139,18 @@ ${g.items.map(c => renderContentCard(c)).join('')}
 `}
 <button id="content-add-btn" class="btn-primary mt-16">${icon('plus', 16)} Новый контент</button>
 `;
-
+// Фильтры
 container.querySelectorAll('[data-cfilter]').forEach(chip => {
 chip.addEventListener('click', () => {
 container._contentFilter = chip.dataset.cfilter;
 renderContentTab(container, books, settings, callbacks);
 });
 });
-
 const addBtn = container.querySelector('#content-add-btn');
 const emptyAdd = container.querySelector('#content-empty-add');
 if (addBtn) addBtn.addEventListener('click', () => callbacks.onAdd());
 if (emptyAdd) emptyAdd.addEventListener('click', () => callbacks.onAdd());
-
+// Клик по карточке → редактирование
 container.querySelectorAll('.content-card').forEach(card => {
 card.addEventListener('click', (e) => {
 if (e.target.closest('button') || e.target.closest('a')) return;
@@ -169,21 +160,21 @@ card.dataset.bookId
 );
 });
 });
-
+// Быстрая смена статуса
 container.querySelectorAll('[data-status-btn]').forEach(btn => {
 btn.addEventListener('click', (e) => {
 e.stopPropagation();
 callbacks.onStatusChange(btn.dataset.contentId, btn.dataset.bookId, btn.dataset.newStatus);
 });
 });
-
+// Удаление
 container.querySelectorAll('[data-delete-content]').forEach(btn => {
 btn.addEventListener('click', (e) => {
 e.stopPropagation();
 callbacks.onDelete(btn.dataset.contentId, btn.dataset.bookId);
 });
 });
-
+// Копирование ссылки
 container.querySelectorAll('[data-copy-url]').forEach(btn => {
 btn.addEventListener('click', (e) => {
 e.stopPropagation();
@@ -191,10 +182,9 @@ navigator.clipboard?.writeText(btn.dataset.copyUrl).then(() =>
 showToast('🔗 Ссылка скопирована', 'success'));
 });
 });
-
+// 🆕 Ленивая загрузка превью публикаций (Microlink)
 loadContentPreviews(container);
 }
-
 // ═══════════════════════════════════════════════
 //  2. КАРТОЧКА КОНТЕНТА
 // ═══════════════════════════════════════════════
@@ -202,20 +192,19 @@ function renderContentCard(item) {
 const type = CONTENT_TYPES[item.type] || { icon: '🎬', label: item.type, color: '' };
 const status = CONTENT_STATUSES[item.status] || { icon: '❓', label: item.status, class: '' };
 const platform = PLATFORMS[item.platform] || { icon: '🌐', label: item.platform || '' };
-
+// Следующий статус для быстрой кнопки
 const idx = STATUS_ORDER.indexOf(item.status);
 const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
 const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
 const dateStr = item.publishedDate || item.plannedDate || '';
-
-// Индикатор отчёта издательству (новое в 3.6.0)
-const reportBadge = item.reportSent
-? `<span class="content-report-badge sent" title="Отчёт отправлен">${icon('check', 11)} отчёт</span>`
+// 🆕 v3.7.0: индикатор отчётности
+const reportSent = item.reportSent || false;
+const reportBadge = reportSent
+? `<span class="cc-report-badge sent" title="Отчёт отправлен">${icon('checkBadge', 11)} отчёт</span>`
 : '';
-
 return `
 <div class="content-card" data-book-id="${item.bookId}" data-content-id="${item.id}">
-<div class="content-icon ${type.color}">${contentTypeIcon(item.type, 22)}</div>
+<div class="content-icon ${type.color}">${icon(CONTENT_TYPE_ICONS[item.type] || 'film', 22)}</div>
 <div class="content-info">
 <div class="content-title">${esc(item.title || type.label)}</div>
 <div class="content-book">${icon('bookClosed', 12)} ${esc(item.bookTitle)}</div>
@@ -260,10 +249,14 @@ ${icon('trash', 15)}
 </div>
 `;
 }
-
 // ═══════════════════════════════════════════════
 //  2.1 ПРЕВЬЮ ПУБЛИКАЦИЙ (Microlink)
 // ═══════════════════════════════════════════════
+/**
+* Лениво подтягивает превью для ссылок publishedUrl.
+* Использует IntersectionObserver + кеш Microlink (IndexedDB).
+* Повторные URL не тратят дневной лимит.
+*/
 function loadContentPreviews(container) {
 const els = container.querySelectorAll('.content-published[data-preview-url]');
 if (els.length === 0) return;
@@ -280,7 +273,9 @@ hydratePreview(entry.target);
 }, { rootMargin: '200px' });
 els.forEach(el => observer.observe(el));
 }
-
+/**
+* Запрашивает превью и вставляет карточку над ссылкой.
+*/
 async function hydratePreview(el) {
 const url = el.dataset.previewUrl;
 if (!url || el.dataset.hydrated) return;
@@ -295,18 +290,17 @@ card.rel = 'noopener';
 card.innerHTML = `
 ${preview.image
 ? `<img class="link-preview-img" src="${preview.image}" alt="" loading="lazy"/>`
-: `<div class="link-preview-img link-preview-img-empty">${brandIcon(preview.source, 18)}</div>`}
+: `<div class="link-preview-img link-preview-img-empty">${platformIcon(preview.source, 18)}</div>`}
 <div class="link-preview-info">
 <div class="link-preview-title">${esc(preview.title || url)}</div>
 <div class="link-preview-meta">
-${brandIcon(preview.source, 11)}
+${platformIcon(preview.source, 11)}
 ${esc(preview.publisher || preview.source)}
 </div>
 </div>
 `;
 el.insertBefore(card, el.firstChild);
 }
-
 // ═══════════════════════════════════════════════
 //  3. ФОРМА КОНТЕНТА
 // ═══════════════════════════════════════════════
@@ -315,23 +309,18 @@ const overlay = document.getElementById('content-overlay');
 const title = document.getElementById('content-form-title');
 const body = document.getElementById('content-form-body');
 if (!overlay || !body) return;
-
 title.innerHTML = item
 ? `${icon('edit', 18)} Редактировать контент`
 : `${icon('film', 18)} Новый контент`;
-
 loadBooks().then(books => {
 renderContentFormBody(body, books, item, bookId);
 });
-
 overlay.classList.remove('hidden');
 document.body.style.overflow = 'hidden';
 }
-
 function renderContentFormBody(body, books, item, preselectedBookId) {
 const c = item || {};
 const defaultPlatform = 'youtube';
-
 body.innerHTML = `
 <!-- Книга -->
 <div class="form-group">
@@ -345,27 +334,24 @@ ${esc(b.title)} — ${esc(b.author)}
 `).join('')}
 </select>
 </div>
-
 <!-- Тип контента -->
 <div class="form-group">
 <label>${icon('film', 13)} Тип контента *</label>
 <div class="content-type-grid">
 ${Object.entries(CONTENT_TYPES).map(([key, t]) => `
 <button class="content-type-btn ${(c.type || 'unboxing') === key ? 'active' : ''}" data-type="${key}">
-<span class="content-type-icon">${contentTypeIcon(key, 22)}</span>
+<span class="content-type-icon">${icon(CONTENT_TYPE_ICONS[key] || 'film', 22)}</span>
 <span class="content-type-label">${t.label}</span>
 </button>
 `).join('')}
 </div>
 </div>
-
 <!-- Название -->
 <div class="form-group">
 <label>${icon('edit', 13)} Название</label>
 <input type="text" id="cf-title" value="${esc(c.title || '')}" placeholder="Распаковка июльской посылки ЭКСМО"/>
 <div class="form-hint">Если пусто — будет использовано название типа</div>
 </div>
-
 <!-- Площадка -->
 <div class="form-group">
 <label>${icon('globe', 13)} Площадка</label>
@@ -377,7 +363,6 @@ ${brandIcon(key, 15)} ${p.label}
 `).join('')}
 </div>
 </div>
-
 <!-- Статус -->
 <div class="form-group">
 <label>${icon('chart', 13)} Статус</label>
@@ -387,27 +372,23 @@ ${Object.entries(CONTENT_STATUSES).map(([key, s]) => `
 `).join('')}
 </select>
 </div>
-
 <!-- Даты -->
 <div class="form-row">
 <div class="form-group"><label>${icon('calendar', 13)} Дата плана</label><input type="date" id="cf-planned" value="${c.plannedDate || ''}"/></div>
 <div class="form-group"><label>${icon('send', 13)} Дата публикации</label><input type="date" id="cf-published" value="${c.publishedDate || ''}"/></div>
 </div>
-
 <!-- Ссылка -->
 <div class="form-group">
 <label>${icon('link', 13)} Ссылка на публикацию</label>
 <input type="url" id="cf-url" value="${esc(c.publishedUrl || '')}" placeholder="https://youtube.com/watch?v=..."/>
 <div class="form-hint">Превью подтянется автоматически (Microlink)</div>
 </div>
-
 <!-- Заметки -->
 <div class="form-group">
 <label>${icon('edit', 13)} Заметки</label>
 <textarea id="cf-notes" rows="3" placeholder="Идеи для съёмки, сценарий, реквизит...">${esc(c.notes || '')}</textarea>
 </div>
-
-<!-- Отчёт издательству (НОВОЕ в 3.6.0) -->
+<!-- 🆕 v3.7.0: Отчёт издательству -->
 <div class="form-section">
 <h3>${icon('report', 15)} Отчёт издательству</h3>
 <div class="toggle-row">
@@ -420,18 +401,15 @@ ${Object.entries(CONTENT_STATUSES).map(([key, s]) => `
 <input type="date" id="cf-report-date" value="${c.reportDate || ''}"/>
 </div>
 </div>
-<div class="form-hint">Отметьте, если отчёт о проделанном контенте отправлен издательству или автору</div>
+<div class="form-hint">Отметьте, если отчёт о контенте отправлен издательству или автору</div>
 </div>
-
 <div class="btn-group">
 <button id="cf-save" class="btn-primary">${icon('check', 15)} Сохранить</button>
 ${item ? `<button id="cf-delete" class="btn-danger">${icon('trash', 15)} Удалить</button>` : ''}
 </div>
 `;
-
 let selectedType = c.type || 'unboxing';
 let selectedPlatform = c.platform || defaultPlatform;
-
 body.querySelectorAll('.content-type-btn').forEach(btn => {
 btn.addEventListener('click', () => {
 body.querySelectorAll('.content-type-btn').forEach(b => b.classList.remove('active'));
@@ -439,7 +417,6 @@ btn.classList.add('active');
 selectedType = btn.dataset.type;
 });
 });
-
 body.querySelectorAll('.platform-btn').forEach(btn => {
 btn.addEventListener('click', () => {
 body.querySelectorAll('.platform-btn').forEach(b => b.classList.remove('active'));
@@ -447,21 +424,11 @@ btn.classList.add('active');
 selectedPlatform = btn.dataset.platform;
 });
 });
-
-// Отчёт издательству: toggle показывает/скрывает дату
-body.querySelector('#cf-report-toggle').addEventListener('click', function() {
-this.classList.toggle('active');
-body.querySelector('#cf-report-fields').classList.toggle('hidden');
-});
-
-// ── Кастомные контролы (uikit.js) ──
-// Селект книги: поиск по названию И автору (textContent = «Название — Автор»)
+// 🆕 v3.7.0: Кастомные контролы (uikit.js)
 attachCustomSelect(body.querySelector('#cf-book'), {
 search: true,
 searchPlaceholder: 'Название или автор...',
 });
-
-// Селект статуса: SVG-иконки
 const statusRenderer = (opt) => {
 const s = CONTENT_STATUSES[opt.value];
 if (!s) return esc(opt.textContent);
@@ -471,19 +438,19 @@ attachCustomSelect(body.querySelector('#cf-status'), {
 renderOption: statusRenderer,
 renderTrigger: statusRenderer,
 });
-
-// Дата-пикеры
 attachDatePicker(body.querySelector('#cf-planned'));
 attachDatePicker(body.querySelector('#cf-published'));
 attachDatePicker(body.querySelector('#cf-report-date'));
-
-// ── Сохранение ──
+// 🆕 v3.7.0: Toggle отчёта показывает/скрывает дату
+body.querySelector('#cf-report-toggle').addEventListener('click', function() {
+this.classList.toggle('active');
+body.querySelector('#cf-report-fields').classList.toggle('hidden');
+});
+// Сохранение
 body.querySelector('#cf-save').addEventListener('click', async () => {
 const bookId = body.querySelector('#cf-book').value;
 if (!bookId) { showToast('⚠️ Выберите книгу', 'error'); return; }
-
 const isReportSent = body.querySelector('#cf-report-toggle').classList.contains('active');
-
 const contentData = {
 id: c.id || `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 type: selectedType,
@@ -499,7 +466,6 @@ reportDate: isReportSent ? body.querySelector('#cf-report-date').value : '',
 createdAt: c.createdAt || new Date().toISOString(),
 updatedAt: new Date().toISOString(),
 };
-
 try {
 if (item) {
 await updateContentInBook(bookId, contentData.id, contentData);
@@ -515,7 +481,6 @@ showToast('❌ Ошибка сохранения', 'error');
 console.error('[Content] Save error:', e);
 }
 });
-
 const delBtn = body.querySelector('#cf-delete');
 if (delBtn) {
 delBtn.addEventListener('click', async () => {
@@ -529,7 +494,6 @@ document.dispatchEvent(new CustomEvent('data-changed'));
 });
 }
 }
-
 function closeContentForm() {
 const overlay = document.getElementById('content-overlay');
 if (overlay) {
@@ -537,16 +501,15 @@ overlay.classList.add('hidden');
 document.body.style.overflow = '';
 }
 }
-
 // ═══════════════════════════════════════════════
 //  4. ОПЕРАЦИИ (для app.js)
 // ═══════════════════════════════════════════════
 export async function deleteContentItem(bookId, contentId) {
 await removeContentFromBook(bookId, contentId);
 }
-
 export async function updateContentStatus(bookId, contentId, newStatus) {
 const updates = { status: newStatus, updatedAt: new Date().toISOString() };
+// При публикации — авто-дата, если не указана
 if (newStatus === 'published') {
 const books = await loadBooks();
 const book = books.find(b => b.id === bookId);
@@ -557,16 +520,14 @@ updates.publishedDate = new Date().toISOString().slice(0, 10);
 }
 await updateContentInBook(bookId, contentId, updates);
 }
-
 // ═══════════════════════════════════════════════
 //  5. УТИЛИТЫ
 // ═══════════════════════════════════════════════
 function findContentItem(books, bookId, contentId) {
 const book = books.find(b => b.id === bookId);
 if (!book) return null;
-return (book.contentItems || []).find(ct => ct.id === contentId) || null;
+return (book.contentItems || []).find(c => c.id === contentId) || null;
 }
-
 function groupByDate(items) {
 const today = new Date().toISOString().slice(0, 10);
 const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -603,7 +564,6 @@ return a.localeCompare(b, 'ru');
 })
 .map(([label, items]) => ({ label, items }));
 }
-
 // ═══════════════════════════════════════════════
 //  6. СТИЛИ ФОРМЫ (инжектируются один раз)
 // ═══════════════════════════════════════════════
@@ -635,13 +595,14 @@ transition:all .2s var(--ease); text-align:center;
 border-color:var(--accent); background:var(--accent-dim);
 color:var(--accent); font-weight:700;
 }
-/* Индикатор отчёта в карточке контента (новое в 3.6.0) */
-.content-report-badge {
+/* 🆕 v3.7.0: индикатор отчётности в карточке */
+.cc-report-badge {
 display:inline-flex; align-items:center; gap:3px;
 padding:2px 8px; border-radius:10px;
-font-size:.66rem; font-weight:800; text-transform:uppercase; letter-spacing:.04em;
+font-size:.66rem; font-weight:800;
+text-transform:uppercase; letter-spacing:.04em;
 }
-.content-report-badge.sent { background:var(--green-dim); color:var(--green); }
+.cc-report-badge.sent { background:var(--green-dim); color:var(--green); }
 @media (max-width:400px) {
 .content-type-grid { grid-template-columns:repeat(2,1fr); }
 .platform-grid { grid-template-columns:repeat(2,1fr); }

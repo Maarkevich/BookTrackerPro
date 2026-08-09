@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — challenges.js
-// 🔖 v3.5.0 | 2026-08-01
+// 🔖 v3.7.0 | 2026-08-07
 // 📝 Челленджи чтения
 //
 //    Типы целей:
@@ -17,15 +17,25 @@
 //    Книга может быть в нескольких челленджах.
 //    Заметки: notes: [{ text, date }]
 //
-//    Новое в 3.5.0:
-//      — Иконки типов целей из icons.js (GOAL_ICONS, SVG)
+//    Новое в 3.7.0:
+//      — esc / showToast из utils.js (разрыв цикла)
+//      — trackOverlay / untrackOverlay для оверлеев
+//        формы и выбора книг (жест «назад»)
+//      — Кастомный селект статуса (uikit.js)
+//      — Дата-пикеры для периода (uikit.js)
+//
+//    Сохранено из 3.5.0:
+//      — SVG-иконки типов целей из icons.js (GOAL_ICONS)
 //      — Кнопки-хром на icon() (править/удалить/добавить/назад)
-//      — Пользовательские эмодзи и статусы сохранены
+//      — Пользовательские эмодзи и статусы
 // ─────────────────────────────────────────────
 import { loadChallenges, putChallenge, delChallenge,
-addBookToChallenge, removeBookFromChallenge } from './db.js';
-import { esc, showToast } from './app.js';
+         addBookToChallenge, removeBookFromChallenge } from './db.js';
+import { esc, showToast } from './utils.js';
+import { trackOverlay, untrackOverlay } from './app.js';
+import { attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, GOAL_ICONS } from './icons.js';
+
 // ═══════════════════════════════════════════════
 //  КОНСТАНТЫ
 // ═══════════════════════════════════════════════
@@ -36,12 +46,14 @@ tag:     { icon: '🏷️', label: 'Книги с тегом',      unit: 'кн�
 reviews: { icon: '✍️', label: 'Количество отзывов', unit: 'отзывов' },
 content: { icon: '🎬', label: 'Количество контента', unit: 'единиц' },
 };
+
 export const CHALLENGE_STATUSES = {
 planned:   { icon: '📅', label: 'Запланирован', class: 'status-planned' },
 active:    { icon: '🟢', label: 'Активен',      class: 'status-active' },
 completed: { icon: '🏆', label: 'Завершён',     class: 'status-completed' },
 failed:    { icon: '💀', label: 'Провален',     class: 'status-failed' },
 };
+
 /**
 * SVG-иконка типа цели (из icons.js).
 * @param {string} goalType — books / pages / tag / reviews / content
@@ -50,6 +62,7 @@ failed:    { icon: '💀', label: 'Провален',     class: 'status-failed'
 function goalIcon(goalType, size = 14) {
 return icon(GOAL_ICONS[goalType] || 'target', size);
 }
+
 // ═══════════════════════════════════════════════
 //  1. РАСЧЁТ ПРОГРЕССА
 // ═══════════════════════════════════════════════
@@ -62,6 +75,7 @@ return icon(GOAL_ICONS[goalType] || 'target', size);
 export function calcChallengeProgress(challenge, books) {
 const target = challenge.goalValue || 1;
 const chBooks = books.filter(b => challenge.bookIds.includes(b.id));
+
 // Фильтр по периоду (если задан)
 const inPeriod = (dateStr) => {
 if (!dateStr) return false;
@@ -69,8 +83,10 @@ if (challenge.startDate && dateStr < challenge.startDate) return false;
 if (challenge.endDate && dateStr > challenge.endDate) return false;
 return true;
 };
+
 let current = 0;
 let detail = '';
+
 switch (challenge.goalType) {
 case 'books': {
 const done = chBooks.filter(b =>
@@ -119,9 +135,11 @@ break;
 default:
 current = 0;
 }
+
 const percent = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
 return { current, target, percent, detail };
 }
+
 /**
 * Определяет, завершён ли челлендж (для авто-проверки).
 */
@@ -129,6 +147,7 @@ export function isChallengeComplete(challenge, books) {
 const { current, target } = calcChallengeProgress(challenge, books);
 return current >= target;
 }
+
 /**
 * Осталось дней до конца челленджа.
 */
@@ -138,6 +157,7 @@ const end = new Date(challenge.endDate + 'T23:59:59');
 const now = new Date();
 return Math.max(0, Math.ceil((end - now) / 86400000));
 }
+
 // ═══════════════════════════════════════════════
 //  2. СПИСОК ЧЕЛЛЕНДЖЕЙ
 // ═══════════════════════════════════════════════
@@ -157,6 +177,7 @@ const sorted = [...challenges].sort((a, b) =>
 const active = sorted.filter(c => c.status === 'active');
 const planned = sorted.filter(c => c.status === 'planned');
 const done = sorted.filter(c => c.status === 'completed' || c.status === 'failed');
+
 container.innerHTML = `
 ${sorted.length === 0 ? `
 <div class="empty-state">
@@ -194,11 +215,13 @@ ${icon('plus', 16)} Новый челлендж
 </button>
 `}
 `;
+
 // События
 const addBtn = container.querySelector('#ch-add-btn');
 const emptyAdd = container.querySelector('#ch-empty-add');
 if (addBtn) addBtn.addEventListener('click', () => callbacks.onAdd());
 if (emptyAdd) emptyAdd.addEventListener('click', () => callbacks.onAdd());
+
 container.querySelectorAll('.challenge-card').forEach(card => {
 card.addEventListener('click', (e) => {
 if (e.target.closest('button')) return;
@@ -206,11 +229,13 @@ callbacks.onOpen(card.dataset.chId);
 });
 });
 }
+
 function renderChallengeCard(ch, books) {
 const st = CHALLENGE_STATUSES[ch.status] || CHALLENGE_STATUSES.planned;
 const gt = GOAL_TYPES[ch.goalType] || GOAL_TYPES.books;
 const prog = calcChallengeProgress(ch, books);
 const left = daysLeft(ch);
+
 return `
 <div class="challenge-card" data-ch-id="${ch.id}">
 <div class="challenge-emoji">${ch.emoji || '🏆'}</div>
@@ -236,6 +261,7 @@ style="width:${prog.percent}%"></div>
 </div>
 `;
 }
+
 // ═══════════════════════════════════════════════
 //  3. ЭКРАН ЧЕЛЛЕНДЖА
 // ═══════════════════════════════════════════════
@@ -254,8 +280,10 @@ const prog = calcChallengeProgress(challenge, books);
 const left = daysLeft(challenge);
 const chBooks = books.filter(b => challenge.bookIds.includes(b.id));
 const notes = challenge.notes || [];
+
 container.innerHTML = `
 <button id="chd-back" class="btn-secondary mb-16">${icon('arrowLeft', 14)} Челленджи</button>
+
 <!-- Шапка -->
 <div class="challenge-hero ${challenge.status}">
 <div class="challenge-hero-emoji">${challenge.emoji || '🏆'}</div>
@@ -278,6 +306,7 @@ ${left !== null && challenge.status === 'active'
 <button id="chd-del" class="btn-danger" style="padding:8px 12px" title="Удалить">${icon('trash', 15)}</button>
 </div>
 </div>
+
 <!-- Прогресс -->
 <div class="challenge-progress-hero">
 <div class="challenge-progress-numbers">
@@ -292,6 +321,7 @@ style="width:${prog.percent}%"></div>
 ${goalIcon(challenge.goalType, 13)} ${prog.detail} · ${prog.percent}%
 </div>
 </div>
+
 <!-- Управление статусом -->
 ${challenge.status === 'planned' ? `
 <button id="chd-start" class="btn-primary mt-16">
@@ -303,6 +333,7 @@ ${challenge.status === 'active' && prog.percent >= 100 ? `
 🏆 Завершить челлендж
 </button>
 ` : ''}
+
 <!-- Книги челленджа -->
 <div class="detail-section">
 <h3>📚 Книги (${chBooks.length})</h3>
@@ -313,6 +344,7 @@ ${chBooks.length === 0
 ${icon('plus', 14)} Добавить книгу
 </button>
 </div>
+
 <!-- Заметки -->
 <div class="detail-section">
 <h3>📝 Заметки (${notes.length})</h3>
@@ -335,21 +367,27 @@ style="flex:1" autocomplete="off"/>
 </div>
 </div>
 `;
+
 // ── События ──
 container.querySelector('#chd-back').addEventListener('click', () => callbacks.onBack());
 container.querySelector('#chd-edit').addEventListener('click', () => callbacks.onEdit(challenge));
 container.querySelector('#chd-del').addEventListener('click', () => callbacks.onDelete(challenge.id));
+
 const startBtn = container.querySelector('#chd-start');
 if (startBtn) startBtn.addEventListener('click', () => callbacks.onStatusChange(challenge.id, 'active'));
+
 const completeBtn = container.querySelector('#chd-complete');
 if (completeBtn) completeBtn.addEventListener('click', () => callbacks.onStatusChange(challenge.id, 'completed'));
+
 container.querySelector('#chd-add-book').addEventListener('click', () => callbacks.onAddBook(challenge.id));
+
 container.querySelectorAll('[data-chd-book]').forEach(el => {
 el.addEventListener('click', (e) => {
 if (e.target.closest('[data-chd-book-del]')) return;
 callbacks.onOpenBook(el.dataset.chdBook);
 });
 });
+
 container.querySelectorAll('[data-chd-book-del]').forEach(btn => {
 btn.addEventListener('click', (e) => {
 e.stopPropagation();
@@ -359,6 +397,7 @@ document.dispatchEvent(new CustomEvent('data-changed'));
 });
 });
 });
+
 // Заметки
 const addNote = () => {
 const input = container.querySelector('#chd-note-input');
@@ -371,10 +410,12 @@ container.querySelector('#chd-note-add').addEventListener('click', addNote);
 container.querySelector('#chd-note-input').addEventListener('keydown', (e) => {
 if (e.key === 'Enter') addNote();
 });
+
 container.querySelectorAll('[data-note-del]').forEach(btn => {
 btn.addEventListener('click', () => callbacks.onDelNote(challenge.id, parseInt(btn.dataset.noteDel)));
 });
 }
+
 function renderChallengeBook(b) {
 const st = {
 wishlist: { icon: '🌟', label: 'Wishlist' },
@@ -384,10 +425,11 @@ paused:   { icon: '⏸️', label: 'Пауза' },
 finished: { icon: '✅', label: 'Прочитано' },
 dropped:  { icon: '❌', label: 'Брошено' },
 }[b.status] || { icon: '📕', label: b.status };
+
 return `
 <div class="content-list-item" data-chd-book="${b.id}" style="cursor:pointer">
 ${b.coverUrl
-? `<img src="${b.coverUrl}" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
 : `<span style="font-size:1.2rem">📕</span>`}
 <div class="content-list-info">
 <div class="content-list-title">${esc(b.title)}</div>
@@ -403,6 +445,7 @@ title="Убрать из челленджа">${icon('close', 13)}</button>
 </div>
 `;
 }
+
 // ═══════════════════════════════════════════════
 //  4. ФОРМА ЧЕЛЛЕНДЖА
 // ═══════════════════════════════════════════════
@@ -415,12 +458,14 @@ title="Убрать из челленджа">${icon('close', 13)}</button>
 export function openChallengeForm(challenge, books, onSave) {
 const c = challenge || {};
 const isEdit = !!challenge;
+
 // Собираем все теги и жанры для подсказки
 const allTags = new Set();
 for (const b of books) {
 (b.tags || []).forEach(t => allTags.add(t));
 if (b.genre) allTags.add(b.genre);
 }
+
 const overlay = document.createElement('div');
 overlay.className = 'overlay';
 overlay.innerHTML = `
@@ -447,6 +492,7 @@ placeholder="Фэнтези-марафон" required/>
 <textarea id="ch-f-desc" rows="2"
 placeholder="Прочитать 5 книг в жанре фэнтези за август...">${esc(c.description || '')}</textarea>
 </div>
+
 <!-- Тип цели -->
 <div class="form-group">
 <label>Тип цели</label>
@@ -460,6 +506,7 @@ data-goal="${key}">
 `).join('')}
 </div>
 </div>
+
 <!-- Значение цели -->
 <div class="form-row">
 <div class="form-group">
@@ -476,6 +523,7 @@ ${[...allTags].map(t => `<option value="${esc(t)}"/>`).join('')}
 </datalist>
 </div>
 </div>
+
 <!-- Период -->
 <div class="form-group">
 <label>Период</label>
@@ -494,6 +542,7 @@ ${[...allTags].map(t => `<option value="${esc(t)}"/>`).join('')}
 </div>
 </div>
 </div>
+
 <!-- Статус -->
 <div class="form-group">
 <label>Статус</label>
@@ -506,19 +555,32 @@ ${[...allTags].map(t => `<option value="${esc(t)}"/>`).join('')}
 </option>
 </select>
 </div>
+
 <button id="ch-f-save" class="btn-primary">${icon('check', 15)} Сохранить</button>
 </div>
 </div>
 `;
+
 document.body.appendChild(overlay);
 document.body.style.overflow = 'hidden';
+trackOverlay(overlay); // 🆕 v3.7.0: жест «назад»
+
 let goalType = c.goalType || 'books';
+
 const close = () => {
 overlay.remove();
+untrackOverlay(overlay); // 🆕 v3.7.0
 document.body.style.overflow = '';
 };
+
 overlay.querySelector('.ch-form-close').addEventListener('click', close);
 overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+// 🆕 v3.7.0: кастомный селект статуса + дата-пикеры
+attachCustomSelect(overlay.querySelector('#ch-f-status'), {});
+attachDatePicker(overlay.querySelector('#ch-f-start'));
+attachDatePicker(overlay.querySelector('#ch-f-end'));
+
 // Тип цели
 overlay.querySelectorAll('.goal-type-btn').forEach(btn => {
 btn.addEventListener('click', () => {
@@ -531,12 +593,14 @@ const valueLabel = overlay.querySelector('#ch-f-value-label');
 valueLabel.textContent = `Цель (${GOAL_TYPES[goalType].unit})`;
 });
 });
+
 // Период
 overlay.querySelector('#ch-f-hasdates').addEventListener('click', function() {
 this.classList.toggle('active');
 overlay.querySelector('#ch-f-dates').style.display =
 this.classList.contains('active') ? '' : 'none';
 });
+
 // Сохранение
 overlay.querySelector('#ch-f-save').addEventListener('click', () => {
 const name = overlay.querySelector('#ch-f-name').value.trim();
@@ -564,6 +628,7 @@ onSave(data);
 close();
 });
 }
+
 // ═══════════════════════════════════════════════
 //  5. ВЫБОР КНИГ ДЛЯ ЧЕЛЛЕНДЖА
 // ═══════════════════════════════════════════════
@@ -577,6 +642,7 @@ close();
 export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
 const inCh = new Set(challenge.bookIds);
 const available = books.filter(b => !inCh.has(b.id));
+
 const overlay = document.createElement('div');
 overlay.className = 'overlay';
 overlay.innerHTML = `
@@ -601,7 +667,7 @@ ${available.map(b => `
 <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
 <input type="checkbox" data-book-id="${b.id}"/>
 ${b.coverUrl
-? `<img src="${b.coverUrl}" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
 : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">📕</span>`}
 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
 </label>
@@ -614,14 +680,20 @@ ${icon('check', 15)} Добавить выбранные
 </div>
 </div>
 `;
+
 document.body.appendChild(overlay);
 document.body.style.overflow = 'hidden';
+trackOverlay(overlay); // 🆕 v3.7.0: жест «назад»
+
 const close = () => {
 overlay.remove();
+untrackOverlay(overlay); // 🆕 v3.7.0
 document.body.style.overflow = '';
 };
+
 overlay.querySelector('.ch-books-close').addEventListener('click', close);
 overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
 const searchInput = overlay.querySelector('#ch-books-search');
 if (searchInput) {
 searchInput.addEventListener('input', () => {
@@ -631,6 +703,7 @@ row.style.display = row.dataset.search.includes(q) ? '' : 'none';
 });
 });
 }
+
 const saveBtn = overlay.querySelector('#ch-books-save');
 if (saveBtn) {
 saveBtn.addEventListener('click', async () => {
@@ -644,18 +717,22 @@ if (onDone) onDone();
 });
 }
 }
+
 // ═══════════════════════════════════════════════
 //  6. ОПЕРАЦИИ (для app.js)
 // ═══════════════════════════════════════════════
 export async function createChallenge(data) {
 await putChallenge(data);
 }
+
 export async function updateChallenge(data) {
 await putChallenge(data);
 }
+
 export async function deleteChallengeById(id) {
 await delChallenge(id);
 }
+
 export async function addChallengeNote(challengeId, text) {
 const challenges = await loadChallenges();
 const ch = challenges.find(c => c.id === challengeId);
@@ -664,6 +741,7 @@ if (!ch.notes) ch.notes = [];
 ch.notes.unshift({ text, date: new Date().toISOString().slice(0, 10) });
 await putChallenge(ch);
 }
+
 export async function removeChallengeNote(challengeId, index) {
 const challenges = await loadChallenges();
 const ch = challenges.find(c => c.id === challengeId);
@@ -671,6 +749,7 @@ if (!ch || !ch.notes) return;
 ch.notes.splice(index, 1);
 await putChallenge(ch);
 }
+
 // ═══════════════════════════════════════════════
 //  7. УТИЛИТЫ
 // ═══════════════════════════════════════════════
@@ -683,6 +762,7 @@ return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 return dateStr;
 }
 }
+
 // ═══════════════════════════════════════════════
 //  8. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
@@ -833,6 +913,7 @@ color:var(--accent);
 .goal-type-grid { grid-template-columns:repeat(2,1fr); }
 }
 `;
+
 if (!document.getElementById('challenge-styles')) {
 const style = document.createElement('style');
 style.id = 'challenge-styles';

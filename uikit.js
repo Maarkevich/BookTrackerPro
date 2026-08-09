@@ -1,12 +1,14 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — uikit.js
-// 🔖 v3.6.0 | 2026-08-04
+// 🔖 v3.7.0 | 2026-08-07
 // 📝 Переиспользуемые UI-компоненты «ночной библиотеки»
 //
 //    Компоненты:
 //      📅 Дата-пикер   — кастомный календарь вместо <input type=date>
 //      🔽 Кастомный селект — вместо системного <select>, с поиском
 //      ✅ Confirm       — стилизованный диалог вместо нативного confirm()
+//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.7.0)
+//      💘 Chip Input   — автокомплит для тропов/тегов (v3.7.0)
 //
 //    Принципы:
 //      — Нативный контрол остаётся в DOM и является источником истины.
@@ -14,11 +16,22 @@
 //      — Никаких эмодзи в UI — только SVG из icons.js.
 //      — Стили инжектируются один раз, соответствуют app.css.
 //
+//    Новое в 3.7.0:
+//      — attachChipGroup(): множественный выбор чипами
+//        (форматы: бумажная / электронная / аудио)
+//      — attachChipInput(): ввод тропов с автокомплитом
+//        из уже существующих тропов всех книг
+//      — attachSelectWithCustom(): селект + «Добавить своё»
+//        (площадки эл. книг: ЛитРес, Яндекс Книги, Bookmate...)
+//
 //    Использование:
-//      import { enhanceForm, attachCustomSelect, showConfirm } from './uikit.js';
-//      enhanceForm(formBody);                    // авто-улучшение всех контролов
+//      import { enhanceForm, attachCustomSelect, showConfirm,
+//               attachChipGroup, attachChipInput } from './uikit.js';
+//      enhanceForm(formBody);
 //      attachCustomSelect(sel, { search: true, renderOption: fn });
 //      const ok = await showConfirm('Удалить книгу?', { danger: true });
+//      attachChipGroup(container, { values: ['paper'], options: [...] });
+//      attachChipInput(input, { suggestions: [...], placeholder: '...' });
 // ─────────────────────────────────────────────
 import { icon } from './icons.js';
 import { esc } from './utils.js';
@@ -31,17 +44,20 @@ const MONTHS = ['Январь','Февраль','Март','Апрель','Ма�
 const DAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
 function pad(n) { return String(n).padStart(2, '0'); }
+
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
 function parseISO(iso) {
   if (!iso) return null;
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
   const d = new Date(+m[1], +m[2] - 1, +m[3]);
-  return isNaN(d) ? null : d;
+  return isNaN(d.getTime()) ? null : d;
 }
+
 /** Сетка дней для года/месяца (6 строк × 7). Пн — первый. */
 function buildCells(year, month) {
   const first = new Date(year, month, 1);
@@ -57,6 +73,27 @@ function buildCells(year, month) {
   return cells;
 }
 
+/** Общее позиционирование поповера относительно якоря. */
+function positionPop(pop, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  const pw = pop.classList.contains('dp-pop') ? 300 : Math.min(rect.width, 320);
+  let left = rect.left;
+  if (left + pw > window.innerWidth - 10) left = window.innerWidth - pw - 10;
+  if (left < 10) left = 10;
+  pop.style.width = pw + 'px';
+  pop.style.left = left + 'px';
+  let top = rect.bottom + 6;
+  pop.style.top = top + 'px';
+  requestAnimationFrame(() => {
+    const ph = pop.offsetHeight;
+    if (top + ph > window.innerHeight - 10) {
+      top = rect.top - ph - 6;
+      if (top < 10) top = 10;
+      pop.style.top = top + 'px';
+    }
+  });
+}
+
 // ═══════════════════════════════════════════════
 //  1. ДАТА-ПИКЕР
 // ═══════════════════════════════════════════════
@@ -64,10 +101,10 @@ let _activePicker = null;
 let _pickerState = null;
 
 /**
-* Привязывает кастомный календарь к <input type="date">.
-* Нативный пикер блокируется через readonly, значение остаётся ISO.
-* @param {HTMLInputElement} input
-*/
+ * Привязывает кастомный календарь к <input type="date">.
+ * Нативный пикер блокируется через readonly, значение остаётся ISO.
+ * @param {HTMLInputElement} input
+ */
 export function attachDatePicker(input) {
   if (!input || input._dpInit) return;
   input._dpInit = true;
@@ -148,6 +185,7 @@ export function closeDatePicker() {
   _pickerState = null;
   document.removeEventListener('click', _onPickerOutside, { capture: true });
 }
+
 function _onPickerOutside(e) {
   if (_activePicker && !_activePicker.contains(e.target) && e.target !== _pickerState?.input) closeDatePicker();
 }
@@ -159,33 +197,38 @@ let _activeDropdown = null;
 let _ddState = null;
 
 /**
-* Заменяет системный <select> стилизованным dropdown.
-* Нативный select скрывается, но остаётся источником значения.
-* @param {HTMLSelectElement} select
-* @param {object} opts
-*   search {boolean}          — строка поиска внутри dropdown
-*   searchPlaceholder {string}
-*   placeholder {string}      — текст при пустом выборе
-*   renderOption {function}   — (option) => html для пункта списка
-*   renderTrigger {function}  — (selectedOption) => html для триггера
-*/
+ * Заменяет системный <select> стилизованным dropdown.
+ * Нативный select скрывается, но остаётся источником значения.
+ * @param {HTMLSelectElement} select
+ * @param {object} opts
+ *   search {boolean}          — строка поиска внутри dropdown
+ *   searchPlaceholder {string}
+ *   placeholder {string}      — текст при пустом выборе
+ *   renderOption {function}   — (option) => html для пункта списка
+ *   renderTrigger {function}  — (selectedOption) => html для триггера
+ */
 export function attachCustomSelect(select, opts = {}) {
   if (!select || select._csInit) return;
   select._csInit = true;
   select._csOpts = opts;
   select.classList.add('cs-hidden');
+
   // Обёртка: прячем select внутрь и добавляем триггер рядом
   const wrap = document.createElement('div');
   wrap.className = 'cs-wrap';
   select.parentNode.insertBefore(wrap, select);
   wrap.appendChild(select);
+
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'cs-trigger';
   wrap.appendChild(trigger);
+
   select._csTrigger = trigger;
   select._csWrap = wrap;
+
   updateTrigger(select);
+
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
     if (_activeDropdown && _ddState?.select === select) closeDropdown();
@@ -238,25 +281,28 @@ function renderDropdown(filter) {
     const sel = opt.selected ? ' selected' : '';
     const content = opts.renderOption ? opts.renderOption(opt) : esc(text);
     items += `<div class="cs-option${sel}" data-cs-val="${esc(opt.value)}">` +
-             `<span class="cs-option-body">${content}</span>` +
-             `${opt.selected ? `<span class="cs-check">${icon('check', 14)}</span>` : ''}</div>`;
+      `<span class="cs-option-body">${content}</span>` +
+      `${opt.selected ? `<span class="cs-check">${icon('check', 14)}</span>` : ''}</div>`;
   }
   if (!items) items = `<div class="cs-empty">Ничего не найдено</div>`;
+
   _activeDropdown.innerHTML = `
     ${opts.search ? `
-      <div class="cs-search">
-        ${icon('search', 14)}
-        <input type="text" class="cs-search-input"
-               placeholder="${esc(opts.searchPlaceholder || 'Поиск...')}" value="${esc(filter || '')}"/>
-      </div>` : ''}
+    <div class="cs-search">
+      ${icon('search', 14)}
+      <input type="text" class="cs-search-input"
+        placeholder="${esc(opts.searchPlaceholder || 'Поиск...')}" value="${esc(filter || '')}"/>
+    </div>` : ''}
     <div class="cs-options">${items}</div>
   `;
+
   if (opts.search) {
     const si = _activeDropdown.querySelector('.cs-search-input');
     si.addEventListener('input', () => renderDropdown(si.value));
     si.addEventListener('click', (e) => e.stopPropagation());
     setTimeout(() => si.focus(), 50);
   }
+
   _activeDropdown.querySelectorAll('.cs-option').forEach(o => {
     o.addEventListener('click', (e) => { e.stopPropagation(); selectOption(select, o.dataset.csVal); });
   });
@@ -274,41 +320,21 @@ export function closeDropdown() {
   _ddState = null;
   document.removeEventListener('click', _onDdOutside, { capture: true });
 }
+
 function _onDdOutside(e) {
   const trig = _ddState?.select?._csTrigger;
   if (_activeDropdown && !_activeDropdown.contains(e.target) && (!trig || !trig.contains(e.target))) closeDropdown();
-}
-
-// ═══ Общее позиционирование поповера ═══
-function positionPop(pop, anchor) {
-  const rect = anchor.getBoundingClientRect();
-  const pw = pop.classList.contains('dp-pop') ? 300 : Math.min(rect.width, 320);
-  let left = rect.left;
-  if (left + pw > window.innerWidth - 10) left = window.innerWidth - pw - 10;
-  if (left < 10) left = 10;
-  pop.style.width = pw + 'px';
-  pop.style.left = left + 'px';
-  let top = rect.bottom + 6;
-  pop.style.top = top + 'px';
-  requestAnimationFrame(() => {
-    const ph = pop.offsetHeight;
-    if (top + ph > window.innerHeight - 10) {
-      top = rect.top - ph - 6;
-      if (top < 10) top = 10;
-      pop.style.top = top + 'px';
-    }
-  });
 }
 
 // ═══════════════════════════════════════════════
 //  3. CONFIRM (замена нативного)
 // ═══════════════════════════════════════════════
 /**
-* Стилизованный confirm. Возвращает Promise<boolean>.
-* @param {string} message
-* @param {object} opts — { okText, cancelText, danger }
-* @returns {Promise<boolean>}
-*/
+ * Стилизованный confirm. Возвращает Promise<boolean>.
+ * @param {string} message
+ * @param {object} opts — { okText, cancelText, danger }
+ * @returns {Promise<boolean>}
+ */
 export function showConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
@@ -337,16 +363,284 @@ export function showConfirm(message, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  4. АВТО-УЛУЧШЕНИЕ ФОРМЫ
+//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.7.0)
 // ═══════════════════════════════════════════════
 /**
-* Проходит по контейнеру и применяет кастомные контролы:
-*   — все <select>            → кастомный селект (поиск при длинных списках)
-*   — все <input type="date"> → дата-пикер
-* Для особых случаев (иконки, точный поиск) вызывайте attachCustomSelect отдельно.
-* @param {HTMLElement} container
-* @param {object} baseOpts — дефолтные opts для селектов
-*/
+ * Группа чипов для множественного выбора.
+ * Используется для форматов книги (бумажная / электронная / аудио).
+ *
+ * Значение хранится в скрытом input как JSON-массив.
+ *
+ * @param {HTMLElement} container — контейнер для чипов
+ * @param {object} opts
+ *   options {Array<{value, label, icon}>} — варианты
+ *   values {string[]} — начальные выбранные значения
+ *   inputId {string} — id скрытого input для хранения значения
+ *   single {boolean} — если true, выбор только одного (radio-поведение)
+ *   onChange {function} — колбэк при изменении (values) => void
+ * @returns {object} — { getValues, setValues }
+ */
+export function attachChipGroup(container, opts = {}) {
+  const options = opts.options || [];
+  let values = new Set(opts.values || []);
+  const single = opts.single || false;
+
+  // Скрытый input для хранения значения
+  let hiddenInput = null;
+  if (opts.inputId) {
+    hiddenInput = document.getElementById(opts.inputId);
+    if (!hiddenInput) {
+      hiddenInput = document.createElement('input');
+      hiddenInput.type = 'hidden';
+      hiddenInput.id = opts.inputId;
+      container.appendChild(hiddenInput);
+    }
+    hiddenInput.value = JSON.stringify([...values]);
+  }
+
+  function render() {
+    container.querySelectorAll('.cg-chip').forEach(c => c.remove());
+    options.forEach(opt => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'cg-chip' + (values.has(opt.value) ? ' active' : '');
+      chip.dataset.cgVal = opt.value;
+      chip.innerHTML = `${opt.icon ? `<span class="cg-icon">${opt.icon}</span>` : ''}${esc(opt.label)}`;
+      chip.addEventListener('click', () => {
+        if (single) {
+          values = new Set(values.has(opt.value) ? [] : [opt.value]);
+        } else {
+          if (values.has(opt.value)) values.delete(opt.value);
+          else values.add(opt.value);
+        }
+        syncValue();
+        render();
+        if (opts.onChange) opts.onChange([...values]);
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  function syncValue() {
+    if (hiddenInput) {
+      hiddenInput.value = JSON.stringify([...values]);
+      hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  render();
+
+  return {
+    getValues: () => [...values],
+    setValues: (newVals) => { values = new Set(newVals); syncValue(); render(); },
+  };
+}
+
+// ═══════════════════════════════════════════════
+//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.7.0)
+// ═══════════════════════════════════════════════
+/**
+ * Поле ввода с чипами и автокомплитом.
+ * Используется для тропов в форме книги.
+ *
+ * Значение хранится в скрытом input как JSON-массив строк.
+ *
+ * @param {HTMLElement} container — контейнер
+ * @param {object} opts
+ *   inputId {string} — id скрытого input
+ *   suggestions {string[]|function} — подсказки (массив или fn(query) => string[])
+ *   values {string[]} — начальные значения
+ *   placeholder {string}
+ *   maxSuggestions {number} — максимум подсказок (по умолчанию 8)
+ *   onChange {function} — колбэк (values) => void
+ * @returns {object} — { getValues, setValues, addValue }
+ */
+export function attachChipInput(container, opts = {}) {
+  let values = [...(opts.values || [])];
+  const maxSug = opts.maxSuggestions || 8;
+
+  // Скрытый input
+  let hiddenInput = null;
+  if (opts.inputId) {
+    hiddenInput = document.getElementById(opts.inputId);
+    if (!hiddenInput) {
+      hiddenInput = document.createElement('input');
+      hiddenInput.type = 'hidden';
+      hiddenInput.id = opts.inputId;
+      container.appendChild(hiddenInput);
+    }
+    hiddenInput.value = JSON.stringify(values);
+  }
+
+  // Обёртка
+  const wrap = document.createElement('div');
+  wrap.className = 'ci-wrap';
+  container.appendChild(wrap);
+
+  // Чипы + input в одной строке
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'ci-chips';
+  wrap.appendChild(chipsRow);
+
+  const textInput = document.createElement('input');
+  textInput.type = 'text';
+  textInput.className = 'ci-input';
+  textInput.placeholder = opts.placeholder || 'Введите и нажмите Enter...';
+  textInput.autocomplete = 'off';
+  chipsRow.appendChild(textInput);
+
+  // Dropdown подсказок
+  const sugBox = document.createElement('div');
+  sugBox.className = 'ci-suggestions hidden';
+  wrap.appendChild(sugBox);
+
+  function syncValue() {
+    if (hiddenInput) {
+      hiddenInput.value = JSON.stringify(values);
+      hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  function renderChips() {
+    chipsRow.querySelectorAll('.ci-chip').forEach(c => c.remove());
+    values.forEach((val, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'ci-chip';
+      chip.innerHTML = `${esc(val)}<button type="button" class="ci-chip-del" data-ci-idx="${i}">${icon('close', 10)}</button>`;
+      chipsRow.insertBefore(chip, textInput);
+    });
+    chipsRow.querySelectorAll('.ci-chip-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        values.splice(parseInt(btn.dataset.ciIdx), 1);
+        syncValue();
+        renderChips();
+        if (opts.onChange) opts.onChange([...values]);
+      });
+    });
+  }
+
+  function getSuggestions(query) {
+    let sugs = [];
+    if (typeof opts.suggestions === 'function') {
+      sugs = opts.suggestions(query) || [];
+    } else if (Array.isArray(opts.suggestions)) {
+      const q = (query || '').toLowerCase().trim();
+      sugs = opts.suggestions.filter(s =>
+        !values.includes(s) && (!q || s.toLowerCase().includes(q))
+      );
+    }
+    return sugs.slice(0, maxSug);
+  }
+
+  function renderSuggestions() {
+    const q = textInput.value.trim();
+    const sugs = getSuggestions(q);
+    if (sugs.length === 0) {
+      sugBox.classList.add('hidden');
+      sugBox.innerHTML = '';
+      return;
+    }
+    sugBox.classList.remove('hidden');
+    sugBox.innerHTML = sugs.map(s =>
+      `<div class="ci-sug" data-ci-sug="${esc(s)}">${icon('heartHands', 12)} ${esc(s)}</div>`
+    ).join('');
+    sugBox.querySelectorAll('.ci-sug').forEach(el => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // не терять фокус
+        addValue(el.dataset.ciSug);
+        textInput.value = '';
+        renderSuggestions();
+      });
+    });
+  }
+
+  function addValue(val) {
+    const v = val.trim();
+    if (!v || values.includes(v)) return;
+    values.push(v);
+    syncValue();
+    renderChips();
+    if (opts.onChange) opts.onChange([...values]);
+  }
+
+  textInput.addEventListener('input', renderSuggestions);
+  textInput.addEventListener('focus', renderSuggestions);
+  textInput.addEventListener('blur', () => {
+    setTimeout(() => sugBox.classList.add('hidden'), 150);
+  });
+  textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const v = textInput.value.replace(/,/g, '').trim();
+      if (v) {
+        addValue(v);
+        textInput.value = '';
+        renderSuggestions();
+      }
+    }
+    if (e.key === 'Backspace' && !textInput.value && values.length > 0) {
+      values.pop();
+      syncValue();
+      renderChips();
+      if (opts.onChange) opts.onChange([...values]);
+    }
+  });
+
+  renderChips();
+
+  return {
+    getValues: () => [...values],
+    setValues: (newVals) => { values = [...newVals]; syncValue(); renderChips(); },
+    addValue,
+  };
+}
+
+// ═══════════════════════════════════════════════
+//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.7.0)
+// ═══════════════════════════════════════════════
+/**
+ * Кастомный селект + кнопка «Добавить своё».
+ * Используется для площадки эл. книги (ЛитРес, Яндекс Книги, Bookmate...).
+ *
+ * @param {HTMLSelectElement} select
+ * @param {object} opts
+ *   allowCustom {boolean} — разрешить добавление своего значения
+ *   customLabel {string} — текст кнопки (по умолчанию «Другое...»)
+ *   onCustom {function} — колбэк при выборе «Другое»
+ *   ...остальные opts из attachCustomSelect
+ */
+export function attachSelectWithCustom(select, opts = {}) {
+  attachCustomSelect(select, opts);
+
+  if (!opts.allowCustom) return;
+
+  // Добавляем кнопку «Другое» после триггера
+  const trigger = select._csTrigger;
+  if (!trigger) return;
+
+  const customBtn = document.createElement('button');
+  customBtn.type = 'button';
+  customBtn.className = 'cs-custom-btn';
+  customBtn.innerHTML = `${icon('plus', 13)} ${esc(opts.customLabel || 'Другое...')}`;
+  customBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (opts.onCustom) opts.onCustom();
+  });
+  trigger.parentNode.appendChild(customBtn);
+}
+
+// ═══════════════════════════════════════════════
+//  7. АВТО-УЛУЧШЕНИЕ ФОРМЫ
+// ═══════════════════════════════════════════════
+/**
+ * Проходит по контейнеру и применяет кастомные контролы:
+ *   — все <select>            → кастомный селект (поиск при длинных списках)
+ *   — все <input type="date"> → дата-пикер
+ * Для особых случаев (иконки, точный поиск) вызывайте attachCustomSelect отдельно.
+ * @param {HTMLElement} container
+ * @param {object} baseOpts — дефолтные opts для селектов
+ */
 export function enhanceForm(container, baseOpts = {}) {
   if (!container) return;
   container.querySelectorAll('select').forEach(sel => {
@@ -364,7 +658,7 @@ export function closeAllPopups() {
 }
 
 // ═══════════════════════════════════════════════
-//  5. СТИЛИ (инжектируются один раз)
+//  8. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
 const UIKIT_STYLES = `
 /* ── Дата-пикер ── */
@@ -448,6 +742,17 @@ const UIKIT_STYLES = `
 .cs-check { color:var(--accent); display:inline-flex; flex-shrink:0; }
 .cs-empty { padding:16px; text-align:center; color:var(--text-muted); font-size:.85rem; }
 
+/* v3.7.0: кнопка «Другое» для селекта */
+.cs-custom-btn {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:8px 14px; margin-top:6px;
+  font-size:.8rem; font-weight:700;
+  color:var(--accent); background:var(--accent-dim);
+  border:1px solid var(--accent-strong); border-radius:var(--radius-sm);
+  transition:all .15s var(--ease);
+}
+.cs-custom-btn:hover { background:var(--accent-strong); transform:translateY(-1px); }
+
 /* ── Confirm ── */
 .ui-confirm-overlay {
   position:fixed; inset:0; z-index:800;
@@ -474,7 +779,85 @@ const UIKIT_STYLES = `
 .ui-confirm-ok:hover { background:var(--accent-hover); transform:translateY(-1px); }
 .ui-confirm-ok.danger { background:var(--red); color:#fff; }
 .ui-confirm-ok.danger:hover { background:var(--red); filter:brightness(1.12); }
+
+/* ── v3.7.0: Chip Group (множественный выбор) ── */
+.cg-chip {
+  display:inline-flex; align-items:center; gap:7px;
+  padding:8px 15px; border-radius:16px;
+  font-size:.82rem; font-weight:700;
+  background:var(--bg-input); border:1.5px solid var(--border-soft);
+  color:var(--text-secondary);
+  transition:all .18s var(--ease);
+  cursor:pointer;
+}
+.cg-chip:hover { border-color:var(--border); transform:translateY(-1px); }
+.cg-chip.active {
+  background:var(--accent-dim);
+  border-color:var(--accent) !important;
+  color:var(--accent);
+  font-weight:800;
+  box-shadow:0 2px 8px rgba(232,163,61,.15);
+}
+.cg-icon { display:inline-flex; align-items:center; }
+
+/* ── v3.7.0: Chip Input (автокомплит для тропов) ── */
+.ci-wrap { position:relative; }
+.ci-chips {
+  display:flex; flex-wrap:wrap; gap:6px;
+  padding:8px 10px;
+  background:var(--bg-input); border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.ci-chips:focus-within {
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-dim);
+}
+.ci-chip {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 8px 4px 12px; border-radius:12px;
+  font-size:.78rem; font-weight:700;
+  background:var(--pink-dim); color:var(--pink);
+  border:1px solid rgba(217,138,168,.3);
+  animation:popIn .2s var(--ease-bounce);
+}
+.ci-chip-del {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:16px; height:16px; border-radius:50%;
+  color:var(--pink); background:transparent;
+  transition:background .15s;
+  padding:0;
+}
+.ci-chip-del:hover { background:rgba(217,138,168,.3); }
+.ci-input {
+  flex:1; min-width:120px;
+  background:transparent !important; border:none !important;
+  outline:none !important; box-shadow:none !important;
+  color:var(--text-primary); font-size:.88rem;
+  padding:4px 2px !important;
+}
+.ci-input::placeholder { color:var(--text-muted); }
+.ci-suggestions {
+  position:absolute; top:100%; left:0; right:0; z-index:50;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:var(--radius-sm); box-shadow:var(--shadow);
+  max-height:200px; overflow-y:auto;
+  margin-top:4px;
+  animation:popIn .15s var(--ease);
+}
+.ci-suggestions.hidden { display:none; }
+.ci-sug {
+  display:flex; align-items:center; gap:8px;
+  padding:9px 12px;
+  font-size:.84rem; color:var(--text-secondary);
+  cursor:pointer;
+  transition:all .13s var(--ease);
+}
+.ci-sug:hover {
+  background:var(--accent-dim); color:var(--accent);
+}
 `;
+
 if (!document.getElementById('uikit-styles')) {
   const style = document.createElement('style');
   style.id = 'uikit-styles';

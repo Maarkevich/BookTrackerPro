@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — sw.js
-// 🔖 v3.6.0 | 2026-08-04
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 Service Worker: полный оффлайн
 //
 //    Стратегии кеширования:
@@ -11,17 +11,18 @@
 //      🖼️ Обложки (CDN)      → cache-first (долгое хранение)
 //      📷 OCR (Tesseract)    → precache (полный оффлайн)
 //
-//    Новое в 3.6.0:
-//      — CACHE_NAME → btp-v3.6.0 (сброс кеша при обновлении)
-//      — Добавлены модули: utils.js, icons.js, uikit.js, search.js
-//      — microlink.js в app shell
-//      — api.microlink.io в списке API (network-only)
+//    Новое в 3.7.0:
+//      — CACHE_NAME → btp-v3.7.0 (сброс кеша при обновлении)
+//      — Добавлены модули: utils.js, uikit.js, icons.js,
+//        search.js, microlink.js (из v3.6.0)
+//      — api.microlink.io + pro.microlink.io в списке API
+//      — Обновлены версии всех модулей (?v=3.7.0)
 //
 // ⚠️ При обновлении версии:
 //    1. Измените CACHE_NAME ниже
 //    2. Измените ?v= в index.html
 //    3. Измените version в version.json
-//    Или: bash bump.sh 3.7.0
+//    Или: bash bump.sh 3.8.0
 // ─────────────────────────────────────────────
 
 // ═══════════════════════════════════════════════
@@ -29,7 +30,7 @@
 // ═══════════════════════════════════════════════
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
-const CACHE_NAME = 'btp-v3.6.0';
+const CACHE_NAME = 'btp-v3.7.0';
 
 // Базовый путь (GitHub Pages: /BookTrackerPro; свой домен: '')
 const BASE = '/BookTrackerPro';
@@ -41,9 +42,9 @@ const SHELL_ASSETS = [
   `${BASE}/app.css`,
   `${BASE}/app.js`,
   `${BASE}/db.js`,
-  `${BASE}/utils.js`,           // 🆕 v3.6.0: утилиты (esc, debounce, format)
+  `${BASE}/utils.js`,           // 🆕 v3.6.0: утилиты (esc, debounce, fetchT, showToast)
   `${BASE}/icons.js`,           // 🆕 v3.6.0: SVG-иконки
-  `${BASE}/uikit.js`,           // 🆕 v3.6.0: DatePicker + Select
+  `${BASE}/uikit.js`,           // 🆕 v3.6.0: DatePicker + Select + Confirm
   `${BASE}/search.js`,          // 🆕 v3.6.0: глобальный поиск
   `${BASE}/isbn.js`,
   `${BASE}/scanner.js`,

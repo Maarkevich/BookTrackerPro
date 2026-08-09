@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────
 // 📦 BookTrackerPro — isbn.js
-// 🔖 v3.5.0 | 2026-08-01
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 ISBN валидация + каскадный поиск книг
 //
 //    Каскад по ISBN:
@@ -14,8 +14,14 @@
 //      2. Open Library
 //      3. ЛитРес Catalit
 //
-//    Новое в 3.4.0 (сохранено в 3.5.0):
-//      — fetchBookFromUrl() — книга по ссылке на магазин (Microlink)
+//    Новое в 3.7.0:
+//      — fetchBookFromUrl() использует extractBookPreview()
+//        из microlink.js (возвращает merged-объект)
+//      — Резолв коротких ссылок (ozon.ru/t/...) выполняется
+//        в microlink.js автоматически
+//      — retry с exponential backoff в microlink.js
+//
+//    Сохранено из 3.4.0:
 //      — litresTime() — корректный формат времени для Catalit
 //      — postCatalit() — прямой запрос + CORS-прокси фолбэк
 //
@@ -25,7 +31,8 @@
 //              secret_key = 93w4jfhs8imksGo-oa3s85d6Akmkkbnsi9
 //    📋 Как заменить — README.md, раздел «ЛитРес API»
 // ─────────────────────────────────────────────
-import { extractBookFromPage } from './microlink.js';
+import { extractBookPreview } from './microlink.js';
+
 // ═══ 1. ВАЛИДАЦИЯ ISBN ═══
 export function cleanISBN(input) {
 return (input || '').replace(/[\s\-–—]/g, '').toUpperCase();
@@ -96,12 +103,13 @@ return null;
 * Извлекает данные книги по URL страницы магазина
 * (ЛитРес, Book24, Ozon, Читай-город и т.п.).
 *
+* v3.7.0: использует extractBookPreview() из microlink.js,
+* который возвращает { merged, fields, url, source }.
+* Возвращаем merged-объект для совместимости с fillFormFromResult.
+*
 * Microlink выступает как CORS-прокси + парсер OG-тегов и JSON-LD,
 * поэтому работает из браузера без собственного сервера.
 * Покрывает ВСЕ книги РФ, включая новинки, которых нет в Google/OL.
-*
-* В 3.5.0 Microlink учитывает API-ключ (pro-тариф), если он задан
-* в Настройках — ключ устанавливается глобально в microlink.js.
 *
 * @param {string} url — ссылка на страницу книги
 * @returns {Promise<object|null>} — формат как у fetchBookByIsbn (source: 'microlink')
@@ -109,8 +117,8 @@ return null;
 export async function fetchBookFromUrl(url) {
 if (!url || !/^https?:\/\//i.test(url)) return null;
 try {
-const data = await extractBookFromPage(url);
-if (data && data.title) return data;
+const result = await extractBookPreview(url);
+if (result && result.merged && result.merged.title) return result.merged;
 } catch (e) {
 console.warn('[ISBN] fetchBookFromUrl:', e.message);
 }
@@ -256,7 +264,7 @@ return { appId: '', secretKey: '', anonymous: true };
 }
 /**
 * Время в формате, который ожидает ЛитРес:
-*   2026-08-01T15:00:00+03:00  (без миллисекунд, с таймзоной)
+*   2026-08-09T15:00:00+03:00  (без миллисекунд, с таймзоной)
 * new Date().toISOString() даёт .000Z — сервер такое отклоняет.
 */
 function litresTime() {
