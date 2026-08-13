@@ -1,6 +1,5 @@
-// ─────────────────────────────────────────────
 // 📦 BookTrackerPro — icons.js
-// 🔖 v3.7.0 | 2026-08-07
+// 🔖 v3.8.0 | 2026-08-12
 // 📝 Единая система иконок «ночная библиотека»
 //
 //    Принципы:
@@ -119,6 +118,13 @@ export const ICONS = {
   repeat:     '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   fileDoc:    '<path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15.5h6"/>',
   heartHands: '<path d="M12 21s-6.5-4-8.2-8A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8.2 6c-1.7 4-8.2 8-8.2 8z"/><path d="M9 12.5l2 2 3.5-3.5"/>',
+
+  // ── Рейтинги (перец, капля, интрига, жуть) ──
+  pepper:     '<path d="M12 3c1 2 3 3.5 3 6a3 3 0 0 1-6 0c0-2.5 2-4 3-6z"/><path d="M12 9v8M9 20h6M12 3c-1 1-2 3-1.5 5"/>',
+  droplet:    '<path d="M12 4L7 11.5a5.5 5.5 0 1 0 10 0z"/>',
+  mystery:    '<circle cx="12" cy="19" r="1.5"/><path d="M12 16v-2c2-1.5 4-3 4-6a4 4 0 0 0-8 0c0 1.5.7 2.8 2 4"/>',
+  facePalm:   '<path d="M12 4c-3 0-6 2.5-6 6v3l-2 2v2h16v-2l-2-2v-3c0-3.5-3-6-6-6z"/><path d="M9 22a3 3 0 0 0 6 0"/><path d="M9 10c0 0 1-2 3-2s3 2 3 2"/><path d="M9 14l6-4"/>',
+
 };
 
 // ═══════════════════════════════════════════════
@@ -263,3 +269,289 @@ export function contentTypeIcon(type, size = 20) {
 export function bookFormatIcon(format, size = 16) {
   return icon(BOOK_FORMAT_ICONS[format] || 'bookClosed', size);
 }
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#161210"/>
+<meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.0: жест «назад», обложка из галереи/камеры, форматы книг, тропы, теги в карточке, ручная синхронизация через JSON. Работает полностью оффлайн."/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="BookTracker"/>
+<title>Book Tracker Pro</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
+
+<!-- Стили -->
+<link rel="stylesheet" href="app.css?v=3.8.0"/>
+
+<!-- Шрифты: заголовочный + текстовый -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+
+<!-- Preload критических ресурсов (v3.8.0: + utils.js, uikit.js) -->
+<link rel="preload" href="utils.js?v=3.8.0" as="script" crossorigin/>
+<link rel="preload" href="icons.js?v=3.8.0" as="script" crossorigin/>
+<link rel="preload" href="uikit.js?v=3.8.0" as="script" crossorigin/>
+<link rel="preload" href="db.js?v=3.8.0" as="script" crossorigin/>
+<link rel="preload" href="microlink.js?v=3.8.0" as="script" crossorigin/>
+<link rel="preload" href="app.js?v=3.8.0" as="script" crossorigin/>
+</head>
+<body>
+
+<!-- ═══ Фоновая атмосфера ═══ -->
+<div class="ambient" aria-hidden="true">
+<div class="ambient-glow ambient-glow-1"></div>
+<div class="ambient-glow ambient-glow-2"></div>
+<div class="ambient-grain"></div>
+</div>
+
+<!-- ═══ Конфетти ═══ -->
+<canvas id="confetti-canvas"></canvas>
+
+<!-- ═══ Боковое меню (Drawer) ═══ -->
+<div id="backdrop" class="backdrop"></div>
+<aside id="drawer" class="drawer">
+<div class="drawer-header">
+<span class="drawer-logo">📚</span>
+<div class="drawer-title-wrap">
+<!-- v3.4.0: только «Book Tracker Pro», без подписи -->
+<span class="drawer-title">Book Tracker Pro</span>
+</div>
+<button id="drawer-close" class="icon-btn" aria-label="Закрыть">✕</button>
+</div>
+<nav class="drawer-nav">
+<!-- Основные разделы -->
+<button class="nav-item active" data-tab="books">
+<span class="nav-icon">📚</span> Мои книги
+<span class="nav-count" id="nav-count-books"></span>
+</button>
+<button class="nav-item" data-tab="content">
+<span class="nav-icon">🎬</span> Контент-план
+<span class="nav-count" id="nav-count-content"></span>
+</button>
+<button class="nav-item" data-tab="reviews">
+<span class="nav-icon">✍️</span> Отзывы
+<span class="nav-count" id="nav-count-reviews"></span>
+</button>
+<button class="nav-item" data-tab="calendar">
+<span class="nav-icon">📅</span> Календарь
+</button>
+<button class="nav-item" data-tab="challenges">
+<span class="nav-icon">🏆</span> Челленджи
+<span class="nav-count" id="nav-count-challenges"></span>
+</button>
+<button class="nav-item" data-tab="stats">
+<span class="nav-icon">📊</span> Статистика
+</button>
+
+<!-- Подборки (динамические) — заголовок кликабелен -->
+<div class="drawer-section">
+<button class="drawer-section-title" id="drawer-title-collections" title="Открыть подборки">📂 Подборки</button>
+<div id="drawer-collections"><!-- заполняется из collections.js --></div>
+<button class="nav-item sub" id="drawer-add-collection">
+<span class="nav-icon">＋</span> Новая подборка
+</button>
+</div>
+
+<!-- Серии (динамические) — заголовок кликабелен -->
+<div class="drawer-section">
+<button class="drawer-section-title" id="drawer-title-series" title="Открыть серии">📚 Серии</button>
+<div id="drawer-series"><!-- заполняется из series.js --></div>
+</div>
+
+<!-- Системные фильтры (динамические) — заголовок кликабелен -->
+<div class="drawer-section">
+<button class="drawer-section-title" id="drawer-title-filters" title="Книги с фильтрами">🔎 Фильтры</button>
+<div id="drawer-filters"><!-- заполняется из collections.js --></div>
+</div>
+
+<!-- Настройки -->
+<button class="nav-item" data-tab="settings">
+<span class="nav-icon">⚙️</span> Настройки
+</button>
+</nav>
+<div class="drawer-footer">
+<span id="drawer-version">v3.8.0</span>
+<span class="drawer-offline hidden" id="drawer-offline">📴 оффлайн</span>
+</div>
+</aside>
+
+<!-- ═══ Основное приложение ═══ -->
+<div id="app">
+<!-- Верхняя панель -->
+<header class="topbar">
+<button id="menu-btn" class="icon-btn" aria-label="Меню">☰</button>
+<!-- v3.8.0: кнопка "назад" для Android back button -->
+<button id="back-btn" class="icon-btn hidden" aria-label="Назад">←</button>
+<h1 id="page-title" class="topbar-title">Мои книги</h1>
+<div class="topbar-actions">
+<button id="search-toggle" class="icon-btn" aria-label="Поиск">🔍</button>
+<button id="scan-btn" class="icon-btn" aria-label="Сканер ISBN">📷</button>
+<button id="add-btn" class="icon-btn primary" aria-label="Добавить">＋</button>
+</div>
+</header>
+
+<!-- Глобальный поиск: строка + скоупы + теги книг -->
+<div id="search-bar" class="search-bar hidden">
+<div class="search-input-row">
+<input type="text" id="search-input" placeholder="Поиск по названию, автору, ISBN, тегу..."
+autocomplete="off" enterkeyhint="search"/>
+<button id="search-close" class="icon-btn">✕</button>
+</div>
+<div id="search-scopes" class="search-scopes"><!-- скоупы из app.js --></div>
+<div id="search-book-tags" class="search-book-tags hidden"><!-- теги книг из app.js --></div>
+</div>
+
+<!-- Активные фильтры (теги, подборки, серии) -->
+<div id="active-filters" class="active-filters hidden"></div>
+
+<!-- Панель результатов глобального поиска -->
+<div id="search-results" class="search-results hidden"></div>
+
+<!-- Контент страницы -->
+<main id="main-content" class="main-content">
+<!-- Заполняется через JS -->
+</main>
+</div>
+
+<!-- ═══ Оверлей: Форма книги ═══ -->
+<div id="form-overlay" class="overlay end hidden">
+<div class="overlay-panel">
+<div class="overlay-header">
+<button id="form-back" class="overlay-back" aria-label="Назад"></button>
+<h2 id="form-title">Новая книга</h2>
+<button id="form-close" class="icon-btn">✕</button>
+</div>
+<div id="form-body" class="overlay-body"><!-- JS --></div>
+</div>
+</div>
+
+<!-- ═══ Оверлей: Карточка книги ═══ -->
+<div id="detail-overlay" class="overlay end hidden">
+<div class="overlay-panel">
+<div class="overlay-header">
+<button id="detail-back" class="overlay-back" aria-label="Назад"></button>
+<h2 id="detail-title">Книга</h2>
+<button id="detail-close" class="icon-btn">✕</button>
+</div>
+<div id="detail-body" class="overlay-body"><!-- JS --></div>
+</div>
+</div>
+
+<!-- ═══ Оверлей: Сканер ISBN ═══ -->
+<div id="scanner-overlay" class="overlay hidden">
+<div class="scanner-container">
+<div class="scanner-header">
+<h2>📷 Сканирование ISBN</h2>
+<button id="scanner-close" class="icon-btn">✕</button>
+</div>
+<video id="scanner-video" autoplay playsinline muted></video>
+<div id="scanner-status" class="scanner-status">Наведите камеру на штрихкод</div>
+<div class="scanner-manual">
+<input type="text" id="scanner-manual-input"
+placeholder="Или введите ISBN вручную" inputmode="numeric"/>
+<button id="scanner-manual-btn" class="btn-primary">Найти</button>
+</div>
+</div>
+</div>
+
+<!-- ═══ Оверлей: Контент ═══ -->
+<div id="content-overlay" class="overlay end hidden">
+<div class="overlay-panel">
+<div class="overlay-header">
+<h2 id="content-form-title">Новый контент</h2>
+<button id="content-form-close" class="icon-btn">✕</button>
+</div>
+<div id="content-form-body" class="overlay-body"><!-- JS --></div>
+</div>
+</div>
+
+<!-- ═══ Оверлей: Отзыв ═══ -->
+<div id="review-overlay" class="overlay end hidden">
+<div class="overlay-panel">
+<div class="overlay-header">
+<h2 id="review-form-title">Отзыв</h2>
+<button id="review-form-close" class="icon-btn">✕</button>
+</div>
+<div id="review-form-body" class="overlay-body"><!-- JS --></div>
+</div>
+</div>
+
+<!-- ═══ Оверлей: Просмотр обложки ═══ -->
+<div id="cover-overlay" class="overlay hidden">
+<div class="cover-viewer">
+<button id="cover-close" class="icon-btn cover-close-btn">✕</button>
+<img id="cover-viewer-img" src="" alt="Обложка"/>
+<div class="cover-viewer-caption">
+<div id="cover-viewer-title" class="cover-viewer-title"></div>
+<div class="cover-viewer-actions">
+<button id="cover-photo-btn" class="btn-secondary">📷 Заменить фото</button>
+<button id="cover-gallery-btn" class="btn-secondary">🖼️ Из галереи</button>
+<!-- v3.4.0: выбор из галереи (без capture) -->
+<input type="file" id="cover-photo-input" accept="image/*" capture="environment" class="hidden"/>
+<input type="file" id="cover-gallery-input" accept="image/*" class="hidden"/>
+</div>
+</div>
+</div>
+</div>
+
+<!-- v3.8.0: Оверлей предпросмотра Microlink (маппинг полей) -->
+<div id="microlink-preview-overlay" class="overlay hidden">
+<div class="overlay-panel" style="max-width:540px">
+<div class="overlay-header">
+<h2>🔍 Предпросмотр данных</h2>
+<button id="microlink-preview-close" class="icon-btn">✕</button>
+</div>
+<div id="microlink-preview-body" class="overlay-body"><!-- JS --></div>
+</div>
+</div>
+
+<!-- v3.8.0: Оверлей ручной синхронизации -->
+<div id="sync-overlay" class="overlay hidden">
+<div class="overlay-panel" style="max-width:400px">
+<div class="overlay-header">
+<h2>🔄 Синхронизация</h2>
+<button id="sync-close" class="icon-btn">✕</button>
+</div>
+<div class="overlay-body">
+<p class="text-small text-muted mb-16">
+Экспортируйте данные на планшете, затем импортируйте на телефоне.
+Дубликаты не создаются — книги объединяются по ISBN/названию.
+</p>
+<button id="sync-export-btn" class="btn-primary mb-16">📤 Экспортировать JSON</button>
+<button id="sync-import-btn" class="btn-secondary">📥 Импортировать JSON</button>
+<input type="file" id="sync-import-file" accept=".json" class="hidden"/>
+<div id="sync-status" class="text-small text-muted mt-16"></div>
+</div>
+</div>
+</div>
+
+<!-- ═══ Тост ═══ -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- ═══ Баннер обновления PWA ═══ -->
+<div id="update-banner" class="update-banner hidden">
+<span>🔄 Доступна новая версия</span>
+<button id="update-apply" class="btn-small">Обновить</button>
+<button id="update-dismiss" class="icon-btn">✕</button>
+</div>
+
+<!-- ═══ Баннер установки PWA ═══ -->
+<div id="install-banner" class="install-banner hidden">
+<span>📱 Установить приложение?</span>
+<button id="install-apply" class="btn-small">Установить</button>
+<button id="install-dismiss" class="icon-btn">✕</button>
+</div>
+
+<!-- JS модуль -->
+<script type="module" src="app.js?v=3.8.0"></script>
+</body>
+</html>

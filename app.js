@@ -1,6 +1,5 @@
-// ─────────────────────────────────────────────
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.7.1-fix | 2026-08-09
+// 🔖 v3.8.0 | 2026-08-12
 // 📝 Точка входа: навигация, рендеринг, события
 //
 //    ИСПРАВЛЕНО в 3.7.1-fix:
@@ -65,7 +64,7 @@ extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
 import { registerSW, setupOnlineIndicator } from './sw-register.js';
 import { showConfirm, attachCustomSelect } from './uikit.js';
-import { icon } from './icons.js';
+import { icon, CONTENT_TYPE_ICONS } from './icons.js';
 
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ
@@ -427,6 +426,28 @@ if (DOM.drawerTitleSeries) DOM.drawerTitleSeries.innerHTML = icon('layers', 13) 
 if (DOM.drawerTitleFilters) DOM.drawerTitleFilters.innerHTML = icon('filter', 13) + ' Фильтры';
 if (DOM.formBack) DOM.formBack.innerHTML = icon('arrowLeft', 18);
 if (DOM.detailBack) DOM.detailBack.innerHTML = icon('arrowLeft', 18);
+// Замена ✕ текста на SVG во всех крестиках оверлеев
+['form-close','detail-close','scanner-close','content-form-close',
+ 'review-form-close','cover-close'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = icon('close', 18);
+});
+// Кнопка "назад" в топбаре
+const backBtn = document.getElementById('back-btn');
+if (backBtn) backBtn.innerHTML = icon('arrowLeft', 20);
+// Крестик поиска
+const searchClose = document.getElementById('search-close');
+if (searchClose) searchClose.innerHTML = icon('close', 18);
+// Крестики оверлеев microlink/sync
+['microlink-preview-close', 'sync-close'].forEach(id => {
+const el = document.getElementById(id);
+if (el) el.innerHTML = icon('close', 18);
+});
+// Крестик update/install баннеров
+['update-dismiss', 'install-dismiss'].forEach(id => {
+const el = document.getElementById(id);
+if (el) el.innerHTML = icon('close', 16);
+});
 }
 
 function handleManifestShortcuts() {
@@ -447,11 +468,12 @@ if (action || tab) history.replaceState({}, '', location.pathname);
 //  ГЛОБАЛЬНЫЙ ПОИСК
 // ═══════════════════════════════════════════════
 function openGlobalSearch() {
+DOM.mainContent.classList.add('hidden');
 DOM.searchBar.classList.remove('hidden');
 renderSearchScopes();
 renderSearchBookTags();
 performGlobalSearch();
-DOM.searchInput.focus();
+setTimeout(() => DOM.searchInput.focus(), 50);
 }
 
 function closeGlobalSearch() {
@@ -742,7 +764,7 @@ case 'collections': renderCollectionsScreen(); break;
 //  DRAWER
 // ═══════════════════════════════════════════════
 function renderDrawer() {
-DOM.navCountBooks.textContent = S.books.length || '';
+DOM.navCountBooks.textContent = S.books.filter(b => b.id !== '__no_book__').length || '';
 DOM.navCountContent.textContent = S.books.reduce((s, b) => s + (b.contentItems || []).length, 0) || '';
 DOM.navCountReviews.textContent = S.books.filter(b => b.review?.text || b.review?.rating > 0).length || '';
 DOM.navCountChallenges.textContent = S.challenges.filter(c => c.status === 'active').length || '';
@@ -826,7 +848,7 @@ renderTab(S.currentTab);
 // ═══════════════════════════════════════════════
 function renderBooksTab() {
 const mc = DOM.mainContent;
-let books = [...S.books];
+let books = S.books.filter(b => b.id !== '__no_book__');
 
 const filters = [
 { id: 'all', label: 'Все' },
@@ -935,7 +957,7 @@ const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCo
 
 const coverHtml = book.coverUrl
 ? `<img class="book-cover" src="${book.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
-: `<div class="book-cover-placeholder">📕</div>`;
+: `<div class="book-cover-placeholder">${icon('bookClosed', 32)}<span class="cover-ph-title">${esc(book.title)}</span></div>`;
 
 const priceHtml = (S.settings.showPriceInCards && book.price?.amount > 0)
 ? `<span class="book-badge badge-price">💰 ${formatPrice(book.price)}</span>` : '';
@@ -1145,8 +1167,14 @@ DOM.formBody.innerHTML = `
 </div>
 <div class="form-group"><label>Описание</label><textarea id="bf-desc" rows="3" placeholder="Аннотация...">${esc(b.description || '')}</textarea></div>
 <div class="form-group">
-<label>Обложка (URL)</label>
-<input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://..."/>
+<label>Обложка</label>
+<div class="flex gap-8 mb-8">
+<input type="file" id="bf-cover-gallery" accept="image/*" class="hidden"/>
+<input type="file" id="bf-cover-camera" accept="image/*" capture="environment" class="hidden"/>
+<button type="button" id="bf-cover-gallery-btn" class="btn-secondary" style="flex:1">🖼️ Из галереи</button>
+<button type="button" id="bf-cover-camera-btn" class="btn-secondary" style="flex:1">📷 Камера</button>
+</div>
+<input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://... или загрузите выше"/>
 <div id="bf-cover-preview" class="cover-preview hidden">
 <img id="bf-cover-preview-img" src="" alt="Предпросмотр обложки"/>
 </div>
@@ -1187,13 +1215,63 @@ ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${cur === k ?
 <h3>📖 Статус</h3>
 <div class="form-group"><label>Статус</label>
 <select id="bf-status">
-${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="${k}" ${(b.status || 'wishlist') === k ? 'selected' : ''}>${st.icon} ${st.label}</option>`).join('')}
+\${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="\${k}" \${(b.status || 'wishlist') === k ? 'selected' : ''}>\${st.icon} \${st.label}</option>`).join('')}
 </select>
 </div>
 <div class="form-row">
-<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="${b.currentPage || 0}" min="0"/></div>
-<div class="form-group"><label>Оценка (1–5)</label><input type="number" id="bf-rating" value="${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
+<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="\${b.currentPage || 0}" min="0"/></div>
+<div class="form-group"><label>Оценка ⭐ (1–5)</label><input type="number" id="bf-rating" value="\${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
 </div>
+</div>
+<div class="form-section">
+<h3>🌶️ Дополнительные оценки</h3>
+<div class="form-hint mb-8">Оценки от 0 до 5 по каждому параметру</div>
+<div class="form-row-2">
+<div class="form-group">
+<label title="Горячесть / романтика">🌶️ Перчики</label>
+<div class="extra-rating-row" data-rating-id="bf-pepper" data-max="5" data-value="${b.pepperRating || 0}">
+${[1,2,3,4,5].map(i => `<span class="extra-star${(b.pepperRating || 0) >= i ? ' filled' : ''}" data-val="${i}">🌶️</span>`).join('')}
+<input type="hidden" id="bf-pepper" value="${b.pepperRating || 0}"/>
+</div>
+</div>
+<div class="form-group">
+<label title="Слезливость">💧 Капельки</label>
+<div class="extra-rating-row" data-rating-id="bf-tear" data-max="5" data-value="${b.tearRating || 0}">
+${[1,2,3,4,5].map(i => `<span class="extra-star${(b.tearRating || 0) >= i ? ' filled' : ''}" data-val="${i}">💧</span>`).join('')}
+<input type="hidden" id="bf-tear" value="${b.tearRating || 0}"/>
+</div>
+</div>
+<div class="form-group">
+<label title="Интрига">❓ Интрига</label>
+<div class="extra-rating-row" data-rating-id="bf-intrigue" data-max="5" data-value="${b.intrigueRating || 0}">
+${[1,2,3,4,5].map(i => `<span class="extra-star${(b.intrigueRating || 0) >= i ? ' filled' : ''}" data-val="${i}">❓</span>`).join('')}
+<input type="hidden" id="bf-intrigue" value="${b.intrigueRating || 0}"/>
+</div>
+</div>
+<div class="form-group">
+<label title="Жуткость / страх">🤦 Жуткость</label>
+<div class="extra-rating-row" data-rating-id="bf-horror" data-max="5" data-value="${b.horrorRating || 0}">
+${[1,2,3,4,5].map(i => `<span class="extra-star${(b.horrorRating || 0) >= i ? ' filled' : ''}" data-val="${i}">🤦</span>`).join('')}
+<input type="hidden" id="bf-horror" value="${b.horrorRating || 0}"/>
+</div>
+</div>
+</div>
+</div>
+<div class="form-section">
+<h3>👤 Герои книги</h3>
+<div class="form-hint mb-8">Добавьте персонажей и оцените их</div>
+<div id="bf-characters-list">
+${(b.characters || []).map((ch, i) => `
+<div class="character-row" data-char-idx="${i}">
+<input type="text" class="char-name-input" value="${esc(ch.name || '')}" placeholder="Имя персонажа" style="flex:1"/>
+<div class="char-stars">
+${[1,2,3,4,5].map(s => `<span class="char-star${(ch.rating || 0) >= s ? ' filled' : ''}" data-star="${s}">★</span>`).join('')}
+<input type="hidden" class="char-rating" value="${ch.rating || 0}"/>
+</div>
+<button type="button" class="icon-btn char-del" title="Удалить">✕</button>
+</div>`).join('')}
+</div>
+<button type="button" id="bf-add-char" class="btn-secondary mt-8" style="width:100%">＋ Добавить персонажа</button>
 </div>
 <div class="form-section">
 <h3>🏷️ Теги</h3>
@@ -1298,6 +1376,33 @@ fb.querySelector('#bf-cover').addEventListener('input', debounce(updateCoverPrev
 updateCoverPreview();
 window._updateCoverPreview = updateCoverPreview;
 
+// Загрузка обложки из галереи/камеры в форме книги
+async function handleFormCoverFile(e) {
+const file = e.target.files[0];
+if (!file) return;
+e.target.value = '';
+try {
+const bitmap = await createImageBitmap(file);
+const MAX = 800;
+const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+const canvas = document.createElement('canvas');
+canvas.width = Math.round(bitmap.width * scale);
+canvas.height = Math.round(bitmap.height * scale);
+canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+bitmap.close();
+const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+fb.querySelector('#bf-cover').value = dataUrl;
+fb.querySelector('#bf-cover-preview-img').src = dataUrl;
+fb.querySelector('#bf-cover-preview').classList.remove('hidden');
+fb._localCoverFile = file;
+showToast('✅ Обложка загружена', 'success');
+} catch(err) { showToast('❌ Не удалось загрузить: ' + err.message, 'error'); }
+}
+fb.querySelector('#bf-cover-gallery-btn').addEventListener('click', () => fb.querySelector('#bf-cover-gallery').click());
+fb.querySelector('#bf-cover-camera-btn').addEventListener('click', () => fb.querySelector('#bf-cover-camera').click());
+fb.querySelector('#bf-cover-gallery').addEventListener('change', handleFormCoverFile);
+fb.querySelector('#bf-cover-camera').addEventListener('change', handleFormCoverFile);
+
 // Чипы форматов
 fb.querySelectorAll('#bf-formats .tag-pick-chip').forEach(chip => {
 chip.addEventListener('click', () => {
@@ -1335,6 +1440,78 @@ fb.querySelector('#bf-pr-fields').classList.toggle('hidden');
 fb.querySelector('#bf-joint-toggle').addEventListener('click', function() {
 this.classList.toggle('active');
 fb.querySelector('#bf-joint-fields').classList.toggle('hidden');
+});
+
+// Extra emoji ratings interaction
+fb.querySelectorAll('.extra-rating-row').forEach(row => {
+const inputId = row.dataset.ratingId;
+const input = fb.querySelector('#' + inputId);
+const stars = row.querySelectorAll('.extra-star');
+let currentVal = parseInt(input?.value || 0);
+function updateStars(val) {
+stars.forEach((s, i) => s.classList.toggle('filled', i < val));
+}
+stars.forEach(s => {
+s.style.cursor = 'pointer';
+s.style.fontSize = '1.3rem';
+s.addEventListener('click', () => {
+const val = parseInt(s.dataset.val);
+currentVal = (currentVal === val) ? 0 : val;
+if (input) input.value = currentVal;
+updateStars(currentVal);
+});
+s.addEventListener('mouseenter', () => updateStars(parseInt(s.dataset.val)));
+s.addEventListener('mouseleave', () => updateStars(currentVal));
+});
+});
+
+// Characters management
+function refreshCharList() {
+const list = fb.querySelector('#bf-characters-list');
+if (!list) return;
+list.querySelectorAll('.char-del').forEach(btn => {
+btn.addEventListener('click', () => {
+btn.closest('.character-row').remove();
+});
+});
+list.querySelectorAll('.char-star').forEach(star => {
+star.style.cursor = 'pointer';
+star.style.fontSize = '1.2rem';
+star.style.color = '#e8a33d';
+const row = star.closest('.char-stars');
+const ratingInput = row.querySelector('.char-rating');
+const allStars = row.querySelectorAll('.char-star');
+let cv = parseInt(ratingInput?.value || 0);
+function updateCharStars(v) {
+allStars.forEach((s, i) => s.classList.toggle('filled', i < v));
+}
+star.addEventListener('click', () => {
+const v = parseInt(star.dataset.star);
+cv = (cv === v) ? 0 : v;
+if (ratingInput) ratingInput.value = cv;
+updateCharStars(cv);
+});
+star.addEventListener('mouseenter', () => updateCharStars(parseInt(star.dataset.star)));
+star.addEventListener('mouseleave', () => updateCharStars(cv));
+});
+}
+refreshCharList();
+fb.querySelector('#bf-add-char')?.addEventListener('click', () => {
+const list = fb.querySelector('#bf-characters-list');
+const idx = list.children.length;
+const row = document.createElement('div');
+row.className = 'character-row';
+row.dataset.charIdx = idx;
+row.innerHTML = `
+<input type="text" class="char-name-input" placeholder="Имя персонажа" style="flex:1"/>
+<div class="char-stars">
+${[1,2,3,4,5].map(s => `<span class="char-star" data-star="${s}">★</span>`).join('')}
+<input type="hidden" class="char-rating" value="0"/>
+</div>
+<button type="button" class="icon-btn char-del" title="Удалить">✕</button>
+`;
+list.appendChild(row);
+refreshCharList();
 });
 
 fb.querySelector('#bf-save').addEventListener('click', () => saveBookForm(selectedTags, selectedFormats));
@@ -1611,6 +1788,14 @@ notes: isJoint ? f.querySelector('#bf-joint-notes').value.trim() : '',
 startDate: isJoint ? (S.books.find(b => b.id === S.editingBookId)?.jointReading?.startDate || now.slice(0, 10)) : '',
 },
 notes: f.querySelector('#bf-notes').value.trim(),
+pepperRating: parseInt(f.querySelector('#bf-pepper')?.value) || 0,
+tearRating: parseInt(f.querySelector('#bf-tear')?.value) || 0,
+intrigueRating: parseInt(f.querySelector('#bf-intrigue')?.value) || 0,
+horrorRating: parseInt(f.querySelector('#bf-horror')?.value) || 0,
+characters: [...(f.querySelectorAll('#bf-characters-list .character-row') || [])].map(row => ({
+name: row.querySelector('.char-name-input')?.value.trim() || '',
+rating: parseInt(row.querySelector('.char-rating')?.value) || 0,
+})).filter(ch => ch.name),
 dateAdded: S.editingBookId ? (S.books.find(b => b.id === S.editingBookId)?.dateAdded || now) : now,
 updatedAt: now,
 };
@@ -1642,16 +1827,32 @@ await putTag({ name: t, color: pickTagColor(S.tags.length) });
 }
 
 // Обложка → Blob
-if (bookData.cover && bookData.cover.startsWith('http')) {
+const coverVal = bookData.cover;
+if (coverVal && coverVal.startsWith('data:')) {
+// Локальная обложка из галереи/камеры — конвертируем dataURL → Blob
 try {
-const blob = await (await fetch(bookData.cover)).blob();
+const arr = coverVal.split(',');
+const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+const bytes = atob(arr[1]);
+const buf = new Uint8Array(bytes.length);
+for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+const blob = new Blob([buf], { type: mime });
+if (isValidCoverBlob(blob)) {
+await saveCover(bookData.id, blob);
+bookData.coverUrl = URL.createObjectURL(blob);
+bookData.cover = '';
+}
+} catch(err) { console.warn('[Cover] dataURL save failed:', err); }
+} else if (coverVal && coverVal.startsWith('http')) {
+try {
+const blob = await (await fetch(coverVal)).blob();
 if (isValidCoverBlob(blob)) {
 await saveCover(bookData.id, blob);
 bookData.coverUrl = URL.createObjectURL(blob);
 } else {
-bookData.coverUrl = bookData.cover;
+bookData.coverUrl = coverVal;
 }
-} catch { bookData.coverUrl = bookData.cover; }
+} catch { bookData.coverUrl = coverVal; }
 }
 
 await putBook(bookData);
@@ -1720,7 +1921,7 @@ DOM.detailBody.innerHTML = `
 <div class="detail-hero">
 ${book.coverUrl
 ? `<img class="detail-cover" id="detail-cover-img" src="${book.coverUrl}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
-: `<div class="detail-cover-placeholder">📕</div>`}
+: `<div class="detail-cover-placeholder" id="detail-cover-ph" style="cursor:pointer" title="Добавить обложку">${icon('bookClosed', 52)}<span class="cover-ph-title">${esc(book.title)}</span></div>`}
 <div style="flex:1;min-width:0">
 <div class="detail-title">${esc(book.title)}</div>
 <div class="detail-author">${esc(book.author)}</div>
@@ -1782,6 +1983,29 @@ ${q.used ? '<span class="quote-used">✅</span>' : ''}
 </div>
 <button id="dq-ocr" class="btn-secondary mt-8" style="width:100%">📷 Сфотографировать цитату (OCR)</button>
 </div>
+${(book.pepperRating > 0 || book.tearRating > 0 || book.intrigueRating > 0 || book.horrorRating > 0) ? `
+<div class="detail-section">
+<h3>🎭 Характеристики</h3>
+<div class="extra-ratings-display">
+${book.pepperRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">🌶️ Горячесть</span><span class="extra-dots">${'🌶️'.repeat(book.pepperRating)}${'·'.repeat(5-book.pepperRating)}</span></div>` : ''}
+${book.tearRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">💧 Слёзы</span><span class="extra-dots">${'💧'.repeat(book.tearRating)}${'·'.repeat(5-book.tearRating)}</span></div>` : ''}
+${book.intrigueRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">❓ Интрига</span><span class="extra-dots">${'❓'.repeat(book.intrigueRating)}${'·'.repeat(5-book.intrigueRating)}</span></div>` : ''}
+${book.horrorRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">🤦 Жуть</span><span class="extra-dots">${'🤦'.repeat(book.horrorRating)}${'·'.repeat(5-book.horrorRating)}</span></div>` : ''}
+</div>
+</div>
+` : ''}
+${(book.characters || []).length > 0 ? `
+<div class="detail-section">
+<h3>👤 Герои книги</h3>
+<div class="characters-list">
+${(book.characters || []).map(ch => `
+<div class="character-item">
+<span class="character-name">${esc(ch.name)}</span>
+<span class="character-stars">${'⭐'.repeat(ch.rating || 0)}${'☆'.repeat(5-(ch.rating||0))}</span>
+</div>`).join('')}
+</div>
+</div>
+` : ''}
 <div class="detail-section">
 <h3>✍️ Отзыв</h3>
 ${review.text || review.rating > 0 ? `
@@ -1818,6 +2042,8 @@ return `<div class="detail-meta-item"><div class="detail-meta-label">${label}</d
 const db = DOM.detailBody;
 const coverImg = db.querySelector('#detail-cover-img');
 if (coverImg) coverImg.addEventListener('click', () => openCoverViewer(book));
+const coverPh = db.querySelector('#detail-cover-ph');
+if (coverPh) coverPh.addEventListener('click', () => openCoverViewer(book));
 
 db.querySelector('.status-btn').addEventListener('click', (e) => {
 e.stopPropagation();
@@ -1892,9 +2118,25 @@ openOverlay(DOM.detailOverlay);
 let _coverBookId = null;
 
 function openCoverViewer(book) {
-if (!book.coverUrl) { showToast('Нет обложки', 'info'); return; }
 _coverBookId = book.id;
+if (book.coverUrl) {
 DOM.coverViewerImg.src = book.coverUrl;
+DOM.coverViewerImg.style.display = '';
+const existingPh = DOM.coverOverlay.querySelector('.cover-viewer-empty');
+if (existingPh) existingPh.style.display = 'none';
+} else {
+DOM.coverViewerImg.src = '';
+DOM.coverViewerImg.style.display = 'none';
+// Show placeholder
+let emptyPh = DOM.coverOverlay.querySelector('.cover-viewer-empty');
+if (!emptyPh) {
+emptyPh = document.createElement('div');
+emptyPh.className = 'cover-viewer-empty';
+emptyPh.innerHTML = `${icon('bookClosed', 64)}<span>Обложка не добавлена</span><span class="text-small">Нажмите «Из галереи» или «Заменить фото»</span>`;
+DOM.coverOverlay.querySelector('.cover-viewer').insertBefore(emptyPh, DOM.coverViewerImg.nextSibling);
+}
+emptyPh.style.display = '';
+}
 DOM.coverViewerTitle.textContent = `${book.title} — ${book.author}`;
 openOverlay(DOM.coverOverlay);
 }
@@ -2091,13 +2333,47 @@ const dayContent = [];
 for (const book of S.books) {
 for (const c of (book.contentItems || [])) {
 if (c.plannedDate === dateStr || c.publishedDate === dateStr) {
-dayContent.push({ ...c, bookTitle: book.title });
+dayContent.push({ ...c, bookTitle: book.title, bookId: book.id });
 }
 }
 }
 if (dayContent.length === 0) { showToast(`📅 ${dateStr}: нет контента`, 'info'); return; }
-const list = dayContent.map(c => `${CONTENT_ICONS[c.type] || '🎬'} ${c.title || CONTENT_LABELS[c.type]} — ${c.bookTitle}`).join('\n');
-alert(`📅 ${dateStr}\n${list}`);
+const ov = document.createElement('div');
+ov.className = 'overlay';
+ov.style.zIndex = '1100';
+ov.innerHTML = `
+<div class="overlay-panel" style="max-width:420px">
+<div class="overlay-header">
+<h2>${icon('calendar', 18)} ${esc(dateStr)}</h2>
+<button class="icon-btn day-ov-close">${icon('close', 18)}</button>
+</div>
+<div class="overlay-body">
+${dayContent.map(c => `
+<div class="content-list-item content-clickable"
+data-book-id="${c.bookId}" data-content-id="${c.id}"
+style="cursor:pointer;margin-bottom:8px">
+<span class="content-list-icon">${icon(CONTENT_TYPE_ICONS[c.type] || 'film', 20)}</span>
+<div class="content-list-info">
+<div class="content-list-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
+<div class="content-list-sub">${esc(c.bookTitle)}</div>
+</div>
+<span class="content-list-status status-${c.status}">${CONTENT_STATUS_LABELS[c.status] || c.status}</span>
+</div>`).join('')}
+</div>
+</div>`;
+document.body.appendChild(ov);
+trackOverlay(ov);
+const closeDay = () => { untrackOverlay(ov); ov.remove(); };
+ov.querySelector('.day-ov-close').addEventListener('click', closeDay);
+ov.addEventListener('click', (e) => { if (e.target === ov) closeDay(); });
+ov.querySelectorAll('.content-clickable').forEach(el => {
+el.addEventListener('click', () => {
+const bk = S.books.find(b => b.id === el.dataset.bookId);
+const item = (bk?.contentItems || []).find(c => c.id === el.dataset.contentId);
+closeDay();
+if (item) openContentForm(item, el.dataset.bookId);
+});
+});
 }
 
 // ═══════════════════════════════════════════════
@@ -2541,3 +2817,4 @@ showToast('✅ Приложение установлено!', 'success');
 //  ЗАПУСК
 // ═══════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', init);
+// ─────────────────────────────────────────────

@@ -1,6 +1,5 @@
-// ─────────────────────────────────────────────
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.7.1-fix | 2026-08-09
+// 🔖 v3.8.0-fix | 2026-08-12
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 5 (схема не меняется)
@@ -15,7 +14,7 @@
 //      — Теги
 //      — Контент и отзывы (вложенные в книгу)
 //      — Экспорт/импорт (JSON)
-//      — Отчётность (reportSent / reportDate) v3.7.0
+//      — Отчётность (reportSent / reportDate) v3.8.0
 //      — isValidCoverBlob / repairCovers v3.5.0+
 // ─────────────────────────────────────────────
 
@@ -535,6 +534,25 @@ export async function addContentToBook(bookId, contentItem) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
+    if (bookId === '__no_book__') {
+      // Виртуальная книга для контента без книги
+      const req2 = store.get('__no_book__');
+      req2.onsuccess = () => {
+        let book = req2.result || {
+          id: '__no_book__', title: '— Без книги —', author: '',
+          status: 'added', contentItems: [], dateAdded: new Date().toISOString(),
+        };
+        if (!book.contentItems) book.contentItems = [];
+        ensureContentItemFields(contentItem);
+        contentItem.bookId = '__no_book__';
+        book.contentItems.push(contentItem);
+        book.updatedAt = new Date().toISOString();
+        store.put(book);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      return;
+    }
     const req = store.get(bookId);
     req.onsuccess = () => {
       const book = req.result;

@@ -1,6 +1,5 @@
-// ─────────────────────────────────────────────
 // 📦 BookTrackerPro — content.js
-// 🔖 v3.7.0 | 2026-08-09
+// 🔖 v3.8.0 | 2026-08-12
 // 📝 Контент-план для бук-блогера
 //
 //    Типы контента:
@@ -29,7 +28,7 @@ import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks
 import { esc, showToast } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
-import { attachCustomSelect, attachDatePicker } from './uikit.js';
+import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
 // ═══════════════════════════════════════════════
 //  КОНСТАНТЫ
 // ═══════════════════════════════════════════════
@@ -83,7 +82,7 @@ for (const item of (book.contentItems || [])) {
 allContent.push({
 ...item,
 bookId: book.id,
-bookTitle: book.title,
+bookTitle: book.id === '__no_book__' ? '— Без книги —' : book.title,
 bookAuthor: book.author,
 bookCover: book.coverUrl || '',
 });
@@ -324,10 +323,10 @@ const defaultPlatform = 'youtube';
 body.innerHTML = `
 <!-- Книга -->
 <div class="form-group">
-<label>${icon('bookClosed', 13)} Книга *</label>
+<label>${icon('bookClosed', 13)} Книга</label>
 <select id="cf-book" required>
-<option value="">— Выберите книгу —</option>
-${books.map(b => `
+<option value="">— Без книги (общий контент) —</option>
+${books.filter(b => b.id !== '__no_book__').map(b => `
 <option value="${b.id}" ${(c.bookId || preselectedBookId) === b.id ? 'selected' : ''}>
 ${esc(b.title)} — ${esc(b.author)}
 </option>
@@ -449,7 +448,7 @@ body.querySelector('#cf-report-fields').classList.toggle('hidden');
 // Сохранение
 body.querySelector('#cf-save').addEventListener('click', async () => {
 const bookId = body.querySelector('#cf-book').value;
-if (!bookId) { showToast('⚠️ Выберите книгу', 'error'); return; }
+
 const isReportSent = body.querySelector('#cf-report-toggle').classList.contains('active');
 const contentData = {
 id: c.id || `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -465,13 +464,21 @@ reportSent: isReportSent,
 reportDate: isReportSent ? body.querySelector('#cf-report-date').value : '',
 createdAt: c.createdAt || new Date().toISOString(),
 updatedAt: new Date().toISOString(),
+bookId: bookId || null,
 };
 try {
+const finalBookId = bookId || '__no_book__';
 if (item) {
-await updateContentInBook(bookId, contentData.id, contentData);
+const oldBookId = item.bookId || c.bookId || bookId;
+if (oldBookId && oldBookId !== finalBookId) {
+await removeContentFromBook(oldBookId, contentData.id);
+await addContentToBook(finalBookId, contentData);
+} else {
+await updateContentInBook(finalBookId, contentData.id, contentData);
+}
 showToast('✅ Контент обновлён', 'success');
 } else {
-await addContentToBook(bookId, contentData);
+await addContentToBook(finalBookId, contentData);
 showToast('✅ Контент добавлен', 'success');
 }
 closeContentForm();
@@ -484,9 +491,11 @@ console.error('[Content] Save error:', e);
 const delBtn = body.querySelector('#cf-delete');
 if (delBtn) {
 delBtn.addEventListener('click', async () => {
-if (!confirm('Удалить этот контент?')) return;
+const ok = await showConfirm('Удалить этот контент?', { danger: true, okText: 'Удалить' });
+if (!ok) return;
 try {
-await removeContentFromBook(body.querySelector('#cf-book').value, c.id);
+const bookId = body.querySelector('#cf-book').value || c.bookId;
+await removeContentFromBook(bookId, c.id);
 showToast('🗑️ Контент удалён', 'info');
 closeContentForm();
 document.dispatchEvent(new CustomEvent('data-changed'));

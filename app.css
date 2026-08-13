@@ -1,6 +1,7 @@
+📦 BookTrackerPro — app.css
 /* ─────────────────────────────────────────────
 📦 BookTrackerPro — app.css
-🔖 v3.7.0 | 2026-08-09
+🔖 v3.8.0 | 2026-08-12
 📝 Дизайн: «ночная библиотека»
 Тёплый тёмный + янтарный акцент
 Display: Unbounded · Body: Manrope
@@ -1475,4 +1476,193 @@ animation-duration: .01ms !important;
 animation-iteration-count: 1 !important;
 transition-duration: .01ms !important;
 }
+}
+// ─────────────────────────────────────────────
+
+/* ═══════════════════════════════════════════════
+   v3.8.0: Обложки-плейсхолдеры, доп.рейтинги, герои
+═══════════════════════════════════════════════ */
+
+/* Плейсхолдер обложки с иконкой и названием */
+.book-cover-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 4px;
+  color: var(--text-muted);
+  min-height: 90px;
+  overflow: hidden;
+}
+.cover-ph-title {
+  font-size: .64rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-secondary);
+  line-height: 1.2;
+  max-height: 2.4em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.detail-cover-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 110px;
+  min-height: 160px;
+  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: border-color .2s, background .2s;
+}
+.detail-cover-placeholder:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.detail-cover-placeholder .cover-ph-title {
+  font-size: .72rem;
+  padding: 0 6px;
+  max-height: 3em;
+  -webkit-line-clamp: 3;
+}
+
+/* Доп. оценки в форме */
+.extra-rating-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.extra-star {
+  font-size: 1.3rem;
+  cursor: pointer;
+  opacity: .35;
+  transition: opacity .15s, transform .15s;
+  user-select: none;
+}
+.extra-star.filled { opacity: 1; }
+.extra-star:hover { transform: scale(1.2); }
+
+/* Доп. оценки в карточке детали */
+.extra-ratings-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.extra-rating-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.extra-label {
+  font-size: .8rem;
+  color: var(--text-secondary);
+  min-width: 110px;
+  font-weight: 600;
+}
+.extra-dots {
+  font-size: .95rem;
+  letter-spacing: 2px;
+}
+
+/* Герои книги */
+.character-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.char-name-input {
+  flex: 1;
+}
+.char-stars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.char-star {
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: var(--accent);
+  opacity: .3;
+  transition: opacity .15s;
+  user-select: none;
+}
+.char-star.filled { opacity: 1; }
+
+.characters-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.character-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+}
+.character-name {
+  font-weight: 600;
+  font-size: .9rem;
+  color: var(--text-primary);
+}
+.character-stars {
+  font-size: .9rem;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+/* Просмотр обложки без картинки */
+.cover-viewer img[src=""] {
+  display: none !important;
+}
+.cover-viewer-no-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-muted);
+  font-size: 3rem;
+}
+
+/* Extra ratings grid */
+.form-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 400px) {
+  .form-row-2 { grid-template-columns: 1fr; }
+}
+
+/* Cover viewer: no image state */
+#cover-viewer-img:not([src]), #cover-viewer-img[src=""] {
+  display: none !important;
+}
+.cover-viewer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  font-size: .9rem;
 }
