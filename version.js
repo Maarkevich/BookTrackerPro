@@ -1,4 +1,4 @@
-📦 BookTrackerPro — version.json
+// 📦 BookTrackerPro — version.json
 {
   "version": "3.8.0",
   "build": "20260812",
