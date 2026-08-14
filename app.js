@@ -1215,12 +1215,12 @@ ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${cur === k ?
 <h3>📖 Статус</h3>
 <div class="form-group"><label>Статус</label>
 <select id="bf-status">
-\${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="\${k}" \${(b.status || 'wishlist') === k ? 'selected' : ''}>\${(st.ic ? icon(st.ic,14) : st.icon)} \${st.label}</option>`).join('')}
+${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="${k}" ${(b.status || 'wishlist') === k ? 'selected' : ''}>${(st.ic ? icon(st.ic,14) : st.icon)} ${st.label}</option>`).join('')}
 </select>
 </div>
 <div class="form-row">
-<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="\${b.currentPage || 0}" min="0"/></div>
-<div class="form-group"><label>Оценка ⭐ (1–5)</label><input type="number" id="bf-rating" value="\${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
+<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="${b.currentPage || 0}" min="0"/></div>
+<div class="form-group"><label>Оценка ⭐ (1–5)</label><input type="number" id="bf-rating" value="${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
 </div>
 </div>
 <div class="form-section">
