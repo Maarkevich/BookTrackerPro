@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — icons.js
-// 🔖 v3.8.1 | 2026-08-12
+// 🔖 v3.8.0 | 2026-08-12
 // 📝 Единая система иконок «ночная библиотека»
 //
 //    Принципы:
@@ -112,7 +112,7 @@ export const ICONS = {
   xBadge:     '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>',
   handshake:  '<path d="M4 12l3-5 4 2 4-2 3 5"/><path d="M7 7l-2 1M17 7l2 1M11 9l1 6M13 9l-1 6"/><path d="M8 15l2 2 2-2 2 2 2-2"/>',
 
-  // ── НОВОЕ в v3.8.1: форматы книг ──
+  // ── НОВОЕ в v3.7.0: форматы книг ──
   smartphone: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 17.5h2"/>',
   headphones: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
   repeat:     '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
@@ -186,14 +186,14 @@ export const GOAL_ICONS = {
   content: 'film',
 };
 
-// 🆕 v3.8.1: Форматы книг → иконки
+// 🆕 v3.7.0: Форматы книг → иконки
 export const BOOK_FORMAT_ICONS = {
   paper: 'bookClosed',
   ebook: 'smartphone',
   audio: 'headphones',
 };
 
-// 🆕 v3.8.1: Площадки электронных книг → иконки (контурные)
+// 🆕 v3.7.0: Площадки электронных книг → иконки (контурные)
 export const EBOOK_SOURCE_ICONS = {
   litres:    'bookClosed',
   yandex:    'bookOpen',
@@ -204,7 +204,7 @@ export const EBOOK_SOURCE_ICONS = {
   custom:    'globe',
 };
 
-// 🆕 v3.8.1: Способ получения эл. книги → иконки
+// 🆕 v3.7.0: Способ получения эл. книги → иконки
 export const EBOOK_OWNERSHIP_ICONS = {
   owned:        'coin',
   subscription: 'repeat',
@@ -262,7 +262,7 @@ export function contentTypeIcon(type, size = 20) {
 }
 
 /**
- * 🆕 v3.8.1: Иконка формата книги.
+ * 🆕 v3.7.0: Иконка формата книги.
  * @param {string} format — paper / ebook / audio
  * @param {number} size
  */
