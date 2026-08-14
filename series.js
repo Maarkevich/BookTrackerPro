@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — series.js
-// 🔖 v3.8.1 | 2026-08-09
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 Серии книг
 //
 //    Серия — поля в книге: series, seriesNumber, seriesTotal
@@ -267,9 +267,9 @@ return `
 `;
 }
 const b = slot.book;
-const st = BOOK_STATUSES[b.status] || { icon: '📕', ic: 'bookClosed', label: b.status };
+const st = BOOK_STATUSES[b.status] || { icon: '📕', label: b.status };
 const isCurrent = b.status === 'reading';
-// 🆕 v3.8.1: обложка с referrerpolicy no-referrer + onerror-фолбэк
+// 🆕 v3.7.0: обложка с referrerpolicy no-referrer + onerror-фолбэк
 const coverHtml = b.coverUrl
 ? `<img class="series-slot-cover" src="${b.coverUrl}" alt="" loading="lazy"
 referrerpolicy="no-referrer" onerror="this.style.display='none'"/>`
@@ -520,4 +520,3 @@ style.id = 'series-styles';
 style.textContent = SERIES_STYLES;
 document.head.appendChild(style);
 }
-// ─────────────────────────────────────────────

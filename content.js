@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — content.js
-// 🔖 v3.8.1 | 2026-08-12
+// 🔖 v3.8.0 | 2026-08-12
 // 📝 Контент-план для бук-блогера
 //
 //    Типы контента:
@@ -196,7 +196,7 @@ const idx = STATUS_ORDER.indexOf(item.status);
 const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
 const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
 const dateStr = item.publishedDate || item.plannedDate || '';
-// 🆕 v3.8.1: индикатор отчётности
+// 🆕 v3.7.0: индикатор отчётности
 const reportSent = item.reportSent || false;
 const reportBadge = reportSent
 ? `<span class="cc-report-badge sent" title="Отчёт отправлен">${icon('checkBadge', 11)} отчёт</span>`
@@ -387,7 +387,7 @@ ${Object.entries(CONTENT_STATUSES).map(([key, s]) => `
 <label>${icon('edit', 13)} Заметки</label>
 <textarea id="cf-notes" rows="3" placeholder="Идеи для съёмки, сценарий, реквизит...">${esc(c.notes || '')}</textarea>
 </div>
-<!-- 🆕 v3.8.1: Отчёт издательству -->
+<!-- 🆕 v3.7.0: Отчёт издательству -->
 <div class="form-section">
 <h3>${icon('report', 15)} Отчёт издательству</h3>
 <div class="toggle-row">
@@ -423,7 +423,7 @@ btn.classList.add('active');
 selectedPlatform = btn.dataset.platform;
 });
 });
-// 🆕 v3.8.1: Кастомные контролы (uikit.js)
+// 🆕 v3.7.0: Кастомные контролы (uikit.js)
 attachCustomSelect(body.querySelector('#cf-book'), {
 search: true,
 searchPlaceholder: 'Название или автор...',
@@ -440,7 +440,7 @@ renderTrigger: statusRenderer,
 attachDatePicker(body.querySelector('#cf-planned'));
 attachDatePicker(body.querySelector('#cf-published'));
 attachDatePicker(body.querySelector('#cf-report-date'));
-// 🆕 v3.8.1: Toggle отчёта показывает/скрывает дату
+// 🆕 v3.7.0: Toggle отчёта показывает/скрывает дату
 body.querySelector('#cf-report-toggle').addEventListener('click', function() {
 this.classList.toggle('active');
 body.querySelector('#cf-report-fields').classList.toggle('hidden');
@@ -604,7 +604,7 @@ transition:all .2s var(--ease); text-align:center;
 border-color:var(--accent); background:var(--accent-dim);
 color:var(--accent); font-weight:700;
 }
-/* 🆕 v3.8.1: индикатор отчётности в карточке */
+/* 🆕 v3.7.0: индикатор отчётности в карточке */
 .cc-report-badge {
 display:inline-flex; align-items:center; gap:3px;
 padding:2px 8px; border-radius:10px;
@@ -623,4 +623,3 @@ style.id = 'content-form-styles';
 style.textContent = CONTENT_FORM_STYLES;
 document.head.appendChild(style);
 }
-// ─────────────────────────────────────────────

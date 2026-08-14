@@ -1,13 +1,13 @@
 // 📦 BookTrackerPro — uikit.js
-// 🔖 v3.8.1 | 2026-08-07
+// 🔖 v3.7.0 | 2026-08-07
 // 📝 Переиспользуемые UI-компоненты «ночной библиотеки»
 //
 //    Компоненты:
 //      📅 Дата-пикер   — кастомный календарь вместо <input type=date>
 //      🔽 Кастомный селект — вместо системного <select>, с поиском
 //      ✅ Confirm       — стилизованный диалог вместо нативного confirm()
-//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.8.1)
-//      💘 Chip Input   — автокомплит для тропов/тегов (v3.8.1)
+//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.7.0)
+//      💘 Chip Input   — автокомплит для тропов/тегов (v3.7.0)
 //
 //    Принципы:
 //      — Нативный контрол остаётся в DOM и является источником истины.
@@ -362,7 +362,7 @@ export function showConfirm(message, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.8.1)
+//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.7.0)
 // ═══════════════════════════════════════════════
 /**
  * Группа чипов для множественного выбора.
@@ -436,7 +436,7 @@ export function attachChipGroup(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.8.1)
+//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.7.0)
 // ═══════════════════════════════════════════════
 /**
  * Поле ввода с чипами и автокомплитом.
@@ -596,7 +596,7 @@ export function attachChipInput(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.8.1)
+//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.7.0)
 // ═══════════════════════════════════════════════
 /**
  * Кастомный селект + кнопка «Добавить своё».
@@ -741,7 +741,7 @@ const UIKIT_STYLES = `
 .cs-check { color:var(--accent); display:inline-flex; flex-shrink:0; }
 .cs-empty { padding:16px; text-align:center; color:var(--text-muted); font-size:.85rem; }
 
-/* v3.8.1: кнопка «Другое» для селекта */
+/* v3.7.0: кнопка «Другое» для селекта */
 .cs-custom-btn {
   display:inline-flex; align-items:center; gap:6px;
   padding:8px 14px; margin-top:6px;
@@ -779,7 +779,7 @@ const UIKIT_STYLES = `
 .ui-confirm-ok.danger { background:var(--red); color:#fff; }
 .ui-confirm-ok.danger:hover { background:var(--red); filter:brightness(1.12); }
 
-/* ── v3.8.1: Chip Group (множественный выбор) ── */
+/* ── v3.7.0: Chip Group (множественный выбор) ── */
 .cg-chip {
   display:inline-flex; align-items:center; gap:7px;
   padding:8px 15px; border-radius:16px;
@@ -799,7 +799,7 @@ const UIKIT_STYLES = `
 }
 .cg-icon { display:inline-flex; align-items:center; }
 
-/* ── v3.8.1: Chip Input (автокомплит для тропов) ── */
+/* ── v3.7.0: Chip Input (автокомплит для тропов) ── */
 .ci-wrap { position:relative; }
 .ci-chips {
   display:flex; flex-wrap:wrap; gap:6px;

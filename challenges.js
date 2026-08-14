@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — challenges.js
-// 🔖 v3.8.1 | 2026-08-07
+// 🔖 v3.7.0 | 2026-08-07
 // 📝 Челленджи чтения
 //
 //    Типы целей:
@@ -562,20 +562,20 @@ ${[...allTags].map(t => `<option value="${esc(t)}"/>`).join('')}
 
 document.body.appendChild(overlay);
 document.body.style.overflow = 'hidden';
-trackOverlay(overlay); // 🆕 v3.8.1: жест «назад»
+trackOverlay(overlay); // 🆕 v3.7.0: жест «назад»
 
 let goalType = c.goalType || 'books';
 
 const close = () => {
 overlay.remove();
-untrackOverlay(overlay); // 🆕 v3.8.1
+untrackOverlay(overlay); // 🆕 v3.7.0
 document.body.style.overflow = '';
 };
 
 overlay.querySelector('.ch-form-close').addEventListener('click', close);
 overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-// 🆕 v3.8.1: кастомный селект статуса + дата-пикеры
+// 🆕 v3.7.0: кастомный селект статуса + дата-пикеры
 attachCustomSelect(overlay.querySelector('#ch-f-status'), {});
 attachDatePicker(overlay.querySelector('#ch-f-start'));
 attachDatePicker(overlay.querySelector('#ch-f-end'));
@@ -682,11 +682,11 @@ ${icon('check', 15)} Добавить выбранные
 
 document.body.appendChild(overlay);
 document.body.style.overflow = 'hidden';
-trackOverlay(overlay); // 🆕 v3.8.1: жест «назад»
+trackOverlay(overlay); // 🆕 v3.7.0: жест «назад»
 
 const close = () => {
 overlay.remove();
-untrackOverlay(overlay); // 🆕 v3.8.1
+untrackOverlay(overlay); // 🆕 v3.7.0
 document.body.style.overflow = '';
 };
 
@@ -919,4 +919,3 @@ style.id = 'challenge-styles';
 style.textContent = CHALLENGE_STYLES;
 document.head.appendChild(style);
 }
-// ─────────────────────────────────────────────

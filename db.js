@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.1-fix | 2026-08-12
+// 🔖 v3.8.0-fix | 2026-08-12
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 5 (схема не меняется)
@@ -14,7 +14,7 @@
 //      — Теги
 //      — Контент и отзывы (вложенные в книгу)
 //      — Экспорт/импорт (JSON)
-//      — Отчётность (reportSent / reportDate) v3.8.1
+//      — Отчётность (reportSent / reportDate) v3.8.0
 //      — isValidCoverBlob / repairCovers v3.5.0+
 // ─────────────────────────────────────────────
 
@@ -26,12 +26,12 @@ let _db = null;
 //  СТАТУСЫ КНИГ
 // ═══════════════════════════════════════════════
 export const BOOK_STATUSES = {
-wishlist: { icon: '🌟', ic: 'wishlist',  label: 'Wishlist',      order: 0 },
-added:    { icon: '📦', ic: 'added',     label: 'Добавлено',     order: 1 },
-reading:  { icon: '📖', ic: 'reading',   label: 'Читаю',         order: 2 },
-paused:   { icon: '⏸',  ic: 'paused',    label: 'Пауза',         order: 3 },
-finished: { icon: '✅', ic: 'finished',  label: 'Прочитано',     order: 4 },
-dropped:  { icon: '❌', ic: 'dropped',   label: 'Брошено',       order: 5 },
+  wishlist: { icon: '🌟', label: 'Wishlist',      order: 0 },
+  added:    { icon: '📦', label: 'Добавлено',     order: 1 },
+  reading:  { icon: '📖', label: 'Читаю',         order: 2 },
+  paused:   { icon: '⏸️', label: 'Пауза',         order: 3 },
+  finished: { icon: '✅', label: 'Прочитано',     order: 4 },
+  dropped:  { icon: '❌', label: 'Брошено',       order: 5 },
 };
 
 export const CURRENCIES = {
@@ -817,4 +817,3 @@ export async function getDBSize() {
   const est = await navigator.storage.estimate();
   return ((est.usage || 0) / (1024 * 1024)).toFixed(1) + ' МБ';
 }
-// ─────────────────────────────────────────────

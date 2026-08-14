@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — review.js
-// 🔖 v3.8.1-fix | 2026-08-09
+// 🔖 v3.7.0-fix | 2026-08-09
 // 📝 Отзывы бук-блогера
 //
 //    Структура отзыва:
@@ -107,7 +107,7 @@ if (book) copyReviewToClipboard(book);
 // ═══════════════════════════════════════════════
 function renderReviewCard(book) {
 const r = book.review || {};
-const stars = Array.from({length:5}, (_,i) => `<span style="color:${i<(r.rating||0)?'#e8a33d':'var(--border)'}">${icon('star',14)}</span>`).join('');
+const stars = '⭐'.repeat(r.rating || 0) + '☆'.repeat(5 - (r.rating || 0));
 const quotesCount = (r.quotes || []).length;
 const usedQuotes = (r.quotes || []).filter(q => q.used).length;
 
@@ -123,8 +123,8 @@ ${book.coverUrl
 <div class="review-stars">${stars}</div>
 </div>
 </div>
-${r.pros ? `<div class="review-pros">${icon('heart',14)} ${esc(r.pros)}</div>` : ''}
-${r.cons ? `<div class="review-cons">${icon('close',14)} ${esc(r.cons)}</div>` : ''}
+${r.pros ? `<div class="review-pros">👍 ${esc(r.pros)}</div>` : ''}
+${r.cons ? `<div class="review-cons">👎 ${esc(r.cons)}</div>` : ''}
 ${r.text ? `<div class="review-text">${esc(r.text)}</div>` : ''}
 ${quotesCount > 0 ? `
 <div class="text-small text-muted mt-8">
@@ -180,18 +180,18 @@ ${book.coverUrl
 <div class="form-group">
 <label>${icon('star', 13)} Оценка</label>
 <div class="star-rating" id="rf-stars">
-${[1,2,3,4,5].map(i => `<span class="star ${(r.rating || 0) >= i ? 'filled' : ''}" data-star="${i}">${icon('star',20)}</span>`).join('')}
+${[1,2,3,4,5].map(i => `<span class="star ${(r.rating || 0) >= i ? 'filled' : ''}" data-star="${i}">★</span>`).join('')}
 </div>
 <div class="form-hint" id="rf-rating-hint">${ratingHint(r.rating || 0)}</div>
 </div>
 
 <!-- Плюсы / Минусы -->
 <div class="form-group">
-<label>${icon('heart',13)} Плюсы</label>
+<label>👍 Плюсы</label>
 <textarea id="rf-pros" rows="2" placeholder="Что понравилось: язык, сюжет, персонажи...">${esc(r.pros || '')}</textarea>
 </div>
 <div class="form-group">
-<label>${icon('close',13)} Минусы</label>
+<label>👎 Минусы</label>
 <textarea id="rf-cons" rows="2" placeholder="Что не понравилось: затянуто, предсказуемо...">${esc(r.cons || '')}</textarea>
 </div>
 
@@ -222,9 +222,9 @@ ${icon('camera', 14)} Сфотографировать цитату (OCR)
 <label>${icon('target', 13)} Рекомендация</label>
 <select id="rf-recommendation">
 <option value="" ${!r.recommendation ? 'selected' : ''}>— Не указано —</option>
-<option value="Да, рекомендую" ${r.recommendation === 'Да, рекомендую' ? 'selected' : ''}>Да, рекомендую</option>
-<option value="Нет, не рекомендую" ${r.recommendation === 'Нет, не рекомендую' ? 'selected' : ''}>Нет, не рекомендую</option>
-<option value="С оговорками" ${r.recommendation === 'С оговорками' ? 'selected' : ''}>С оговорками</option>
+<option value="Да, рекомендую" ${r.recommendation === 'Да, рекомендую' ? 'selected' : ''}>👍 Да, рекомендую</option>
+<option value="Нет, не рекомендую" ${r.recommendation === 'Нет, не рекомендую' ? 'selected' : ''}>👎 Нет, не рекомендую</option>
+<option value="С оговорками" ${r.recommendation === 'С оговорками' ? 'selected' : ''}>🤔 С оговорками</option>
 </select>
 </div>
 
@@ -236,7 +236,7 @@ ${icon('camera', 14)} Сфотографировать цитату (OCR)
 
 <!-- Без спойлеров -->
 <div class="toggle-row">
-<span class="toggle-label">${icon('eye',14)} Без спойлеров</span>
+<span class="toggle-label">🔞 Без спойлеров</span>
 <div class="toggle ${r.spoilerFree !== false ? 'active' : ''}" id="rf-spoiler"></div>
 </div>
 
@@ -502,4 +502,3 @@ overlay.classList.add('hidden');
 document.body.style.overflow = '';
 }
 }
-// ─────────────────────────────────────────────

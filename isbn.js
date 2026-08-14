@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — isbn.js
-// 🔖 v3.8.1 | 2026-08-09
+// 🔖 v3.7.0 | 2026-08-09
 // 📝 ISBN валидация + каскадный поиск книг
 //
 //    Каскад по ISBN:
@@ -102,7 +102,7 @@ return null;
 * Извлекает данные книги по URL страницы магазина
 * (ЛитРес, Book24, Ozon, Читай-город и т.п.).
 *
-* v3.8.1: использует extractBookPreview() из microlink.js,
+* v3.7.0: использует extractBookPreview() из microlink.js,
 * который возвращает { merged, fields, url, source }.
 * Возвращаем merged-объект для совместимости с fillFormFromResult.
 *
