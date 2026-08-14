@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — icons.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.2 | 2026-08-12
 // 📝 Единая система иконок «ночная библиотека»
 //
 //    Принципы:
@@ -8,15 +8,8 @@
 //        (янтарь в активе, приглушённый в покое, статусный в бейдже)
 //      — Фирменные SVG площадок (fill, brand-цвета)
 //      — Никаких эмодзи в UI — только эта библиотека
-//      — aria-hidden="true" на всех SVG (доступность)
 //
-//    Новое в 3.8.3:
-//      — wifiOff — офлайн-индикатор в drawer
-//      — sync — background sync / синхронизация
-//      — shield — безопасность (CSP, защита данных)
-//      — focusable="false" на SVG (защита от фокуса в Edge legacy)
-//
-//    Сохранено из 3.7.0:
+//    Новое в 3.7.0:
 //      — smartphone, headphones — форматы книг (эл./аудио)
 //      — repeat — подписка, fileDoc — файл
 //      — heartHands — тропы (love tropes)
@@ -35,7 +28,9 @@
 // ═══════════════════════════════════════════════
 //  1. UI-ИКОНКИ (контурные, stroke)
 // ═══════════════════════════════════════════════
+
 export const ICONS = {
+
   // ── Навигация / интерфейс ──
   menu:     '<path d="M4 7h16M4 12h16M4 17h16"/>',
   close:    '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -46,11 +41,13 @@ export const ICONS = {
   home:     '<path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/>',
   gear:     '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.7M12 18.5v2.7M2.8 12h2.7M18.5 12h2.7M5.5 5.5l1.9 1.9M16.6 16.6l1.9 1.9M18.5 5.5l-1.9 1.9M7.4 16.6l-1.9 1.9"/>',
   filter:   '<path d="M4 5h16l-6.5 8v6l-3-2v-4z"/>',
+
   chevronDown:  '<path d="M6 9.5l6 6 6-6"/>',
   chevronUp:    '<path d="M6 14.5l6-6 6 6"/>',
   chevronRight: '<path d="M9.5 6l6 6-6 6"/>',
   chevronLeft:  '<path d="M14.5 6l-6 6 6 6"/>',
   arrowLeft:    '<path d="M20 12H4M10 6l-6 6 6 6"/>',
+
   external:   '<path d="M14 4h6v6"/><path d="M20 4L11 13"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
   link:       '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
   copy:       '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
@@ -115,7 +112,7 @@ export const ICONS = {
   xBadge:     '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>',
   handshake:  '<path d="M4 12l3-5 4 2 4-2 3 5"/><path d="M7 7l-2 1M17 7l2 1M11 9l1 6M13 9l-1 6"/><path d="M8 15l2 2 2-2 2 2 2-2"/>',
 
-  // ── Из v3.7.0: форматы книг ──
+  // ── НОВОЕ в v3.8.2: форматы книг ──
   smartphone: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 17.5h2"/>',
   headphones: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
   repeat:     '<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
@@ -128,15 +125,12 @@ export const ICONS = {
   mystery:    '<circle cx="12" cy="19" r="1.5"/><path d="M12 16v-2c2-1.5 4-3 4-6a4 4 0 0 0-8 0c0 1.5.7 2.8 2 4"/>',
   facePalm:   '<path d="M12 4c-3 0-6 2.5-6 6v3l-2 2v2h16v-2l-2-2v-3c0-3.5-3-6-6-6z"/><path d="M9 22a3 3 0 0 0 6 0"/><path d="M9 10c0 0 1-2 3-2s3 2 3 2"/><path d="M9 14l6-4"/>',
 
-  // ── 🆕 v3.8.3: офлайн, синхронизация, безопасность ──
-  wifiOff:    '<path d="M2 6.5C5 4 8.3 2.8 12 2.8s7 1.2 10 3.7"/><path d="M5 10.5c2-1.6 4.4-2.5 7-2.5s5 .9 7 2.5"/><path d="M8.5 14.5c1-.8 2.2-1.2 3.5-1.2s2.5.4 3.5 1.2"/><circle cx="12" cy="18.5" r="1.2"/><path d="M3 3l18 18"/>',
-  sync:       '<path d="M21 8A8.5 8.5 0 0 0 5.7 5.7L3.5 8"/><path d="M3.5 3.5V8H8"/><path d="M3 16a8.5 8.5 0 0 0 15.3 2.3L20.5 16"/><path d="M20.5 20.5V16H16"/>',
-  shield:     '<path d="M12 3l8 3.5v5c0 5-3.5 8.5-8 9.5-4.5-1-8-4.5-8-9.5v-5z"/><path d="M9 12l2 2 4-4.5"/>',
 };
 
 // ═══════════════════════════════════════════════
 //  2. ФИРМЕННЫЕ ИКОНКИ ПЛОЩАДОК (fill, brand)
 // ═══════════════════════════════════════════════
+
 export const BRAND_ICONS = {
   youtube:  '<path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.19C0 8.07 0 12 0 12s0 3.93.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.88.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.93 24 12 24 12s0-3.93-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z"/>',
   tiktok:   '<path d="M12.53.02C13.84 0 15.14.01 16.44 0c.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/>',
@@ -192,14 +186,14 @@ export const GOAL_ICONS = {
   content: 'film',
 };
 
-// Форматы книг → иконки
+// 🆕 v3.8.2: Форматы книг → иконки
 export const BOOK_FORMAT_ICONS = {
   paper: 'bookClosed',
   ebook: 'smartphone',
   audio: 'headphones',
 };
 
-// Площадки электронных книг → иконки (контурные)
+// 🆕 v3.8.2: Площадки электронных книг → иконки (контурные)
 export const EBOOK_SOURCE_ICONS = {
   litres:    'bookClosed',
   yandex:    'bookOpen',
@@ -210,7 +204,7 @@ export const EBOOK_SOURCE_ICONS = {
   custom:    'globe',
 };
 
-// Способ получения эл. книги → иконки
+// 🆕 v3.8.2: Способ получения эл. книги → иконки
 export const EBOOK_OWNERSHIP_ICONS = {
   owned:        'coin',
   subscription: 'repeat',
@@ -223,13 +217,6 @@ export const EBOOK_OWNERSHIP_ICONS = {
 
 /**
  * Контурная UI-иконка.
- *
- * Доступность:
- *   — aria-hidden="true" (декоративная, скрывается от SR)
- *   — focusable="false" (не фокусируется в Edge legacy)
- *   — Текст-описание должен быть на родительском элементе
- *     (aria-label на кнопке, visible text рядом)
- *
  * @param {string} name  — ключ из ICONS
  * @param {number} size  — размер в px (по умолчанию 20)
  * @param {string} cls   — доп. CSS-класс
@@ -239,8 +226,7 @@ export function icon(name, size = 20, cls = '') {
   const inner = ICONS[name] || ICONS.bookmark;
   return `<svg class="ic ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" ` +
     `fill="none" stroke="currentColor" stroke-width="1.8" ` +
-    `stroke-linecap="round" stroke-linejoin="round" ` +
-    `aria-hidden="true" focusable="false">${inner}</svg>`;
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 }
 
 /**
@@ -254,8 +240,7 @@ export function brandIcon(key, size = 16, color = 'currentColor') {
   const inner = BRAND_ICONS[key];
   if (!inner) return icon('globe', size);
   return `<span class="p-icon" style="width:${size}px;height:${size}px;color:${color}" aria-hidden="true">` +
-    `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" ` +
-    `aria-hidden="true" focusable="false">${inner}</svg></span>`;
+    `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">${inner}</svg></span>`;
 }
 
 /**
@@ -277,7 +262,7 @@ export function contentTypeIcon(type, size = 20) {
 }
 
 /**
- * Иконка формата книги.
+ * 🆕 v3.8.2: Иконка формата книги.
  * @param {string} format — paper / ebook / audio
  * @param {number} size
  */

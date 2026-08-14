@@ -1,31 +1,33 @@
 // 📦 BookTrackerPro — microlink.js
-// 🔖 v3.8.3 | 2026-08-14
-// 📝 Microlink API: превью ссылок + извлечение данных книг
+// 🔖 v3.8.2 | 2026-08-09
+// 📝 Microlink API:
+//      — превью ссылок (контент-план)
+//      — ГЛУБОКОЕ извлечение книги по ссылке на магазин
+//        (html=true → локальный парсинг JSON-LD + OG + microdata)
+//      — НОВОЕ: extractBookPreview() — окно предпросмотра
+//        со ВСЕМИ найденными полями и ручным маппингом
 //
-//    Microlink выступает как CORS-прокси + парсер OG-тегов и JSON-LD,
-//    поэтому работает из браузера без собственного сервера.
+//    Лимиты:
+//      — Бесплатно: 25 запросов/день без ключа
+//        (предохранитель приложения — 20)
+//      — С ключом: pro.microlink.io + заголовок x-api-key
 //
-//    Возможности:
-//      — Превью публикаций (для контент-плана)
-//      — Извлечение данных книг из магазинов (ЛитРес, Book24, Ozon)
-//      — Резолв коротких ссылок (ozon.ru/t/..., bit.ly)
-//      — Каскад CORS-прокси при недоступности Microlink
-//      — Кеш в IndexedDB + память (TTL 24 часа)
-//      — Дневной лимит запросов (25 free / 1000 pro)
+//    Новое в 3.7.0:
+//      — resolveRedirects(): резолв коротких ссылок
+//        (ozon.ru/t/..., bit.ly, clck.ru) перед запросом
+//      — fetchWithRetry(): retry с exponential backoff
+//        (3 попытки: 500ms → 1000ms → 2000ms)
+//      — Каскад CORS-прокси: corsproxy.io → allorigins.win → codetabs
+//        (фолбэк при недоступности Microlink)
+//      — Улучшенная диагностика: getDiagnostics() возвращает
+//        причину ошибки, остаток лимита, режим тарифа
+//      — Очередь запросов при исчерпании лимита
+//      — Защита от антибот-заглушек (Cloudflare/captcha)
 //
-//    Новое в 3.8.3:
-//      — sanitizeUrl() — защита от javascript: и data: URL
-//      — Улучшенная обработка ошибок с логированием
-//      — JSDoc для всех публичных функций
-//      — TTL-based eviction кеша при загрузке
-//      — getDiagnostics() для UI настроек
+//    Ключ задаётся в Настройках → «Microlink API».
+//    app.js вызывает setMicrolinkApiKey() при старте и сохранении.
 //
-//    Сохранено из 3.7.0:
-//      — resolveRedirects() для коротких ссылок
-//      — fetchWithRetry() с exponential backoff
-//      — Каскад CORS-прокси (fetchHtmlViaProxy)
-//      — Парсер JSON-LD / Open Graph / Microdata
-//      — checkMicrolinkStatus() для диагностики
+//    Кеш: IndexedDB store 'previews' (db.js v6), TTL 7 дней.
 // ─────────────────────────────────────────────
 import { openDB } from './db.js';
 
@@ -33,29 +35,20 @@ import { openDB } from './db.js';
 //  КОНФИГУРАЦИЯ
 // ═══════════════════════════════════════════════
 const MICROLINK_FREE = 'https://api.microlink.io';
-const MICROLINK_PRO = 'https://pro-api.microlink.io';
-
-// Дневные лимиты запросов
-const DAILY_LIMIT_FREE = 25;
+const MICROLINK_PRO  = 'https://pro.microlink.io';
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 дней
+const DAILY_LIMIT_FREE = 20;  // предохранитель (реально 25)
 const DAILY_LIMIT_PRO = 1000;
-
-// TTL кеша: 24 часа
-const CACHE_TTL = 24 * 60 * 60 * 1000;
-
-// Retry: 3 попытки с backoff 500 → 1000 → 2000 мс
 const MAX_RETRIES = 3;
-
-// Максимум редиректов при резолве коротких ссылок
 const MAX_REDIRECTS = 5;
 
-// Каскад CORS-прокси (фолбэк при недоступности Microlink)
+// Каскад CORS-прокси для фолбэка
 const PROXY_CHAIN = [
   (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
-// ═══════════════════════════════════════════════
-//  СОСТОЯНИЕ
-// ═══════════════════════════════════════════════
 let _dailyCount = 0;
 let _dailyReset = startOfDay() + 86400000;
 const _memCache = new Map();
@@ -68,12 +61,6 @@ function startOfDay() { const d = new Date(); d.setHours(0,0,0,0); return d.getT
 // ═══════════════════════════════════════════════
 //  0. API-КЛЮЧ
 // ═══════════════════════════════════════════════
-
-/**
- * Устанавливает API-ключ Microlink Pro.
- * При смене ключа сбрасывает дневной счётчик.
- * @param {string} key
- */
 export function setMicrolinkApiKey(key) {
   const changed = _apiKey !== (key || '').trim();
   _apiKey = (key || '').trim();
@@ -82,10 +69,7 @@ export function setMicrolinkApiKey(key) {
     _dailyReset = startOfDay() + 86400000;
   }
 }
-
-/** @returns {string} текущий API-ключ */
 export function getMicrolinkApiKey() { return _apiKey; }
-
 function hasKey() { return _apiKey.length > 0; }
 function baseUrl() { return hasKey() ? MICROLINK_PRO : MICROLINK_FREE; }
 function dailyLimit() { return hasKey() ? DAILY_LIMIT_PRO : DAILY_LIMIT_FREE; }
@@ -97,37 +81,8 @@ function canRequest() {
 }
 
 // ═══════════════════════════════════════════════
-//  0.1 ВАЛИДАЦИЯ URL (🆕 v3.8.3)
+//  1. РЕЗОЛВ КОРОТКИХ ССЫЛОК (НОВОЕ в v3.8.2)
 // ═══════════════════════════════════════════════
-
-/**
- * Валидирует URL перед отправкой в Microlink.
- * Защита от javascript:, data:, vbscript: и других опасных схем.
- *
- * @param {string} url
- * @returns {boolean} — true если URL безопасен
- */
-function sanitizeUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  try {
-    const parsed = new URL(url);
-    // Разрешаем только http и https
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    // Запрещаем localhost и приватные IP (SSRF-защита)
-    const host = parsed.hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return false;
-    if (host.startsWith('192.168.') || host.startsWith('10.')) return false;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ═══════════════════════════════════════════════
-//  1. РЕЗОЛВ КОРОТКИХ ССЫЛОК
-// ═══════════════════════════════════════════════
-
 // Короткие ссылки-редиректы, которые нужно резолвить
 const SHORT_URL_PATTERNS = [
   /ozon\.ru\/t\//i,
@@ -145,13 +100,13 @@ function isShortUrl(url) {
 }
 
 /**
- * Резолвит цепочку редиректов через HEAD-запросы.
- * Короткие ссылки (ozon.ru/t/..., bit.ly) часто не парсятся
- * Microlink напрямую — нужно получить финальный URL.
- *
- * @param {string} url — исходный URL
- * @returns {Promise<string>} — финальный URL после редиректов
- */
+* Резолвит цепочку редиректов через HEAD-запросы.
+* Короткие ссылки (ozon.ru/t/..., bit.ly) часто не парсятся
+* Microlink напрямую — нужно получить финальный URL.
+*
+* @param {string} url — исходный URL
+* @returns {Promise<string>} — финальный URL после редиректов
+*/
 export async function resolveRedirects(url) {
   if (!isShortUrl(url)) return url;
 
@@ -179,19 +134,18 @@ export async function resolveRedirects(url) {
 }
 
 // ═══════════════════════════════════════════════
-//  2. RETRY С EXPONENTIAL BACKOFF
+//  2. RETRY С EXPONENTIAL BACKOFF (НОВОЕ в v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
- * fetch с таймаутом и retry с экспоненциальным backoff.
- * Попытки: 500ms → 1000ms → 2000ms.
- *
- * @param {string} url
- * @param {object} opts — параметры fetch
- * @param {number} timeout — таймаут одного запроса (мс)
- * @returns {Promise<Response>}
- * @throws {Error} последняя ошибка после всех попыток
- */
+* fetch с таймаутом и retry с экспоненциальным backoff.
+* Попытки: 500ms → 1000ms → 2000ms.
+*
+* @param {string} url
+* @param {object} opts — параметры fetch
+* @param {number} timeout — таймаут одного запроса (мс)
+* @returns {Promise<Response>}
+* @throws {Error} последняя ошибка после всех попыток
+*/
 async function fetchWithRetry(url, opts = {}, timeout = 15000) {
   let lastErr;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -220,17 +174,16 @@ async function fetchWithRetry(url, opts = {}, timeout = 15000) {
 }
 
 // ═══════════════════════════════════════════════
-//  3. КАСКАД CORS-ПРОКСИ
+//  3. КАСКАД CORS-ПРОКСИ (НОВОЕ в v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
- * Фолбэк: запрашивает URL через цепочку CORS-прокси.
- * Используется когда Microlink недоступен или исчерпан лимит.
- * Возвращает HTML-строку или null.
- *
- * @param {string} url
- * @returns {Promise<string|null>}
- */
+* Фолбэк: запрашивает URL через цепочку CORS-прокси.
+* Используется когда Microlink недоступен или исчерпан лимит.
+* Возвращает HTML-строку или null.
+*
+* @param {string} url
+* @returns {Promise<string|null>}
+*/
 async function fetchHtmlViaProxy(url) {
   for (const proxyFn of PROXY_CHAIN) {
     try {
@@ -248,23 +201,11 @@ async function fetchHtmlViaProxy(url) {
 // ═══════════════════════════════════════════════
 //  4. ПРЕВЬЮ ССЫЛКИ (для контент-плана, без html)
 // ═══════════════════════════════════════════════
-
-/**
- * Запрашивает превью ссылки (title, description, image, logo).
- * Используется для карточек опубликованного контента.
- * Результат кешируется в IndexedDB на 24 часа.
- *
- * @param {string} url — ссылка на публикацию
- * @param {{ force?: boolean }} opts — force=true игнорирует кеш
- * @returns {Promise<object|null>} — { url, title, description, image, ... }
- */
 export async function fetchLinkPreview(url, opts = {}) {
-  if (!url || !sanitizeUrl(url)) return null;
-
+  if (!url || !/^https?:\/\//i.test(url)) return null;
   const key = url.toLowerCase();
   if (!opts.force) { const c = await getCached(key); if (c && !c.type) return c; }
   if (!canRequest()) { const c = await getCached(key); return c && !c.type ? c : null; }
-
   try {
     const r = await fetchWithRetry(`${baseUrl()}/?url=${encodeURIComponent(url)}`, {
       headers: authHeaders(),
@@ -277,10 +218,7 @@ export async function fetchLinkPreview(url, opts = {}) {
     const preview = normalize(json.data, url);
     await putCached(key, preview);
     return preview;
-  } catch (e) {
-    console.warn('[Microlink] fetchLinkPreview:', e.message);
-    return null;
-  }
+  } catch (e) { console.warn('[Microlink]', e.message); return null; }
 }
 
 function normalize(data, url) {
@@ -313,27 +251,24 @@ function detectSource(url) {
 }
 
 // ═══════════════════════════════════════════════
-//  5. ПОЛНЫЙ ПРЕДПРОСМОТР КНИГИ
+//  5. ПОЛНЫЙ ПРЕДПРОСМОТР (v3.6.0, улучшено в v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
- * Извлекает МАКСИМУМ данных со страницы магазина и возвращает
- * как готовый объект книги, так и полный список найденных полей
- * для окна предпросмотра с ручным маппингом.
- *
- * v3.7.0: резолвит короткие ссылки, retry с backoff,
- * фолбэк через CORS-прокси при недоступности Microlink.
- *
- * v3.8.3: sanitizeUrl() для защиты от опасных схем.
- *
- * @param {string} url — ссылка на страницу книги
- * @param {{ force?: boolean }} opts
- * @returns {Promise<{merged: object, fields: Array, url: string, source: string}|null>}
- */
+* Извлекает МАКСИМУМ данных со страницы магазина и возвращает
+* как готовый объект, так и полный список найденных полей
+* для окна предпросмотра с ручным маппингом.
+*
+* v3.8.2: резолвит короткие ссылки, retry с backoff,
+* фолбэк через CORS-прокси при недоступности Microlink.
+*
+* @param {string} url — ссылка на страницу книги
+* @param {{force?: boolean}} opts
+* @returns {Promise<{merged: object, fields: Array, url: string, source: string}|null>}
+*/
 export async function extractBookPreview(url, opts = {}) {
-  if (!url || !sanitizeUrl(url)) return null;
+  if (!url || !/^https?:\/\//i.test(url)) return null;
 
-  // Резолвим короткие ссылки
+  // v3.8.2: резолвим короткие ссылки
   let resolvedUrl = url;
   if (isShortUrl(url)) {
     resolvedUrl = await resolveRedirects(url);
@@ -348,7 +283,6 @@ export async function extractBookPreview(url, opts = {}) {
     const c = await getCached(key);
     return c && c.type === 'book' ? { merged: c.book, fields: c.fields || [], url: resolvedUrl, source: detectSource(resolvedUrl) } : null;
   }
-
   try {
     const params = new URLSearchParams({
       url: resolvedUrl,
@@ -358,20 +292,16 @@ export async function extractBookPreview(url, opts = {}) {
     const r = await fetchWithRetry(`${baseUrl()}/?${params}`, {
       headers: authHeaders(),
     }, 20000);
-
     if (r.status === 429) {
       const c = await getCached(key);
       return c && c.type === 'book' ? { merged: c.book, fields: c.fields || [], url: resolvedUrl, source: detectSource(resolvedUrl) } : null;
     }
     if (!r.ok) return null;
-
     const json = await r.json();
     if (json.status !== 'success' || !json.data) return null;
     _dailyCount++;
-
     const html = json.data.html || '';
     const { book, fields } = parseBookHtmlFull(html, json.data, resolvedUrl);
-
     if (book && book.title && !looksBlocked(html, book.title)) {
       await putCached(key, { type: 'book', book, fields, cachedAt: Date.now() });
       return { merged: book, fields, url: resolvedUrl, source: detectSource(resolvedUrl) };
@@ -379,15 +309,15 @@ export async function extractBookPreview(url, opts = {}) {
     return null;
   } catch (e) {
     console.warn('[Microlink] extractBookPreview:', e.message);
-    // Фолбэк через CORS-прокси
+    // v3.8.2: фолбэк через CORS-прокси
     return await extractBookViaProxy(resolvedUrl);
   }
 }
 
 /**
- * Фолбэк: извлечение книги через CORS-прокси (без Microlink).
- * Используется при недоступности Microlink или исчерпании лимита.
- */
+* Фолбэк: извлечение книги через CORS-прокси (без Microlink).
+* Используется при недоступности Microlink или исчерпании лимита.
+*/
 async function extractBookViaProxy(url) {
   try {
     const html = await fetchHtmlViaProxy(url);
@@ -405,13 +335,9 @@ async function extractBookViaProxy(url) {
 }
 
 /**
- * Обёртка: возвращает только готовый объект книги.
- * Совместимо с isbn.js fetchBookFromUrl.
- *
- * @param {string} url
- * @param {{ force?: boolean }} opts
- * @returns {Promise<object|null>}
- */
+* Обёртка: возвращает только готовый объект книги.
+* Совместимо с isbn.js fetchBookFromUrl.
+*/
 export async function extractBookFromPage(url, opts = {}) {
   const full = await extractBookPreview(url, opts);
   return full ? full.merged : null;
@@ -420,7 +346,6 @@ export async function extractBookFromPage(url, opts = {}) {
 // ═══════════════════════════════════════════════
 //  6. ПАРСЕР HTML (полный: merged + fields)
 // ═══════════════════════════════════════════════
-
 function parseBookHtmlFull(html, mlData, url) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const jsonLdNode = findJsonLdBook(doc);
@@ -428,7 +353,6 @@ function parseBookHtmlFull(html, mlData, url) {
   const og = extractOpenGraph(doc);
   const micro = extractMicrodata(doc);
   const merged = mergeBookData(jsonLd, og, micro, mlData, url);
-
   // Собираем ВСЕ найденные поля для предпросмотра
   const fields = [
     ...collectJsonLdFields(jsonLdNode),
@@ -437,7 +361,6 @@ function parseBookHtmlFull(html, mlData, url) {
     ...(mlData ? collectMicrolinkFields(mlData) : []),
   ];
   fields.forEach((f, i) => { f.id = `f${i}`; });
-
   return { book: merged, fields };
 }
 
@@ -487,11 +410,11 @@ const JSONLD_FIELD_MAP = {
   image:           { label: 'Изображение',      target: 'cover' },
   url:             { label: 'URL',             target: null },
   bookFormat:      { label: 'Формат книги',     target: null },
-  bookEdition:     { label: 'Издание',          target: null },
+  bookEdition:     { label: 'Издание',         target: null },
   inLanguage:      { label: 'Язык',            target: null },
   typicalAgeRange: { label: 'Возраст',         target: 'ageRating' },
   contentRating:   { label: 'Возрастной рейтинг', target: 'ageRating' },
-  award:           { label: 'Награды',          target: null },
+  award:           { label: 'Награды',         target: null },
 };
 
 function collectJsonLdFields(node) {
@@ -591,25 +514,25 @@ const OG_FIELD_MAP = {
   'og:description':         { label: 'Описание (OG)',      target: 'description' },
   'og:image':               { label: 'Изображение (OG)',   target: 'cover' },
   'og:site_name':           { label: 'Сайт',              target: null },
-  'og:type':                { label: 'Тип (OG)',           target: null },
-  'og:url':                 { label: 'URL (OG)',           target: null },
-  'og:locale':              { label: 'Локаль',             target: null },
-  'book:author':            { label: 'Автор (book)',       target: 'author' },
-  'og:book:author':         { label: 'Автор (OG book)',    target: 'author' },
-  'article:author':         { label: 'Автор (article)',    target: 'author' },
-  'book:isbn':              { label: 'ISBN (book)',        target: 'isbn' },
-  'books:isbn':             { label: 'ISBN (books)',       target: 'isbn' },
-  'book:tag':               { label: 'Тег (book)',         target: 'genre' },
-  'article:tag':            { label: 'Тег (article)',      target: 'genre' },
+  'og:type':                { label: 'Тип (OG)',          target: null },
+  'og:url':                 { label: 'URL (OG)',          target: null },
+  'og:locale':              { label: 'Локаль',            target: null },
+  'book:author':            { label: 'Автор (book)',      target: 'author' },
+  'og:book:author':         { label: 'Автор (OG book)',   target: 'author' },
+  'article:author':         { label: 'Автор (article)',   target: 'author' },
+  'book:isbn':              { label: 'ISBN (book)',       target: 'isbn' },
+  'books:isbn':             { label: 'ISBN (books)',      target: 'isbn' },
+  'book:tag':               { label: 'Тег (book)',        target: 'genre' },
+  'article:tag':            { label: 'Тег (article)',     target: 'genre' },
   'book:release_date':      { label: 'Дата выхода (book)', target: 'publishedDate' },
-  'product:release_date':   { label: 'Дата выхода',        target: 'publishedDate' },
-  'product:price:amount':   { label: 'Цена',               target: 'price' },
-  'og:price:amount':        { label: 'Цена (OG)',          target: 'price' },
-  'product:price:currency': { label: 'Валюта',             target: null },
+  'product:release_date':   { label: 'Дата выхода',       target: 'publishedDate' },
+  'product:price:amount':   { label: 'Цена',              target: 'price' },
+  'og:price:amount':        { label: 'Цена (OG)',         target: 'price' },
+  'product:price:currency': { label: 'Валюта',            target: null },
   'twitter:title':          { label: 'Заголовок (Twitter)', target: 'title' },
   'twitter:description':    { label: 'Описание (Twitter)',  target: 'description' },
   'twitter:image':          { label: 'Изображение (Twitter)', target: 'cover' },
-  'description':            { label: 'Описание (meta)',     target: 'description' },
+  'description':            { label: 'Описание (meta)',    target: 'description' },
   'keywords':               { label: 'Ключевые слова (meta)', target: null },
 };
 
@@ -752,56 +675,47 @@ function mergeBookData(jsonLd, og, micro, mlData, url) {
   };
 }
 
-// ─── Хелперы парсера ───
+// ─── Хелперы ───
 const BLOCK_MARKERS = ['captcha','cloudflare','access denied','just a moment','проверка браузера','robot check'];
-
 function looksBlocked(html, title) {
   const t = (title || '').toLowerCase();
   if (BLOCK_MARKERS.some(m => t.includes(m))) return true;
   return !title && /captcha|cloudflare|just a moment/i.test(html.slice(0, 3000));
 }
-
 function cleanStoreTitle(s) {
   if (!s) return '';
   return String(s).replace(/\s*[—–-]\s*(купить|скачать|читать|слушать|заказать|смотреть).*$/i, '').trim();
 }
-
 function cleanIsbn(s) {
   return String(s || '').replace(/^isbn[:\s]*/i, '').replace(/[\s-]/g, '').toUpperCase();
 }
-
 function mapCurrency(code) {
   const c = String(code || '').toUpperCase();
   return ['RUB','USD','EUR','KZT','UAH','GBP'].includes(c) ? c : 'RUB';
 }
-
 function normalizeAge(s) {
   if (!s) return '';
   const m = String(s).match(/(\d+)/);
   return m ? m[1] : '';
 }
-
 function personName(p) {
   if (!p) return '';
   if (typeof p === 'string') return p;
   if (Array.isArray(p)) return p.map(personName).filter(Boolean).join(', ');
   return p.name || '';
 }
-
 function imageUrl(img) {
   if (!img) return '';
   if (typeof img === 'string') return img;
   if (Array.isArray(img)) return imageUrl(img[0]);
   return img.url || '';
 }
-
 function firstOf(v) {
   if (!v) return '';
   if (Array.isArray(v)) return firstOf(v[0]);
   if (typeof v === 'object') return v.name || '';
   return String(v);
 }
-
 function stripTags(s) {
   if (!s) return '';
   const div = document.createElement('div');
@@ -810,16 +724,15 @@ function stripTags(s) {
 }
 
 // ═══════════════════════════════════════════════
-//  7. ДИАГНОСТИКА
+//  7. ДИАГНОСТИКА (НОВОЕ в v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
- * Проверяет работоспособность Microlink и возвращает
- * подробную диагностику для отображения в Настройках.
- *
- * @param {string} [apiKey] — опционально переопределить ключ
- * @returns {Promise<{ok: boolean, remaining: string, mode: string, error?: string}>}
- */
+* Проверяет работоспособность Microlink и возвращает
+* подробную диагностику для отображения в Настройках.
+*
+* @param {string} [apiKey] — опционально переопределить ключ
+* @returns {Promise<{ok, remaining, mode, error?, reason?}>}
+*/
 export async function checkMicrolinkStatus(apiKey) {
   const prevKey = _apiKey;
   if (apiKey !== undefined) _apiKey = (apiKey || '').trim();
@@ -845,9 +758,9 @@ export async function checkMicrolinkStatus(apiKey) {
 }
 
 /**
- * Возвращает текущее состояние лимита для отображения в UI.
- * @returns {{used: number, limit: number, mode: string, resetAt: string}}
- */
+* Возвращает текущее состояние лимита для отображения в UI.
+* @returns {{used, limit, mode, resetAt}}
+*/
 export function getDiagnostics() {
   return {
     used: _dailyCount,
@@ -860,15 +773,12 @@ export function getDiagnostics() {
 // ═══════════════════════════════════════════════
 //  8. КЕШ (IndexedDB + память)
 // ═══════════════════════════════════════════════
-
 async function getCached(key) {
-  // Сначала проверяем память
   if (_memCache.has(key)) {
     const item = _memCache.get(key);
     if (Date.now() - item.cachedAt < CACHE_TTL) return item;
     _memCache.delete(key);
   }
-  // Затем IndexedDB
   try {
     const db = await openDB();
     if (!db.objectStoreNames.contains('previews')) return null;
@@ -876,12 +786,8 @@ async function getCached(key) {
       const req = db.transaction('previews','readonly').objectStore('previews').get(key);
       req.onsuccess = () => {
         const item = req.result;
-        if (item && Date.now() - item.cachedAt < CACHE_TTL) {
-          _memCache.set(key, item);
-          resolve(item);
-        } else {
-          resolve(null);
-        }
+        if (item && Date.now() - item.cachedAt < CACHE_TTL) { _memCache.set(key, item); resolve(item); }
+        else resolve(null);
       };
       req.onerror = () => resolve(null);
     });
@@ -897,10 +803,6 @@ async function putCached(key, value) {
   } catch { /* не критично */ }
 }
 
-/**
- * Очищает весь кеш превью (память + IndexedDB).
- * Вызывается из Настроек → «Очистить кеш превью».
- */
 export async function clearPreviewCache() {
   _memCache.clear();
   try {
@@ -909,8 +811,8 @@ export async function clearPreviewCache() {
     await new Promise((resolve) => {
       const tx = db.transaction('previews','readwrite');
       tx.objectStore('previews').clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      tx.oncomplete = () => resolve(); tx.onerror = () => resolve();
     });
   } catch { /* ignore */ }
 }
+// ─────────────────────────────────────────────

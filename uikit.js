@@ -1,13 +1,13 @@
 // 📦 BookTrackerPro — uikit.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.2 | 2026-08-07
 // 📝 Переиспользуемые UI-компоненты «ночной библиотеки»
 //
 //    Компоненты:
 //      📅 Дата-пикер   — кастомный календарь вместо <input type=date>
 //      🔽 Кастомный селект — вместо системного <select>, с поиском
 //      ✅ Confirm       — стилизованный диалог вместо нативного confirm()
-//      🏷️ Chip Group   — множественный выбор (форматы книг)
-//      💘 Chip Input   — автокомплит для тропов/тегов
+//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.8.2)
+//      💘 Chip Input   — автокомплит для тропов/тегов (v3.8.2)
 //
 //    Принципы:
 //      — Нативный контрол остаётся в DOM и является источником истины.
@@ -15,13 +15,13 @@
 //      — Никаких эмодзи в UI — только SVG из icons.js.
 //      — Стили инжектируются один раз, соответствуют app.css.
 //
-//    Новое в 3.8.3:
-//      — showConfirm: focus trap + Escape + aria-modal (WCAG 2.1)
-//      — Кастомный селект: role="listbox" / role="option" / aria-selected
-//      — Дата-пикер: role="dialog" + aria-label
-//      — Chip Group / Chip Input: keyboard navigation (← → Enter Backspace)
-//      — prefers-reduced-motion: отключение анимаций при системной настройке
-//      — closeAllPopups() — закрытие всех поповеров (Escape / навигация)
+//    Новое в 3.7.0:
+//      — attachChipGroup(): множественный выбор чипами
+//        (форматы: бумажная / электронная / аудио)
+//      — attachChipInput(): ввод тропов с автокомплитом
+//        из уже существующих тропов всех книг
+//      — attachSelectWithCustom(): селект + «Добавить своё»
+//        (площадки эл. книг: ЛитРес, Яндекс Книги, Bookmate...)
 //
 //    Использование:
 //      import { enhanceForm, attachCustomSelect, showConfirm,
@@ -102,9 +102,6 @@ let _pickerState = null;
 /**
  * Привязывает кастомный календарь к <input type="date">.
  * Нативный пикер блокируется через readonly, значение остаётся ISO.
- *
- * Доступность: role="dialog", aria-label, Escape для закрытия.
- *
  * @param {HTMLInputElement} input
  */
 export function attachDatePicker(input) {
@@ -130,9 +127,6 @@ function openDatePicker(input) {
   };
   _activePicker = document.createElement('div');
   _activePicker.className = 'dp-pop';
-  _activePicker.setAttribute('role', 'dialog');           // 🆕 v3.8.3
-  _activePicker.setAttribute('aria-modal', 'true');        // 🆕 v3.8.3
-  _activePicker.setAttribute('aria-label', 'Выбор даты');  // 🆕 v3.8.3
   renderPicker();
   document.body.appendChild(_activePicker);
   positionPop(_activePicker, input);
@@ -155,7 +149,7 @@ function renderPicker() {
         if (c.other) return `<div class="dp-cell other">${c.day}</div>`;
         const sel = c.dateStr === s.selected ? ' selected' : '';
         const td = c.dateStr === today ? ' today' : '';
-        return `<button type="button" class="dp-cell${sel}${td}" data-dp-date="${c.dateStr}" aria-label="${c.day} ${MONTHS[s.month]} ${s.year}">${c.day}</button>`;
+        return `<button type="button" class="dp-cell${sel}${td}" data-dp-date="${c.dateStr}">${c.day}</button>`;
       }).join('')}
     </div>
     <div class="dp-foot">
@@ -204,9 +198,6 @@ let _ddState = null;
 /**
  * Заменяет системный <select> стилизованным dropdown.
  * Нативный select скрывается, но остаётся источником значения.
- *
- * Доступность: role="listbox" / role="option" / aria-selected.
- *
  * @param {HTMLSelectElement} select
  * @param {object} opts
  *   search {boolean}          — строка поиска внутри dropdown
@@ -230,9 +221,6 @@ export function attachCustomSelect(select, opts = {}) {
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'cs-trigger';
-  trigger.setAttribute('role', 'combobox');              // 🆕 v3.8.3
-  trigger.setAttribute('aria-expanded', 'false');        // 🆕 v3.8.3
-  trigger.setAttribute('aria-haspopup', 'listbox');      // 🆕 v3.8.3
   wrap.appendChild(trigger);
 
   select._csTrigger = trigger;
@@ -274,13 +262,10 @@ function openDropdown(select) {
   closeDatePicker();
   _activeDropdown = document.createElement('div');
   _activeDropdown.className = 'cs-dropdown';
-  _activeDropdown.setAttribute('role', 'listbox');       // 🆕 v3.8.3
   _ddState = { select };
   renderDropdown('');
   document.body.appendChild(_activeDropdown);
   positionPop(_activeDropdown, select._csTrigger);
-  // Обновляем aria-expanded на триггере
-  select._csTrigger?.setAttribute('aria-expanded', 'true');
   setTimeout(() => document.addEventListener('click', _onDdOutside, { capture: true }), 0);
 }
 
@@ -294,19 +279,18 @@ function renderDropdown(filter) {
     if (q && !text.toLowerCase().includes(q)) continue;
     const sel = opt.selected ? ' selected' : '';
     const content = opts.renderOption ? opts.renderOption(opt) : esc(text);
-    items += `<div class="cs-option${sel}" data-cs-val="${esc(opt.value)}" role="option" aria-selected="${opt.selected}">` +
+    items += `<div class="cs-option${sel}" data-cs-val="${esc(opt.value)}">` +
       `<span class="cs-option-body">${content}</span>` +
       `${opt.selected ? `<span class="cs-check">${icon('check', 14)}</span>` : ''}</div>`;
   }
-  if (!items) items = `<div class="cs-empty" role="option" aria-disabled="true">Ничего не найдено</div>`;
+  if (!items) items = `<div class="cs-empty">Ничего не найдено</div>`;
 
   _activeDropdown.innerHTML = `
     ${opts.search ? `
     <div class="cs-search">
       ${icon('search', 14)}
       <input type="text" class="cs-search-input"
-        placeholder="${esc(opts.searchPlaceholder || 'Поиск...')}" value="${esc(filter || '')}"
-        aria-label="Поиск в списке"/>
+        placeholder="${esc(opts.searchPlaceholder || 'Поиск...')}" value="${esc(filter || '')}"/>
     </div>` : ''}
     <div class="cs-options">${items}</div>
   `;
@@ -331,12 +315,7 @@ function selectOption(select, value) {
 }
 
 export function closeDropdown() {
-  if (_activeDropdown) {
-    // Сбрасываем aria-expanded на триггере
-    _ddState?.select?._csTrigger?.setAttribute('aria-expanded', 'false');
-    _activeDropdown.remove();
-    _activeDropdown = null;
-  }
+  if (_activeDropdown) { _activeDropdown.remove(); _activeDropdown = null; }
   _ddState = null;
   document.removeEventListener('click', _onDdOutside, { capture: true });
 }
@@ -349,13 +328,8 @@ function _onDdOutside(e) {
 // ═══════════════════════════════════════════════
 //  3. CONFIRM (замена нативного)
 // ═══════════════════════════════════════════════
-
 /**
  * Стилизованный confirm. Возвращает Promise<boolean>.
- *
- * v3.8.3: focus trap — Tab не выходит за пределы модалки.
- * Escape закрывает диалог. aria-modal для screen readers.
- *
  * @param {string} message
  * @param {object} opts — { okText, cancelText, danger }
  * @returns {Promise<boolean>}
@@ -364,9 +338,6 @@ export function showConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
     modal.className = 'ui-confirm-overlay';
-    modal.setAttribute('role', 'alertdialog');           // 🆕 v3.8.3
-    modal.setAttribute('aria-modal', 'true');            // 🆕 v3.8.3
-    modal.setAttribute('aria-label', message);           // 🆕 v3.8.3
     modal.innerHTML = `
       <div class="ui-confirm-panel">
         <div class="ui-confirm-icon">${icon(opts.danger ? 'trash' : 'checkCircle', 36)}</div>
@@ -378,56 +349,26 @@ export function showConfirm(message, opts = {}) {
       </div>
     `;
     document.body.appendChild(modal);
-
     const okBtn = modal.querySelector('.ui-confirm-ok');
     const cancelBtn = modal.querySelector('.ui-confirm-cancel');
-
-    // 🆕 v3.8.3: сохраняем текущий фокус для возврата
-    const lastFocused = document.activeElement;
-
-    // Фокус на кнопку подтверждения
     okBtn.focus();
-
-    // 🆕 v3.8.3: focus trap
-    const onKey = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); done(false); return; }
-      if (e.key === 'Tab') {
-        const focusable = [cancelBtn, okBtn];
-        const idx = focusable.indexOf(document.activeElement);
-        if (e.shiftKey) {
-          if (idx <= 0) { e.preventDefault(); focusable[focusable.length - 1].focus(); }
-        } else {
-          if (idx === focusable.length - 1 || idx === -1) { e.preventDefault(); focusable[0].focus(); }
-        }
-      }
-    };
-
-    const done = (val) => {
-      modal.remove();
-      document.removeEventListener('keydown', onKey);
-      // 🆕 v3.8.3: возвращаем фокус
-      if (lastFocused && lastFocused.focus) lastFocused.focus();
-      resolve(val);
-    };
-
+    const done = (val) => { modal.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
     okBtn.addEventListener('click', () => done(true));
     cancelBtn.addEventListener('click', () => done(false));
     modal.addEventListener('click', (e) => { if (e.target === modal) done(false); });
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
     document.addEventListener('keydown', onKey);
   });
 }
 
 // ═══════════════════════════════════════════════
-//  4. CHIP GROUP — множественный выбор
+//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
  * Группа чипов для множественного выбора.
  * Используется для форматов книги (бумажная / электронная / аудио).
  *
  * Значение хранится в скрытом input как JSON-массив.
- *
- * v3.8.3: keyboard navigation — Enter/Space для toggle.
  *
  * @param {HTMLElement} container — контейнер для чипов
  * @param {object} opts
@@ -463,11 +404,8 @@ export function attachChipGroup(container, opts = {}) {
       chip.type = 'button';
       chip.className = 'cg-chip' + (values.has(opt.value) ? ' active' : '');
       chip.dataset.cgVal = opt.value;
-      chip.setAttribute('role', 'checkbox');                          // 🆕 v3.8.3
-      chip.setAttribute('aria-checked', values.has(opt.value));       // 🆕 v3.8.3
       chip.innerHTML = `${opt.icon ? `<span class="cg-icon">${opt.icon}</span>` : ''}${esc(opt.label)}`;
-
-      const toggle = () => {
+      chip.addEventListener('click', () => {
         if (single) {
           values = new Set(values.has(opt.value) ? [] : [opt.value]);
         } else {
@@ -477,15 +415,6 @@ export function attachChipGroup(container, opts = {}) {
         syncValue();
         render();
         if (opts.onChange) opts.onChange([...values]);
-      };
-
-      chip.addEventListener('click', toggle);
-      // 🆕 v3.8.3: keyboard support
-      chip.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          toggle();
-        }
       });
       container.appendChild(chip);
     });
@@ -507,19 +436,15 @@ export function attachChipGroup(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  5. CHIP INPUT — автокомплит для тропов/тегов
+//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
  * Поле ввода с чипами и автокомплитом.
  * Используется для тропов в форме книги.
  *
  * Значение хранится в скрытом input как JSON-массив строк.
  *
- * v3.8.3: keyboard navigation — Enter/запятая для добавления,
- * Backspace для удаления последнего чипа.
- *
- * @param {HTMLElement} container
+ * @param {HTMLElement} container — контейнер
  * @param {object} opts
  *   inputId {string} — id скрытого input
  *   suggestions {string[]|function} — подсказки (массив или fn(query) => string[])
@@ -561,13 +486,11 @@ export function attachChipInput(container, opts = {}) {
   textInput.className = 'ci-input';
   textInput.placeholder = opts.placeholder || 'Введите и нажмите Enter...';
   textInput.autocomplete = 'off';
-  textInput.setAttribute('aria-label', opts.placeholder || 'Введите значение');  // 🆕 v3.8.3
   chipsRow.appendChild(textInput);
 
   // Dropdown подсказок
   const sugBox = document.createElement('div');
   sugBox.className = 'ci-suggestions hidden';
-  sugBox.setAttribute('role', 'listbox');  // 🆕 v3.8.3
   wrap.appendChild(sugBox);
 
   function syncValue() {
@@ -582,7 +505,7 @@ export function attachChipInput(container, opts = {}) {
     values.forEach((val, i) => {
       const chip = document.createElement('span');
       chip.className = 'ci-chip';
-      chip.innerHTML = `${esc(val)}<button type="button" class="ci-chip-del" data-ci-idx="${i}" aria-label="Удалить ${esc(val)}">${icon('close', 10)}</button>`;
+      chip.innerHTML = `${esc(val)}<button type="button" class="ci-chip-del" data-ci-idx="${i}">${icon('close', 10)}</button>`;
       chipsRow.insertBefore(chip, textInput);
     });
     chipsRow.querySelectorAll('.ci-chip-del').forEach(btn => {
@@ -619,7 +542,7 @@ export function attachChipInput(container, opts = {}) {
     }
     sugBox.classList.remove('hidden');
     sugBox.innerHTML = sugs.map(s =>
-      `<div class="ci-sug" data-ci-sug="${esc(s)}" role="option">${icon('heartHands', 12)} ${esc(s)}</div>`
+      `<div class="ci-sug" data-ci-sug="${esc(s)}">${icon('heartHands', 12)} ${esc(s)}</div>`
     ).join('');
     sugBox.querySelectorAll('.ci-sug').forEach(el => {
       el.addEventListener('mousedown', (e) => {
@@ -673,9 +596,8 @@ export function attachChipInput(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО
+//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.8.2)
 // ═══════════════════════════════════════════════
-
 /**
  * Кастомный селект + кнопка «Добавить своё».
  * Используется для площадки эл. книги (ЛитРес, Яндекс Книги, Bookmate...).
@@ -710,7 +632,6 @@ export function attachSelectWithCustom(select, opts = {}) {
 // ═══════════════════════════════════════════════
 //  7. АВТО-УЛУЧШЕНИЕ ФОРМЫ
 // ═══════════════════════════════════════════════
-
 /**
  * Проходит по контейнеру и применяет кастомные контролы:
  *   — все <select>            → кастомный селект (поиск при длинных списках)
@@ -729,10 +650,7 @@ export function enhanceForm(container, baseOpts = {}) {
   container.querySelectorAll('input[type="date"]').forEach(inp => attachDatePicker(inp));
 }
 
-/**
- * Закрывает все открытые поповеры (удобно для Escape / навигации).
- * 🆕 v3.8.3: экспорт для использования в app.js.
- */
+/** Закрывает все открытые поповеры (удобно для Escape / навигации). */
 export function closeAllPopups() {
   closeDatePicker();
   closeDropdown();
@@ -769,7 +687,6 @@ const UIKIT_STYLES = `
   aspect-ratio:1; display:flex; align-items:center; justify-content:center;
   border-radius:8px; font-size:.8rem; color:var(--text-primary);
   background:transparent; transition:all .15s var(--ease);
-  border:none; cursor:pointer;
 }
 .dp-cell.other { color:var(--text-muted); opacity:.35; pointer-events:none; }
 .dp-cell:hover { background:var(--bg-card-hover); }
@@ -782,7 +699,6 @@ const UIKIT_STYLES = `
   font-size:.78rem; font-weight:700;
   background:var(--bg-input); color:var(--text-secondary);
   transition:all .15s var(--ease);
-  border:none; cursor:pointer;
 }
 .dp-clear:hover { background:var(--red-dim); color:var(--red); }
 .dp-today:hover { background:var(--accent-dim); color:var(--accent); }
@@ -825,7 +741,7 @@ const UIKIT_STYLES = `
 .cs-check { color:var(--accent); display:inline-flex; flex-shrink:0; }
 .cs-empty { padding:16px; text-align:center; color:var(--text-muted); font-size:.85rem; }
 
-/* v3.7.0: кнопка «Другое» для селекта */
+/* v3.8.2: кнопка «Другое» для селекта */
 .cs-custom-btn {
   display:inline-flex; align-items:center; gap:6px;
   padding:8px 14px; margin-top:6px;
@@ -833,7 +749,6 @@ const UIKIT_STYLES = `
   color:var(--accent); background:var(--accent-dim);
   border:1px solid var(--accent-strong); border-radius:var(--radius-sm);
   transition:all .15s var(--ease);
-  cursor:pointer;
 }
 .cs-custom-btn:hover { background:var(--accent-strong); transform:translateY(-1px); }
 
@@ -856,78 +771,89 @@ const UIKIT_STYLES = `
 .ui-confirm-cancel, .ui-confirm-ok {
   flex:1; padding:11px; border-radius:var(--radius-sm);
   font-weight:700; font-size:.9rem; transition:all .18s var(--ease);
-  cursor:pointer; border:none;
 }
 .ui-confirm-cancel { background:var(--bg-card); border:1px solid var(--border); color:var(--text-primary); }
 .ui-confirm-cancel:hover { border-color:var(--text-muted); }
 .ui-confirm-ok { background:var(--accent); color:#241a08; }
-.ui-confirm-ok:hover { filter:brightness(1.1); transform:translateY(-1px); }
+.ui-confirm-ok:hover { background:var(--accent-hover); transform:translateY(-1px); }
 .ui-confirm-ok.danger { background:var(--red); color:#fff; }
+.ui-confirm-ok.danger:hover { background:var(--red); filter:brightness(1.12); }
 
-/* ── Chip Group ── */
+/* ── v3.8.2: Chip Group (множественный выбор) ── */
 .cg-chip {
-  display:inline-flex; align-items:center; gap:6px;
-  padding:7px 14px; border-radius:20px;
-  font-size:.82rem; font-weight:600;
-  background:var(--bg-input); border:1.5px solid var(--border);
-  color:var(--text-secondary); cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px;
+  padding:8px 15px; border-radius:16px;
+  font-size:.82rem; font-weight:700;
+  background:var(--bg-input); border:1.5px solid var(--border-soft);
+  color:var(--text-secondary);
   transition:all .18s var(--ease);
+  cursor:pointer;
 }
-.cg-chip:hover { border-color:var(--accent); color:var(--accent); transform:translateY(-1px); }
+.cg-chip:hover { border-color:var(--border); transform:translateY(-1px); }
 .cg-chip.active {
-  background:var(--accent-dim); border-color:var(--accent);
-  color:var(--accent); font-weight:700;
+  background:var(--accent-dim);
+  border-color:var(--accent) !important;
+  color:var(--accent);
+  font-weight:800;
+  box-shadow:0 2px 8px rgba(232,163,61,.15);
 }
+.cg-icon { display:inline-flex; align-items:center; }
 
-/* ── Chip Input ── */
-.ci-wrap { display:flex; flex-direction:column; gap:6px; }
+/* ── v3.8.2: Chip Input (автокомплит для тропов) ── */
+.ci-wrap { position:relative; }
 .ci-chips {
-  display:flex; flex-wrap:wrap; gap:6px; align-items:center;
-  padding:8px 10px; min-height:44px;
+  display:flex; flex-wrap:wrap; gap:6px;
+  padding:8px 10px;
   background:var(--bg-input); border:1px solid var(--border);
   border-radius:var(--radius-sm);
-  transition:border-color .2s var(--ease);
+  transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
-.ci-chips:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-dim); }
+.ci-chips:focus-within {
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-dim);
+}
 .ci-chip {
-  display:inline-flex; align-items:center; gap:4px;
-  padding:4px 10px; border-radius:14px;
-  font-size:.8rem; font-weight:600;
-  background:var(--accent-dim); color:var(--accent);
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 8px 4px 12px; border-radius:12px;
+  font-size:.78rem; font-weight:700;
+  background:var(--pink-dim); color:var(--pink);
+  border:1px solid rgba(217,138,168,.3);
+  animation:popIn .2s var(--ease-bounce);
 }
 .ci-chip-del {
   display:inline-flex; align-items:center; justify-content:center;
   width:16px; height:16px; border-radius:50%;
-  background:transparent; color:var(--accent); cursor:pointer;
+  color:var(--pink); background:transparent;
   transition:background .15s;
-  border:none; padding:0;
+  padding:0;
 }
-.ci-chip-del:hover { background:var(--accent); color:var(--bg-secondary); }
+.ci-chip-del:hover { background:rgba(217,138,168,.3); }
 .ci-input {
-  flex:1; min-width:80px; background:transparent; border:none; outline:none;
-  color:var(--text-primary); font-size:.88rem; padding:2px;
+  flex:1; min-width:120px;
+  background:transparent !important; border:none !important;
+  outline:none !important; box-shadow:none !important;
+  color:var(--text-primary); font-size:.88rem;
+  padding:4px 2px !important;
 }
+.ci-input::placeholder { color:var(--text-muted); }
 .ci-suggestions {
+  position:absolute; top:100%; left:0; right:0; z-index:50;
   background:var(--bg-card); border:1px solid var(--border);
-  border-radius:var(--radius-sm); overflow:hidden;
-  box-shadow:var(--shadow-sm);
+  border-radius:var(--radius-sm); box-shadow:var(--shadow);
+  max-height:200px; overflow-y:auto;
+  margin-top:4px;
+  animation:popIn .15s var(--ease);
 }
+.ci-suggestions.hidden { display:none; }
 .ci-sug {
   display:flex; align-items:center; gap:8px;
-  padding:8px 12px; font-size:.85rem;
-  color:var(--text-secondary); cursor:pointer;
-  transition:background .13s;
+  padding:9px 12px;
+  font-size:.84rem; color:var(--text-secondary);
+  cursor:pointer;
+  transition:all .13s var(--ease);
 }
-.ci-sug:hover { background:var(--accent-dim); color:var(--accent); }
-
-/* ── 🆕 v3.8.3: prefers-reduced-motion ── */
-@media (prefers-reduced-motion: reduce) {
-  .dp-pop, .cs-dropdown, .ui-confirm-overlay, .ui-confirm-panel {
-    animation: none !important;
-  }
-  .dp-cell, .cs-option, .cg-chip, .ci-chip-del {
-    transition: none !important;
-  }
+.ci-sug:hover {
+  background:var(--accent-dim); color:var(--accent);
 }
 `;
 

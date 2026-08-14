@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — collections.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.2 | 2026-08-07
 // 📝 Подборки книг
 //
 //    Типы:
@@ -10,15 +10,7 @@
 //    Системные фильтры (не хранятся, генерируются):
 //      📂 По жанрам · 📂 По авторам · 📂 По издательствам
 //
-//    Новое в 3.8.3:
-//      — 🏗️ esc/showToast/trackOverlay/untrackOverlay из utils.js
-//        (разрыв цикла app.js ↔ collections.js)
-//      — ♿ aria-label на всех кнопках действий
-//      — ♿ role="group" на группах кнопок
-//      — ♿ focus-visible стили для keyboard navigation
-//      — JSDoc для публичных функций
-//
-//    Сохранено из 3.7.0:
+//    Новое в 3.7.0:
 //      — Жест «назад» (History API): trackOverlay/untrackOverlay
 //        для динамических оверлеев формы, пикера и добавления книг
 //      — showConfirm (uikit.js) вместо нативных confirm()
@@ -33,14 +25,13 @@
 // ─────────────────────────────────────────────
 import { loadCollections, putCollection, delCollection,
          addBookToCollection, removeBookFromCollection } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.3: было './app.js'
+import { esc, showToast, trackOverlay, untrackOverlay } from './app.js';
 import { icon } from './icons.js';
 import { showConfirm } from './uikit.js';
 
 // ═══════════════════════════════════════════════
 //  1. СПИСОК ПОДБОРОК
 // ═══════════════════════════════════════════════
-
 /**
  * Рендерит экран подборок (единый список в порядке order).
  * @param {HTMLElement} container
@@ -112,7 +103,6 @@ export function renderCollectionsList(container, books, collections, callbacks) 
 
 /**
  * Карточка подборки с кнопками порядка и редактирования.
- * 🆕 v3.8.3: aria-label на всех кнопках.
  */
 function renderCollectionCard(col, books, idx, total) {
   const count = col.bookIds.length;
@@ -130,24 +120,16 @@ function renderCollectionCard(col, books, idx, total) {
         </div>
         <div class="collection-count">${count} ${pluralize(count, 'книга', 'книги', 'книг')}</div>
       </div>
-      <div class="collection-actions" role="group" aria-label="Действия с подборкой ${esc(col.name)}">
+      <div class="collection-actions">
         <button data-col-up="${col.id}" class="col-move-btn"
-                ${isFirst ? 'disabled' : ''}
-                aria-label="Переместить подборку ${esc(col.name)} выше"
-                title="Выше">${icon('chevronUp', 14)}</button>
+                ${isFirst ? 'disabled' : ''} title="Выше">${icon('chevronUp', 14)}</button>
         <button data-col-down="${col.id}" class="col-move-btn"
-                ${isLast ? 'disabled' : ''}
-                aria-label="Переместить подборку ${esc(col.name)} ниже"
-                title="Ниже">${icon('chevronDown', 14)}</button>
-        <button data-col-edit="${col.id}" class="icon-btn col-icon-btn"
-                aria-label="Редактировать подборку ${esc(col.name)}"
-                title="Редактировать">
+                ${isLast ? 'disabled' : ''} title="Ниже">${icon('chevronDown', 14)}</button>
+        <button data-col-edit="${col.id}" class="icon-btn col-icon-btn" title="Редактировать">
           ${icon('edit', 15)}
         </button>
         ${!isSystem ? `
-        <button data-col-del="${col.id}" class="icon-btn col-icon-btn col-del-btn"
-                aria-label="Удалить подборку ${esc(col.name)}"
-                title="Удалить">
+        <button data-col-del="${col.id}" class="icon-btn col-icon-btn col-del-btn" title="Удалить">
           ${icon('trash', 15)}
         </button>
         ` : ''}
@@ -159,7 +141,6 @@ function renderCollectionCard(col, books, idx, total) {
 // ═══════════════════════════════════════════════
 //  2. ЭКРАН ПОДБОРКИ (книги внутри)
 // ═══════════════════════════════════════════════
-
 /**
  * Рендерит экран подборки: список книг.
  * @param {HTMLElement} container
@@ -177,9 +158,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
   });
 
   container.innerHTML = `
-    <button id="col-back" class="btn-secondary mb-16" aria-label="Назад к списку подборок">
-      ${icon('arrowLeft', 14)} Подборки
-    </button>
+    <button id="col-back" class="btn-secondary mb-16">${icon('arrowLeft', 14)} Подборки</button>
     <div class="collection-hero">
       <div class="collection-hero-emoji">${collection.emoji}</div>
       <div class="collection-hero-info">
@@ -192,9 +171,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
           ${collection.isSystem ? ' · системная' : ''}
         </div>
       </div>
-      <button id="col-edit-hero" class="btn-secondary" style="flex-shrink:0"
-              aria-label="Редактировать подборку ${esc(collection.name)}"
-              title="Редактировать">
+      <button id="col-edit-hero" class="btn-secondary" style="flex-shrink:0" title="Редактировать">
         ${icon('edit', 14)}
       </button>
     </div>
@@ -209,7 +186,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
         ${colBooks.map(b => `
           <div class="book-card" data-book-id="${b.id}">
             ${b.coverUrl
-              ? `<img class="book-cover" src="${b.coverUrl}" alt="Обложка: ${esc(b.title)}" loading="lazy"
+              ? `<img class="book-cover" src="${b.coverUrl}" alt="" loading="lazy"
                       referrerpolicy="no-referrer"
                       onerror="this.style.display='none'"/>`
               : `<div class="book-cover-placeholder">${icon('bookClosed', 24)}</div>`}
@@ -218,9 +195,7 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
               <div class="book-author">${esc(b.author)}</div>
             </div>
             <button data-col-remove="${b.id}" class="icon-btn col-icon-btn"
-                    style="flex-shrink:0"
-                    aria-label="Убрать книгу ${esc(b.title)} из подборки"
-                    title="Убрать из подборки">${icon('close', 14)}</button>
+                    style="flex-shrink:0" title="Убрать из подборки">${icon('close', 14)}</button>
           </div>
         `).join('')}
       </div>
@@ -257,7 +232,6 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
 // ═══════════════════════════════════════════════
 //  3. ФОРМА ПОДБОРКИ (создание / редактирование)
 // ═══════════════════════════════════════════════
-
 /**
  * Открывает форму создания/редактирования подборки.
  * Работает и для системных (isSystem сохраняется).
@@ -270,14 +244,11 @@ export function openCollectionForm(collection, onSave) {
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
-  overlay.setAttribute('role', 'dialog');          // 🆕 v3.8.3
-  overlay.setAttribute('aria-modal', 'true');      // 🆕 v3.8.3
-  overlay.setAttribute('aria-label', isEdit ? 'Редактировать подборку' : 'Новая подборка');
   overlay.innerHTML = `
     <div class="overlay-panel" style="max-height:70dvh">
       <div class="overlay-header">
         <h2>${isEdit ? `${icon('edit', 18)} Редактировать подборку` : `${icon('folder', 18)} Новая подборка`}</h2>
-        <button class="icon-btn col-form-close" aria-label="Закрыть форму">${icon('close', 16)}</button>
+        <button class="icon-btn col-form-close">${icon('close', 16)}</button>
       </div>
       <div class="overlay-body">
         ${c.isSystem ? `
@@ -288,17 +259,17 @@ export function openCollectionForm(collection, onSave) {
           </div>
         ` : ''}
         <div class="form-group">
-          <label for="col-f-emoji">Эмодзи</label>
+          <label>Эмодзи</label>
           <input type="text" id="col-f-emoji" value="${esc(c.emoji || '📂')}"
                  maxlength="4" style="width:60px;text-align:center;font-size:1.5rem"/>
         </div>
         <div class="form-group">
-          <label for="col-f-name">Название *</label>
+          <label>Название *</label>
           <input type="text" id="col-f-name" value="${esc(c.name || '')}"
                  placeholder="Летнее чтение" required/>
         </div>
         <div class="form-group">
-          <label for="col-f-desc">Описание</label>
+          <label>Описание</label>
           <textarea id="col-f-desc" rows="2"
                     placeholder="Книги для отпуска на море...">${esc(c.description || '')}</textarea>
         </div>
@@ -309,7 +280,7 @@ export function openCollectionForm(collection, onSave) {
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // жест «назад»
+  trackOverlay(overlay); // 🆕 v3.8.2: жест «назад»
 
   const close = () => {
     overlay.remove();
@@ -344,7 +315,6 @@ export function openCollectionForm(collection, onSave) {
 // ═══════════════════════════════════════════════
 //  4. ВЫБОР ПОДБОРОК ДЛЯ КНИГИ (чекбоксы)
 // ═══════════════════════════════════════════════
-
 /**
  * Открывает оверлей с чекбоксами: добавить книгу в подборки.
  * @param {string} bookId
@@ -358,14 +328,11 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
-  overlay.setAttribute('role', 'dialog');          // 🆕 v3.8.3
-  overlay.setAttribute('aria-modal', 'true');      // 🆕 v3.8.3
-  overlay.setAttribute('aria-label', `Подборки для книги ${book.title}`);
   overlay.innerHTML = `
     <div class="overlay-panel" style="max-height:75dvh">
       <div class="overlay-header">
         <h2>${icon('folder', 18)} Подборки</h2>
-        <button class="icon-btn picker-close" aria-label="Закрыть">${icon('close', 16)}</button>
+        <button class="icon-btn picker-close">${icon('close', 16)}</button>
       </div>
       <div class="overlay-body">
         <div class="text-small text-muted mb-16">
@@ -377,8 +344,7 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
             return `
               <label class="picker-row">
                 <input type="checkbox" data-col-id="${col.id}"
-                       ${checked ? 'checked' : ''}
-                       aria-label="Добавить в подборку ${esc(col.name)}"/>
+                       ${checked ? 'checked' : ''}/>
                 <span class="picker-emoji">${col.emoji}</span>
                 <span class="picker-name">${esc(col.name)}</span>
                 <span class="picker-count">(${col.bookIds.length})</span>
@@ -393,7 +359,7 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay); // 🆕 v3.8.2
 
   const close = () => {
     overlay.remove();
@@ -423,7 +389,6 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
 // ═══════════════════════════════════════════════
 //  5. ВЫБОР КНИГ ДЛЯ ДОБАВЛЕНИЯ В ПОДБОРКУ
 // ═══════════════════════════════════════════════
-
 /**
  * Открывает оверлей: выбрать книги для добавления в подборку.
  * @param {string} collectionId
@@ -437,14 +402,11 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
-  overlay.setAttribute('role', 'dialog');          // 🆕 v3.8.3
-  overlay.setAttribute('aria-modal', 'true');      // 🆕 v3.8.3
-  overlay.setAttribute('aria-label', `Добавить книги в подборку ${collection.name}`);
   overlay.innerHTML = `
     <div class="overlay-panel" style="max-height:80dvh">
       <div class="overlay-header">
         <h2>${collection.emoji} ${esc(collection.name)}</h2>
-        <button class="icon-btn add-books-close" aria-label="Закрыть">${icon('close', 16)}</button>
+        <button class="icon-btn add-books-close">${icon('close', 16)}</button>
       </div>
       <div class="overlay-body">
         ${available.length === 0 ? `
@@ -454,19 +416,16 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
         ` : `
           <div class="form-group">
             <input type="text" id="add-books-search"
-                   placeholder="Поиск по названию или автору..."
-                   autocomplete="off"
-                   aria-label="Поиск книг для добавления"/>
+                   placeholder="${icon('search', 13)} Поиск по названию или автору..."
+                   autocomplete="off"/>
           </div>
           <div id="add-books-list">
             ${available.map(b => `
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
-                <input type="checkbox" data-book-id="${b.id}"
-                       aria-label="Добавить книгу ${esc(b.title)}"/>
+                <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
                   ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer"
                           onerror="this.style.display='none'"
-                          alt=""
                           style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                   : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px;color:var(--text-muted)">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
@@ -483,7 +442,7 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay); // 🆕 v3.8.2
 
   const close = () => {
     overlay.remove();
@@ -523,19 +482,15 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
 // ═══════════════════════════════════════════════
 //  6. ОПЕРАЦИИ (для app.js)
 // ═══════════════════════════════════════════════
-
 export async function createCollection(data) {
   await putCollection(data);
 }
-
 export async function updateCollection(data) {
   await putCollection(data);
 }
-
 export async function deleteCollection(id) {
   await delCollection(id);
 }
-
 export async function removeBookFromCol(collectionId, bookId) {
   await removeBookFromCollection(collectionId, bookId);
 }
@@ -543,7 +498,6 @@ export async function removeBookFromCol(collectionId, bookId) {
 // ═══════════════════════════════════════════════
 //  7. СИСТЕМНЫЕ ФИЛЬТРЫ (для drawer)
 // ═══════════════════════════════════════════════
-
 /**
  * Генерирует данные для системных фильтров в drawer.
  * @param {object[]} books
@@ -583,9 +537,7 @@ export function renderDrawerFilters(books) {
     if (items.length === 0) return '';
     return `
       <div class="drawer-filter-group">
-        <button class="drawer-filter-toggle" data-ftoggle="${filterType}"
-                aria-expanded="false"
-                aria-label="Развернуть фильтр: ${title}">
+        <button class="drawer-filter-toggle" data-ftoggle="${filterType}">
           <span>${icon(iconName, 14)} ${title}</span>
           <span class="drawer-filter-arrow">${icon('chevronRight', 11)}</span>
         </button>
@@ -593,8 +545,7 @@ export function renderDrawerFilters(books) {
           ${items.map(item => `
             <button class="drawer-filter-item"
                     data-filter-type="${filterType}"
-                    data-filter-value="${esc(item.name)}"
-                    aria-label="Фильтр: ${esc(item.name)}, ${item.count} книг">
+                    data-filter-value="${esc(item.name)}">
               ${esc(item.name)}
               <span class="drawer-filter-count">(${item.count})</span>
             </button>
@@ -614,7 +565,6 @@ export function renderDrawerFilters(books) {
 // ═══════════════════════════════════════════════
 //  8. УТИЛИТЫ
 // ═══════════════════════════════════════════════
-
 function pluralize(n, one, few, many) {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -719,7 +669,6 @@ const COLLECTION_STYLES = `
   font-size:.88rem; font-weight:600;
   color:var(--text-secondary);
   transition:color .2s var(--ease);
-  background:none; border:none; cursor:pointer;
 }
 .drawer-filter-toggle:hover { color:var(--text-primary); }
 .drawer-filter-toggle > span:first-child {
@@ -738,40 +687,17 @@ const COLLECTION_STYLES = `
   font-size:.85rem; color:var(--text-secondary);
   border-radius:6px;
   transition:all .15s var(--ease);
-  background:none; border:none; cursor:pointer;
 }
 .drawer-filter-item:hover {
   background:var(--accent-dim);
   color:var(--accent);
 }
 .drawer-filter-count { font-size:.75rem; color:var(--text-muted); }
-
-/* 🆕 v3.8.3: keyboard focus */
-.collection-card:focus-visible,
-.col-move-btn:focus-visible,
-.col-icon-btn:focus-visible,
-.drawer-filter-toggle:focus-visible,
-.drawer-filter-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* 🆕 v3.8.3: prefers-reduced-motion */
-@media (prefers-reduced-motion: reduce) {
-  .collection-card,
-  .col-move-btn,
-  .col-icon-btn,
-  .drawer-filter-toggle,
-  .drawer-filter-item,
-  .drawer-filter-arrow {
-    transition: none !important;
-  }
-}
 `;
-
 if (!document.getElementById('collection-styles')) {
   const style = document.createElement('style');
   style.id = 'collection-styles';
   style.textContent = COLLECTION_STYLES;
   document.head.appendChild(style);
 }
+// ─────────────────────────────────────────────
