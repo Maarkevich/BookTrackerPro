@@ -282,15 +282,5 @@ placeholder="Или введите ISBN вручную" inputmode="numeric"/>
 <!-- JS модуль -->
 <script type="module" src="app.js?v=3.8.1"></script>
 </body>
-<script>
-function __showErr(msg){
-var d=document.createElement('div');
-d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#5a1a1a;color:#fff;padding:10px 12px;font:12px/1.4 monospace;white-space:pre-wrap';
-d.textContent=msg;
-document.documentElement.appendChild(d);
-}
-window.addEventListener('error',function(e){__showErr('ERR: '+e.message+'\n'+(e.filename||'').split('/').pop()+':'+e.lineno);},true);
-window.addEventListener('unhandledrejection',function(e){__showErr('REJECT: '+(e.reason&&e.reason.message||e.reason));});
-</script>
 </html>
 // ─────────────────────────────────────────────
