@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — collections.js
-// 🔖 v3.7.0 | 2026-08-07
+// 🔖 v3.8.1 | 2026-08-07
 // 📝 Подборки книг
 //
 //    Типы:
@@ -280,7 +280,7 @@ export function openCollectionForm(collection, onSave) {
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // 🆕 v3.7.0: жест «назад»
+  trackOverlay(overlay); // 🆕 v3.8.1: жест «назад»
 
   const close = () => {
     overlay.remove();
@@ -359,7 +359,7 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // 🆕 v3.7.0
+  trackOverlay(overlay); // 🆕 v3.8.1
 
   const close = () => {
     overlay.remove();
@@ -442,7 +442,7 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // 🆕 v3.7.0
+  trackOverlay(overlay); // 🆕 v3.8.1
 
   const close = () => {
     overlay.remove();
@@ -700,3 +700,4 @@ if (!document.getElementById('collection-styles')) {
   style.textContent = COLLECTION_STYLES;
   document.head.appendChild(style);
 }
+// ─────────────────────────────────────────────

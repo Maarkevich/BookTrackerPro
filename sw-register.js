@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — sw-register.js
-// 🔖 v3.7.0 | 2026-08-09
+// 🔖 v3.8.1 | 2026-08-09
 // 📝 Регистрация Service Worker + логика обновлений
 //
 //    Что делает:
@@ -266,9 +266,9 @@ function createUpdateBanner(worker) {
 const banner = document.createElement('div');
 banner.className = 'update-banner';
 banner.innerHTML = `
-<span>🔄 Доступна новая версия</span>
+<span>↻ Доступна новая версия</span>
 <button class="btn-small" id="dyn-update-apply">Обновить</button>
-<button class="icon-btn" id="dyn-update-dismiss" style="width:28px;height:28px;font-size:.9rem">✕</button>
+<button class="icon-btn" id="dyn-update-dismiss" style="width:28px;height:28px;padding:4px;flex-shrink:0"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
 `;
 document.body.appendChild(banner);
 
@@ -395,3 +395,4 @@ if (ok) console.log('[SW] Принудительная проверка обно
 }
 });
 }
+// ─────────────────────────────────────────────

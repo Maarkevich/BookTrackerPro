@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.0 | 2026-08-12
+// 🔖 v3.8.1 | 2026-08-12
 // 📝 Точка входа: навигация, рендеринг, события
 //
 //    ИСПРАВЛЕНО в 3.7.1-fix:
@@ -103,27 +103,27 @@ deferredPrompt: null,
 };
 
 const SEARCH_SCOPES = [
-{ id: 'all', icon: '🔍', label: 'Всё' },
-{ id: 'books', icon: '📚', label: 'Книги' },
-{ id: 'content', icon: '🎬', label: 'Контент' },
-{ id: 'reviews', icon: '✍️', label: 'Отзывы' },
-{ id: 'quotes', icon: '💬', label: 'Цитаты' },
-{ id: 'collections', icon: '📂', label: 'Подборки' },
-{ id: 'challenges', icon: '🏆', label: 'Челленджи' },
-{ id: 'series', icon: '📚', label: 'Серии' },
-{ id: 'tags', icon: '🏷️', label: 'Теги' },
+{ id: 'all',         ic: 'search',     label: 'Всё' },
+{ id: 'books',       ic: 'bookOpen',   label: 'Книги' },
+{ id: 'content',     ic: 'film',       label: 'Контент' },
+{ id: 'reviews',     ic: 'reviews',    label: 'Отзывы' },
+{ id: 'quotes',      ic: 'quote',      label: 'Цитаты' },
+{ id: 'collections', ic: 'folder',     label: 'Подборки' },
+{ id: 'challenges',  ic: 'trophy',     label: 'Челленджи' },
+{ id: 'series',      ic: 'layers',     label: 'Серии' },
+{ id: 'tags',        ic: 'tag',        label: 'Теги' },
 ];
 
 const BOOK_FORMATS = {
-paper: { icon: '📖', label: 'Бумажная' },
-ebook: { icon: '📱', label: 'Электронная' },
-audio: { icon: '🎧', label: 'Аудиокнига' },
+paper: { ic: 'paper',     icon: '📖', label: 'Бумажная' },
+ebook: { ic: 'ebook',     icon: '📱', label: 'Электронная' },
+audio: { ic: 'headphones',icon: '🎧', label: 'Аудиокнига' },
 };
 
 const TAB_TITLES = {
-books: '📚 Мои книги', content: '🎬 Контент-план', reviews: '✍️ Отзывы',
-calendar: '📅 Календарь', challenges: '🏆 Челленджи', stats: '📊 Статистика',
-settings: '⚙️ Настройки', series: '📚 Серии', collections: '📂 Подборки',
+books:       'Мои книги',      content: 'Контент-план', reviews: 'Отзывы',
+calendar:    'Календарь',      challenges: 'Челленджи', stats:   'Статистика',
+settings:    'Настройки',      series: 'Серии',         collections: 'Подборки',
 };
 
 const TAB_ICONS = {
@@ -517,7 +517,7 @@ DOM.searchBookTags.innerHTML = S.tags.map(t => `
 <button class="booktag-chip ${S.searchBookTag === t.name ? 'active' : ''}"
 data-booktag="${esc(t.name)}"
 style="color:${t.color || 'var(--text-secondary)'};border-color:${(t.color || '#888')}55">
-🏷️ ${esc(t.name)}
+${icon('tag',13)} ${esc(t.name)}
 </button>
 `).join('');
 DOM.searchBookTags.querySelectorAll('[data-booktag]').forEach(chip => {
@@ -610,7 +610,7 @@ return;
 
 let html = '';
 if (results.books.length) {
-html += searchSection('📚 Книги', results.books.length, results.books.map(b => `
+html += searchSection(icon('bookOpen',14)+' Книги', results.books.length, results.books.map(b => `
 <div class="sr-item" data-sr-book="${b.id}">
 ${b.coverUrl ? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : '<div class="sr-cover ph">📕</div>'}
 <div class="sr-info">
@@ -620,7 +620,7 @@ ${b.coverUrl ? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy" 
 </div>`).join(''));
 }
 if (results.content.length) {
-html += searchSection('🎬 Контент', results.content.length, results.content.map(c => `
+html += searchSection(icon('film',14)+' Контент', results.content.length, results.content.map(c => `
 <div class="sr-item" data-sr-content-book="${c.bookId}" data-sr-content-id="${c.id}">
 <div class="sr-icon">${CONTENT_ICONS[c.type] || '🎬'}</div>
 <div class="sr-info">
@@ -630,7 +630,7 @@ html += searchSection('🎬 Контент', results.content.length, results.con
 </div>`).join(''));
 }
 if (results.reviews.length) {
-html += searchSection('✍️ Отзывы', results.reviews.length, results.reviews.map(b => `
+html += searchSection(icon('reviews',14)+' Отзывы', results.reviews.length, results.reviews.map(b => `
 <div class="sr-item" data-sr-book="${b.id}">
 <div class="sr-icon">✍️</div>
 <div class="sr-info">
@@ -640,7 +640,7 @@ html += searchSection('✍️ Отзывы', results.reviews.length, results.rev
 </div>`).join(''));
 }
 if (results.quotes.length) {
-html += searchSection('💬 Цитаты', results.quotes.length, results.quotes.map(qt => `
+html += searchSection(icon('quote',14)+' Цитаты', results.quotes.length, results.quotes.map(qt => `
 <div class="sr-item" data-sr-book="${qt.bookId}">
 <div class="sr-icon">💬</div>
 <div class="sr-info">
@@ -650,7 +650,7 @@ html += searchSection('💬 Цитаты', results.quotes.length, results.quotes
 </div>`).join(''));
 }
 if (results.collections.length) {
-html += searchSection('📂 Подборки', results.collections.length, results.collections.map(c => `
+html += searchSection(icon('folder',14)+' Подборки', results.collections.length, results.collections.map(c => `
 <div class="sr-item" data-sr-collection="${c.id}">
 <div class="sr-icon">${c.emoji}</div>
 <div class="sr-info">
@@ -660,7 +660,7 @@ html += searchSection('📂 Подборки', results.collections.length, resul
 </div>`).join(''));
 }
 if (results.challenges.length) {
-html += searchSection('🏆 Челленджи', results.challenges.length, results.challenges.map(c => `
+html += searchSection(icon('trophy',14)+' Челленджи', results.challenges.length, results.challenges.map(c => `
 <div class="sr-item" data-sr-challenge="${c.id}">
 <div class="sr-icon">${c.emoji || '🏆'}</div>
 <div class="sr-info">
@@ -670,7 +670,7 @@ html += searchSection('🏆 Челленджи', results.challenges.length, resu
 </div>`).join(''));
 }
 if (results.series.length) {
-html += searchSection('📚 Серии', results.series.length, results.series.map(s => `
+html += searchSection(icon('layers',14)+' Серии', results.series.length, results.series.map(s => `
 <div class="sr-item" data-sr-series="${esc(s.name)}">
 <div class="sr-icon">${s.emoji}</div>
 <div class="sr-info">
@@ -680,7 +680,7 @@ html += searchSection('📚 Серии', results.series.length, results.series.m
 </div>`).join(''));
 }
 if (results.tags.length) {
-html += searchSection('🏷️ Теги', results.tags.length, results.tags.map(t => `
+html += searchSection(icon('tag',14)+' Теги', results.tags.length, results.tags.map(t => `
 <div class="sr-item" data-sr-tag="${esc(t.name)}">
 <div class="sr-icon" style="color:${t.color || 'var(--accent)'}">🏷️</div>
 <div class="sr-info">
@@ -882,7 +882,7 @@ mc.innerHTML = `
 <div class="filter-bar no-scrollbar">
 ${filters.map(f => `
 <button class="filter-chip ${S.bookFilter === f.id && !S.activeFilter ? 'active' : ''}"
-data-filter="${f.id}">${f.label}</button>
+data-filter="${f.id}">${f.ic ? icon(f.ic, 13) + ' ' : ''}${f.label}</button>
 `).join('')}
 </div>
 <div class="book-list">
@@ -988,7 +988,7 @@ ${coverHtml}
 <div class="book-author">${esc(book.author)}</div>
 <div class="book-meta">
 <button class="book-badge ${statusClass} status-btn" data-book-id="${book.id}">
-${st.icon} ${st.label} ▾
+${(st.ic ? icon(st.ic,14) : st.icon)} ${st.label} ▾
 </button>
 ${book.isPR ? '<span class="book-badge badge-pr">📦 PR</span>' : ''}
 ${seriesHtml}
@@ -1021,7 +1021,7 @@ const dd = document.createElement('div');
 dd.className = 'status-dropdown';
 dd.innerHTML = Object.entries(BOOK_STATUSES).map(([key, st]) => `
 <button class="status-dropdown-item ${book.status === key ? 'current' : ''}" data-status="${key}">
-<span>${st.icon}</span> ${st.label}
+<span>${(st.ic ? icon(st.ic,14) : st.icon)}</span> ${st.label}
 ${book.status === key ? '<span style="margin-left:auto">✓</span>' : ''}
 </button>
 `).join('');
@@ -1179,14 +1179,14 @@ DOM.formBody.innerHTML = `
 <img id="bf-cover-preview-img" src="" alt="Предпросмотр обложки"/>
 </div>
 </div>
-<!-- Форматы книги (v3.7.0) -->
+<!-- Форматы книги (v3.8.1) -->
 <div class="form-section">
 <h3>📖 Формат книги</h3>
 <div class="form-group">
 <div class="tags-chips" id="bf-formats">
 ${Object.entries(BOOK_FORMATS).map(([key, fmt]) => `
 <button class="tag-pick-chip ${selectedFormats.has(key) ? 'active' : ''}" data-format="${key}">
-${fmt.icon} ${fmt.label}
+${icon(fmt.ic || 'paper', 15)} ${fmt.label}
 </button>
 `).join('')}
 </div>
@@ -1215,12 +1215,12 @@ ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${cur === k ?
 <h3>📖 Статус</h3>
 <div class="form-group"><label>Статус</label>
 <select id="bf-status">
-${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="${k}" ${(b.status || 'wishlist') === k ? 'selected' : ''}>${st.icon} ${st.label}</option>`).join('')}
+\${Object.entries(BOOK_STATUSES).map(([k, st]) => `<option value="\${k}" \${(b.status || 'wishlist') === k ? 'selected' : ''}>\${(st.ic ? icon(st.ic,14) : st.icon)} \${st.label}</option>`).join('')}
 </select>
 </div>
 <div class="form-row">
-<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="${b.currentPage || 0}" min="0"/></div>
-<div class="form-group"><label>Оценка ⭐ (1–5)</label><input type="number" id="bf-rating" value="${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
+<div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="\${b.currentPage || 0}" min="0"/></div>
+<div class="form-group"><label>Оценка ⭐ (1–5)</label><input type="number" id="bf-rating" value="\${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
 </div>
 </div>
 <div class="form-section">
@@ -1292,7 +1292,7 @@ ${esc(t.name)}
 <input type="text" id="bf-tags" value="" placeholder="фэнтези, бумажная, перечитать"/>
 </div>
 </div>
-<!-- Тропы (v3.7.0) -->
+<!-- Тропы (v3.8.1) -->
 <div class="form-section">
 <h3>💫 Тропы</h3>
 <div class="form-group">
@@ -1429,8 +1429,18 @@ fb.querySelector('#bf-series-total').value = total;
 }
 });
 
-// Кастомный селект валюты
+// Кастомные селекты + датапикер книжной формы
 attachCustomSelect(fb.querySelector('#bf-currency'), {});
+attachCustomSelect(fb.querySelector('#bf-status'), {
+  renderOption: (val, text) => {
+    const sIcons = {wishlist:'wishlist',added:'added',reading:'reading',
+      paused:'paused',finished:'finished',dropped:'dropped'};
+    const ic = sIcons[val];
+    return (ic ? icon(ic,15)+' ' : '') + text.replace(/^\S+\s/, '');
+  }
+});
+const _rcvDate = fb.querySelector('#bf-received-date');
+if (_rcvDate) attachDatePicker(_rcvDate);
 
 // Toggles
 fb.querySelector('#bf-pr-toggle').addEventListener('click', function() {
@@ -1597,6 +1607,9 @@ document.body.style.overflow = 'hidden';
 trackOverlay(overlay);
 
 overlay.querySelectorAll('.ml-target').forEach(sel => {
+attachCustomSelect(sel, {
+  onChange: v => { mapping[sel.dataset.fieldId] = v; }
+});
 sel.addEventListener('change', () => { mapping[sel.dataset.fieldId] = sel.value; });
 });
 
@@ -1926,7 +1939,7 @@ ${book.coverUrl
 <div class="detail-title">${esc(book.title)}</div>
 <div class="detail-author">${esc(book.author)}</div>
 <div class="book-meta">
-<button class="book-badge badge-status status-btn" data-book-id="${book.id}">${st.icon} ${st.label} ▾</button>
+<button class="book-badge badge-status status-btn" data-book-id="${book.id}">${(st.ic ? icon(st.ic,14) : st.icon)} ${st.label} ▾</button>
 ${book.isPR ? `<span class="book-badge badge-pr">📦 ${esc(book.receivedFrom || 'PR')}</span>` : ''}
 ${book.ageRating ? `<span class="book-badge badge-status">${esc(book.ageRating)}</span>` : ''}
 </div>
@@ -2497,7 +2510,7 @@ ${S.tags.map(t => `
 </div>
 <div class="settings-section">
 <h3>ℹ️ О приложении</h3>
-<p class="hint">Book Tracker Pro v3.7.1 · Трекер книг для бук-блогера · Работает оффлайн</p>
+<p class="hint">Book Tracker Pro v3.8.1 · Трекер книг для бук-блогера · Работает оффлайн</p>
 </div>
 `;
 
@@ -2515,6 +2528,15 @@ bindToggle('#set-price-stats', 'showPriceInStats');
 bindToggle('#set-confetti', 'confetti');
 bindToggle('#set-sound', 'sound');
 
+// Кастомные селекты настроек
+const setCurSel = mc.querySelector('#set-currency');
+const setPlatSel = mc.querySelector('#set-platform');
+if (setCurSel) attachCustomSelect(setCurSel, {
+  onChange: v => { S.settings.defaultCurrency = v; saveAppSettings(); }
+});
+if (setPlatSel) attachCustomSelect(setPlatSel, {
+  onChange: v => { S.settings.defaultPlatform = v; saveAppSettings(); }
+});
 mc.querySelector('#set-currency')?.addEventListener('change', function() {
 S.settings.defaultCurrency = this.value; saveAppSettings();
 });

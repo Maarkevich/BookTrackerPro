@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — stats.js
-// 🔖 v3.7.0 | 2026-08-07
+// 🔖 v3.8.1 | 2026-08-07
 // 📝 Статистика + Календарь
 //
 //    Подвкладки:
@@ -54,7 +54,7 @@ return STATS_SUB_ORDER[idx - 1];
 * @param {HTMLElement} container
 * @param {object[]} books
 * @param {object} settings
-* @param {object[]} challenges — 🆕 v3.7.0: передаются из app.js явно
+* @param {object[]} challenges — 🆕 v3.8.1: передаются из app.js явно
 */
 export function renderStatsTab(container, books, settings, challenges = []) {
 if (!container._statsSub) container._statsSub = 'books';
@@ -76,7 +76,7 @@ container.querySelectorAll('[data-ssub]').forEach(btn => {
 btn.addEventListener('click', () => {
 const newSub = btn.dataset.ssub;
 container._statsSub = newSub;
-// 🆕 v3.7.0: уведомляем app.js для pushState (жест «назад»)
+// 🆕 v3.8.1: уведомляем app.js для pushState (жест «назад»)
 document.dispatchEvent(new CustomEvent('btp-stats-sub', { detail: { sub: newSub } }));
 renderStatsTab(container, books, settings, challenges);
 });
@@ -453,7 +453,7 @@ ${Object.entries(byCurrency).map(([cur, d]) => `
 * @param {HTMLElement} container
 * @param {object[]} books
 * @param {object} settings
-* @param {object[]} challenges — 🆕 v3.7.0: передаются явно, без глобала
+* @param {object[]} challenges — 🆕 v3.8.1: передаются явно, без глобала
 */
 function renderBlogStats(container, books, settings, challenges = []) {
 const prBooks = books.filter(b => b.isPR);
@@ -470,7 +470,7 @@ const totalReviews = books.filter(b => b.review?.text || b.review?.rating > 0).l
 const totalQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).length, 0);
 const usedQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).filter(q => q.used).length, 0);
 
-// 🆕 v3.7.0: челленджи из параметра, не из window
+// 🆕 v3.8.1: челленджи из параметра, не из window
 const activeCh = challenges.filter(c => c.status === 'active');
 const doneCh = challenges.filter(c => c.status === 'completed');
 
@@ -513,7 +513,7 @@ ${activeCh.map(ch => {
 const prog = calcChallengeProgress(ch, books);
 return `
 <div class="content-card" style="cursor:default">
-<div class="content-icon" style="background:var(--accent-dim)">${ch.emoji || '🏆'}</div>
+<div class="content-icon" style="background:var(--accent-dim)">${icon('trophy', 20)}</div>
 <div class="content-info">
 <div class="content-title">${esc(ch.name)}</div>
 <div class="content-meta">
@@ -580,7 +580,7 @@ const month = container._calMonth;
 const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const dayNames = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-// 🆕 v3.7.0: добавляем bookId — нужен для открытия карточки контента
+// 🆕 v3.8.1: добавляем bookId — нужен для открытия карточки контента
 const contentByDate = {};
 for (const book of books) {
 for (const c of (book.contentItems || [])) {
@@ -667,7 +667,7 @@ if (dayContent.length === 0) {
 dayEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:20px">${icon('calendar', 14)} ${formatDateRu(dateStr)}: нет контента</div>`;
 return;
 }
-// 🆕 v3.7.0: кликабельные карточки → read-only карточка контента
+// 🆕 v3.8.1: кликабельные карточки → read-only карточка контента
 dayEl.innerHTML = `
 <div class="text-small text-muted mb-8" style="font-weight:700">${icon('calendar', 13)} ${formatDateRu(dateStr)}</div>
 ${dayContent.map(c => {
@@ -806,7 +806,7 @@ return new Date(dateStr + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numer
 //  9. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
 const STATS_STYLES = `
-/* v3.7.0: кликабельный контент в календаре */
+/* v3.8.1: кликабельный контент в календаре */
 .cal-content-item { position: relative; }
 .cal-content-arrow {
 font-size: 1.3rem; font-weight: 700; color: var(--text-muted);
@@ -827,3 +827,4 @@ style.id = 'stats-styles';
 style.textContent = STATS_STYLES;
 document.head.appendChild(style);
 }
+/* ─────────────────────────────────────────────

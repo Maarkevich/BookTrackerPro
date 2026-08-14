@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — search.js
-// 🔖 v3.8.0 | 2026-08-12
+// 🔖 v3.8.1 | 2026-08-12
 // 📝 Глобальный поиск (полная переработка)
 //
 //    Архитектура:
@@ -38,7 +38,7 @@ const SCOPES = [
 { id: 'challenges',  ic: 'trophy',   label: 'Челленджи' },
 { id: 'series',      ic: 'layers',   label: 'Серии' },
 { id: 'tags',        ic: 'tag',      label: 'Теги' },
-{ id: 'tropes',      ic: 'heartHands', label: 'Тропы' },   // 🆕 v3.7.0
+{ id: 'tropes',      ic: 'heartHands', label: 'Тропы' },   // 🆕 v3.8.1
 ];
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ (приватное, не глобальное)
@@ -65,7 +65,7 @@ let debounceTimer = null;
 * @param {function} config.onOpenChallenge  — (id) => void
 * @param {function} config.onOpenSeries     — (name) => void
 * @param {function} config.onFilterTag      — (tagName) => void
-* @param {function} config.onFilterTrope    — (tropeName) => void   // 🆕 v3.7.0
+* @param {function} config.onFilterTrope    — (tropeName) => void   // 🆕 v3.8.1
 */
 export function initSearch(config) {
 if (cfg) return; // защита от двойной инициализации
@@ -209,7 +209,7 @@ b.author.toLowerCase().includes(q) ||
 (b.publisher || '').toLowerCase().includes(q) ||
 (b.series || '').toLowerCase().includes(q) ||
 (b.tags || []).some(t => t.toLowerCase().includes(q)) ||
-(b.tropes || []).some(t => t.toLowerCase().includes(q));   // 🆕 v3.7.0
+(b.tropes || []).some(t => t.toLowerCase().includes(q));   // 🆕 v3.8.1
 }
 function run() {
 const data = cfg.getData();
@@ -218,7 +218,7 @@ const collections = data.collections || [];
 const challenges = data.challenges || [];
 const tags = data.tags || [];
 const series = data.series || [];
-const tropes = data.tropes || [];   // 🆕 v3.7.0
+const tropes = data.tropes || [];   // 🆕 v3.8.1
 const q = query;
 const hasQuery = !!q || !!tag;
 const results = {
@@ -267,7 +267,7 @@ results.series = series.filter(s => !q || s.name.toLowerCase().includes(q));
 if (scope === 'all' || scope === 'tags') {
 results.tags = tags.filter(t => !q || t.name.toLowerCase().includes(q));
 }
-// 🆕 v3.7.0: скоуп «Тропы»
+// 🆕 v3.8.1: скоуп «Тропы»
 if (scope === 'all' || scope === 'tropes') {
 results.tropes = tropes.filter(t => !q || t.toLowerCase().includes(q));
 }
@@ -354,7 +354,7 @@ html += section('Подборки', 'folder', results.collections.length, result
 if (results.challenges.length) {
 html += section('Челленджи', 'trophy', results.challenges.length, results.challenges.map(c => `
 <div class="sr-item" data-sr-challenge="${c.id}" tabindex="0">
-<div class="sr-icon">${c.emoji || '🏆'}</div>
+<div class="sr-icon">${icon('trophy', 20)}</div>
 <div class="sr-info">
 <div class="sr-title">${esc(c.name)}</div>
 <div class="sr-sub">${c.status === 'active' ? 'Активен' : c.status}</div>
@@ -381,7 +381,7 @@ html += section('Теги', 'tag', results.tags.length, results.tags.map(t => `
 </div>
 </div>`).join(''));
 }
-// 🆕 v3.7.0: секция «Тропы»
+// 🆕 v3.8.1: секция «Тропы»
 if (results.tropes.length) {
 html += section('Тропы', 'heartHands', results.tropes.length, results.tropes.map(t => `
 <div class="sr-item" data-sr-trope="${esc(t)}" tabindex="0">
@@ -429,10 +429,11 @@ item.addEventListener('click', () => go(() => cfg.onOpenSeries(item.dataset.srSe
 el.querySelectorAll('[data-sr-tag]').forEach(item => {
 item.addEventListener('click', () => go(() => cfg.onFilterTag(item.dataset.srTag)));
 });
-// 🆕 v3.7.0: фильтр по тропу
+// 🆕 v3.8.1: фильтр по тропу
 el.querySelectorAll('[data-sr-trope]').forEach(item => {
 item.addEventListener('click', () => go(() => {
 if (cfg.onFilterTrope) cfg.onFilterTrope(item.dataset.srTrope);
 }));
 });
 }
+// ─────────────────────────────────────────────

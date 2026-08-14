@@ -1,13 +1,13 @@
 // 📦 BookTrackerPro — uikit.js
-// 🔖 v3.7.0 | 2026-08-07
+// 🔖 v3.8.1 | 2026-08-07
 // 📝 Переиспользуемые UI-компоненты «ночной библиотеки»
 //
 //    Компоненты:
 //      📅 Дата-пикер   — кастомный календарь вместо <input type=date>
 //      🔽 Кастомный селект — вместо системного <select>, с поиском
 //      ✅ Confirm       — стилизованный диалог вместо нативного confirm()
-//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.7.0)
-//      💘 Chip Input   — автокомплит для тропов/тегов (v3.7.0)
+//      🏷️ Chip Group   — множественный выбор (форматы книг) (v3.8.1)
+//      💘 Chip Input   — автокомплит для тропов/тегов (v3.8.1)
 //
 //    Принципы:
 //      — Нативный контрол остаётся в DOM и является источником истины.
@@ -362,7 +362,7 @@ export function showConfirm(message, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.7.0)
+//  4. CHIP GROUP — множественный выбор (НОВОЕ v3.8.1)
 // ═══════════════════════════════════════════════
 /**
  * Группа чипов для множественного выбора.
@@ -436,7 +436,7 @@ export function attachChipGroup(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.7.0)
+//  5. CHIP INPUT — автокомплит для тропов/тегов (НОВОЕ v3.8.1)
 // ═══════════════════════════════════════════════
 /**
  * Поле ввода с чипами и автокомплитом.
@@ -596,7 +596,7 @@ export function attachChipInput(container, opts = {}) {
 }
 
 // ═══════════════════════════════════════════════
-//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.7.0)
+//  6. СЕЛЕКТ С ДОБАВЛЕНИЕМ СВОЕГО (НОВОЕ v3.8.1)
 // ═══════════════════════════════════════════════
 /**
  * Кастомный селект + кнопка «Добавить своё».
@@ -741,7 +741,7 @@ const UIKIT_STYLES = `
 .cs-check { color:var(--accent); display:inline-flex; flex-shrink:0; }
 .cs-empty { padding:16px; text-align:center; color:var(--text-muted); font-size:.85rem; }
 
-/* v3.7.0: кнопка «Другое» для селекта */
+/* v3.8.1: кнопка «Другое» для селекта */
 .cs-custom-btn {
   display:inline-flex; align-items:center; gap:6px;
   padding:8px 14px; margin-top:6px;
@@ -779,7 +779,7 @@ const UIKIT_STYLES = `
 .ui-confirm-ok.danger { background:var(--red); color:#fff; }
 .ui-confirm-ok.danger:hover { background:var(--red); filter:brightness(1.12); }
 
-/* ── v3.7.0: Chip Group (множественный выбор) ── */
+/* ── v3.8.1: Chip Group (множественный выбор) ── */
 .cg-chip {
   display:inline-flex; align-items:center; gap:7px;
   padding:8px 15px; border-radius:16px;
@@ -799,7 +799,7 @@ const UIKIT_STYLES = `
 }
 .cg-icon { display:inline-flex; align-items:center; }
 
-/* ── v3.7.0: Chip Input (автокомплит для тропов) ── */
+/* ── v3.8.1: Chip Input (автокомплит для тропов) ── */
 .ci-wrap { position:relative; }
 .ci-chips {
   display:flex; flex-wrap:wrap; gap:6px;
@@ -862,4 +862,85 @@ if (!document.getElementById('uikit-styles')) {
   style.id = 'uikit-styles';
   style.textContent = UIKIT_STYLES;
   document.head.appendChild(style);
+}
+{
+  "version": "3.7.1",
+  "build": "20260807",
+  "cache": "btp-v3.8.1",
+  "date": "2026-08-07",
+  "changes": [
+    "Восстановлен жест «назад» (History API): оверлеи закрываются по одному, двойной «назад» — выход из приложения",
+    "Навигация назад по подвкладкам статистики: Финансы → Контент → Книги → главный экран",
+    "iOS safe-area: оверлеи учитывают Dynamic Island и home indicator",
+    "Обложка из галереи/камеры прямо в форме книги (без необходимости сначала вставлять URL)",
+    "Все теги в карточке книги (вместо 3), секция тегов в detail-карточке",
+    "Форматы книги: бумажная / электронная / аудио (множественный выбор)",
+    "Электронные книги: способ получения (куплена / подписка / файл), площадка (ЛитРес, Яндекс Книги, Bookmate + свои)",
+    "Аудиокниги: длительность, чтец",
+    "Тропы (tropes): отдельное поле с автокомплитом, отображение в карточке и detail",
+    "Microlink: резолв коротких ссылок-редиректов (ozon.ru/t/...), retry с backoff, каскад CORS-прокси",
+    "Microlink: окно предпросмотра ВСЕХ найденных полей с ручным маппингом и диагностикой ошибок",
+    "Microlink: free по умолчанию + поле для Pro-ключа в Настройках",
+    "Отчётность по контенту: reportSent + reportDate, отображение в карточке контента",
+    "Ручная синхронизация: импорт JSON без дубликатов (merge по id и title+author)",
+    "showConfirm вместо нативного confirm() для всех подтверждений удаления",
+    "Вынесен utils.js: разрыв циклических импортов (esc, debounce, fetchT, showToast)",
+    "Новый uikit.js: кастомные селекты с поиском, дата-пикер, стилизованный confirm",
+    "Фильтр по формату книги в списке (бумажные / электронные / аудио)"
+  ],
+  "api": {
+    "google_books": "бесплатно, без ключа",
+    "open_library": "бесплатно, без ключа",
+    "litres_catalit": "тестовый анонимный доступ (замените на свои ключи)",
+    "litres_partner": "тестовый partner_id=16 (замените на свои ключи)",
+    "microlink": "бесплатно 25 запросов/день без ключа; с ключом — pro.microlink.io (лимит по тарифу)",
+    "exchange_rates": "open.er-api.com — бесплатно, без ключа"
+  },
+  "microlink": {
+    "endpoint_free": "https://api.microlink.io",
+    "endpoint_pro": "https://pro.microlink.io",
+    "auth_header": "x-api-key",
+    "daily_limit_free": 25,
+    "app_guard_free": 20,
+    "app_guard_pro": 1000,
+    "cache_store": "previews",
+    "cache_ttl_days": 7,
+    "uses": [
+      "превью publishedUrl в контент-плане",
+      "глубокое извлечение книги по ссылке (html=true)",
+      "окно предпросмотра с маппингом полей (v3.6.0)",
+      "резолв коротких ссылок-редиректов (v3.8.1)"
+    ]
+  },
+  "icons": {
+    "module": "icons.js",
+    "style": "монолинейные SVG 24×24, stroke 1.8, currentColor",
+    "sets": ["UI (контурные)", "BRAND (фирменные, fill)", "STATUS_ICONS", "CONTENT_TYPE_ICONS", "CONTENT_STATUS_ICONS", "GOAL_ICONS"]
+  },
+  "search": {
+    "module": "search.js",
+    "scopes": ["all", "books", "content", "reviews", "quotes", "collections", "challenges", "series", "tags"],
+    "keyboard": ["↑", "↓", "Enter", "Esc"],
+    "highlight": "mark",
+    "cover_fix": "referrerpolicy + onerror fallback (v3.6.0)"
+  },
+  "uikit": {
+    "module": "uikit.js",
+    "components": [
+      "DatePicker — кастомный календарь",
+      "Select — кастомный dropdown с поиском",
+      "Confirm — стилизованный диалог подтверждения"
+    ]
+  },
+  "ocr": {
+    "engine": "Tesseract.js v5",
+    "languages": ["rus", "eng (опционально)"],
+    "offline": true,
+    "files": [
+      "tesseract.min.js",
+      "worker.min.js",
+      "tesseract-core-simd.wasm.js",
+      "rus.traineddata.gz"
+    ]
+  }
 }

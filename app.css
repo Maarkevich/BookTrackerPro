@@ -1,6 +1,6 @@
 /* ─────────────────────────────────────────────
 📦 BookTrackerPro — app.css
-🔖 v3.8.0 | 2026-08-12
+🔖 v3.8.1 | 2026-08-12
 📝 Дизайн: «ночная библиотека»
 Тёплый тёмный + янтарный акцент
 Display: Unbounded · Body: Manrope
@@ -538,7 +538,7 @@ transition: transform .15s var(--ease-bounce);
 .badge-series   { background: var(--purple-dim); color: var(--purple); }
 .badge-price    { background: var(--green-dim);  color: var(--green); font-family: var(--font-mono); }
 .badge-source   { background: var(--bg-input);   color: var(--text-muted); }
-/* 🆕 v3.7.0: бейджи форматов книги */
+/* 🆕 v3.8.1: бейджи форматов книги */
 .badge-format-paper { background: var(--orange-dim); color: var(--orange); }
 .badge-format-ebook { background: var(--blue-dim);   color: var(--blue); }
 .badge-format-audio { background: var(--purple-dim); color: var(--purple); }
@@ -556,7 +556,7 @@ color: var(--text-secondary);
 cursor: pointer; transition: all .15s var(--ease);
 }
 .tag-chip:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
-/* 🆕 v3.7.0: кнопка «+N» для тегов в карточке */
+/* 🆕 v3.8.1: кнопка «+N» для тегов в карточке */
 .tag-more-btn {
 display: inline-flex; align-items: center;
 padding: 3px 9px; border-radius: 12px;
@@ -636,7 +636,7 @@ display: flex; align-items: center; gap: 9px;
 flex: 1; overflow-y: auto; padding: 20px 22px 30px;
 -webkit-overflow-scrolling: touch;
 }
-/* 🆕 v3.7.0: кнопка «назад» в оверлее */
+/* 🆕 v3.8.1: кнопка «назад» в оверлее */
 .overlay-back {
 display: inline-flex; align-items: center; justify-content: center;
 width: 38px; height: 38px; border-radius: 10px;
@@ -684,7 +684,7 @@ border-color: var(--accent) !important;
 font-weight: 800;
 box-shadow: 0 2px 8px rgba(232,163,61,.15);
 }
-/* 🆕 v3.7.0: чипы тропов в форме книги */
+/* 🆕 v3.8.1: чипы тропов в форме книги */
 .trope-pick-chip {
 padding: 6px 13px; border-radius: 16px;
 font-size: .8rem; font-weight: 700;
@@ -715,7 +715,7 @@ border-radius: 4px 10px 10px 4px;
 object-fit: cover;
 box-shadow: 3px 4px 14px rgba(0,0,0,.45), inset -2px 0 4px rgba(0,0,0,.3);
 }
-/* 🆕 v3.7.0: ряд кнопок загрузки обложки в форме */
+/* 🆕 v3.8.1: ряд кнопок загрузки обложки в форме */
 .cover-upload-row {
 display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;
 }
@@ -763,7 +763,7 @@ transition: all .15s var(--ease);
 .btn-small:hover { background: var(--accent-hover); transform: translateY(-1px); }
 .btn-group { display: flex; gap: 8px; margin-top: 18px; }
 .btn-group .btn-primary, .btn-group .btn-secondary, .btn-group .btn-danger { flex: 1; }
-/* 🆕 v3.7.0: сетка выбора формата книги (множественный выбор) */
+/* 🆕 v3.8.1: сетка выбора формата книги (множественный выбор) */
 .format-grid {
 display: flex; gap: 8px; flex-wrap: wrap;
 }
@@ -789,7 +789,7 @@ background: var(--blue-dim); color: var(--blue);
 border-color: var(--purple) !important;
 background: var(--purple-dim); color: var(--purple);
 }
-/* 🆕 v3.7.0: подполя электронной книги */
+/* 🆕 v3.8.1: подполя электронной книги */
 .ebook-sub {
 padding: 12px 14px;
 background: var(--bg-input);
@@ -804,7 +804,7 @@ padding: 3px 9px; border-radius: 10px;
 font-size: .7rem; font-weight: 700;
 background: var(--blue-dim); color: var(--blue);
 }
-/* 🆕 v3.7.0: тропы в карточке книги */
+/* 🆕 v3.8.1: тропы в карточке книги */
 .trope-chip {
 display: inline-flex; align-items: center;
 padding: 3px 9px; border-radius: 12px;
@@ -1264,7 +1264,7 @@ background: linear-gradient(90deg, var(--green), var(--accent));
 transition: width .4s var(--ease);
 }
 .reading-progress-text { font-size: .8rem; color: var(--text-secondary); text-align: right; font-family: var(--font-mono); }
-/* 🆕 v3.7.0: теги и тропы в detail */
+/* 🆕 v3.8.1: теги и тропы в detail */
 .detail-tags {
 display: flex; flex-wrap: wrap; gap: 6px;
 margin-top: 8px;
@@ -1479,7 +1479,7 @@ transition-duration: .01ms !important;
 // ─────────────────────────────────────────────
 
 /* ═══════════════════════════════════════════════
-   v3.8.0: Обложки-плейсхолдеры, доп.рейтинги, герои
+   v3.8.1: Обложки-плейсхолдеры, доп.рейтинги, герои
 ═══════════════════════════════════════════════ */
 
 /* Плейсхолдер обложки с иконкой и названием */

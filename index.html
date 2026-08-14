@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#161210"/>
-<meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.0: жест «назад», обложка из галереи/камеры, форматы книг, тропы, теги в карточке, ручная синхронизация через JSON. Работает полностью оффлайн."/>
+<meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.1: жест «назад», обложка из галереи/камеры, форматы книг, тропы, теги в карточке, ручная синхронизация через JSON. Работает полностью оффлайн."/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="BookTracker"/>
@@ -17,20 +17,20 @@
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
 
 <!-- Стили -->
-<link rel="stylesheet" href="app.css?v=3.8.0"/>
+<link rel="stylesheet" href="app.css?v=3.8.1"/>
 
 <!-- Шрифты: заголовочный + текстовый -->
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 
-<!-- Preload критических ресурсов (v3.8.0: + utils.js, uikit.js) -->
-<link rel="preload" href="utils.js?v=3.8.0" as="script" crossorigin/>
-<link rel="preload" href="icons.js?v=3.8.0" as="script" crossorigin/>
-<link rel="preload" href="uikit.js?v=3.8.0" as="script" crossorigin/>
-<link rel="preload" href="db.js?v=3.8.0" as="script" crossorigin/>
-<link rel="preload" href="microlink.js?v=3.8.0" as="script" crossorigin/>
-<link rel="preload" href="app.js?v=3.8.0" as="script" crossorigin/>
+<!-- Preload критических ресурсов (v3.8.1: + utils.js, uikit.js) -->
+<link rel="preload" href="utils.js?v=3.8.1" as="script" crossorigin/>
+<link rel="preload" href="icons.js?v=3.8.1" as="script" crossorigin/>
+<link rel="preload" href="uikit.js?v=3.8.1" as="script" crossorigin/>
+<link rel="preload" href="db.js?v=3.8.1" as="script" crossorigin/>
+<link rel="preload" href="microlink.js?v=3.8.1" as="script" crossorigin/>
+<link rel="preload" href="app.js?v=3.8.1" as="script" crossorigin/>
 </head>
 <body>
 
@@ -107,7 +107,7 @@
 </button>
 </nav>
 <div class="drawer-footer">
-<span id="drawer-version">v3.8.0</span>
+<span id="drawer-version">v3.8.1</span>
 <span class="drawer-offline hidden" id="drawer-offline">📴 оффлайн</span>
 </div>
 </aside>
@@ -117,7 +117,7 @@
 <!-- Верхняя панель -->
 <header class="topbar">
 <button id="menu-btn" class="icon-btn" aria-label="Меню">☰</button>
-<!-- v3.8.0: кнопка "назад" для Android back button -->
+<!-- v3.8.1: кнопка "назад" для Android back button -->
 <button id="back-btn" class="icon-btn hidden" aria-label="Назад">←</button>
 <h1 id="page-title" class="topbar-title">Мои книги</h1>
 <div class="topbar-actions">
@@ -231,7 +231,7 @@ placeholder="Или введите ISBN вручную" inputmode="numeric"/>
 </div>
 </div>
 
-<!-- v3.8.0: Оверлей предпросмотра Microlink (маппинг полей) -->
+<!-- v3.8.1: Оверлей предпросмотра Microlink (маппинг полей) -->
 <div id="microlink-preview-overlay" class="overlay hidden">
 <div class="overlay-panel" style="max-width:540px">
 <div class="overlay-header">
@@ -242,7 +242,7 @@ placeholder="Или введите ISBN вручную" inputmode="numeric"/>
 </div>
 </div>
 
-<!-- v3.8.0: Оверлей ручной синхронизации -->
+<!-- v3.8.1: Оверлей ручной синхронизации -->
 <div id="sync-overlay" class="overlay hidden">
 <div class="overlay-panel" style="max-width:400px">
 <div class="overlay-header">
@@ -280,6 +280,7 @@ placeholder="Или введите ISBN вручную" inputmode="numeric"/>
 </div>
 
 <!-- JS модуль -->
-<script type="module" src="app.js?v=3.8.0"></script>
+<script type="module" src="app.js?v=3.8.1"></script>
 </body>
 </html>
+// ─────────────────────────────────────────────

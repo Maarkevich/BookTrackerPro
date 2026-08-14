@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — ocr.js
-// 🔖 v3.7.0 | 2026-08-04
+// 🔖 v3.8.1 | 2026-08-04
 // 📝 Распознавание цитат по фото (OCR)
 //
 //    Полный оффлайн: Tesseract.js + файлы в корне:
@@ -309,7 +309,7 @@ ctx.putImageData(imageData, 0, 0);
 return ctx.getImageData(0, 0, w, h);
 }
 // ═══════════════════════════════════════════════
-//  4. UI ОВЕРЛЕЙ (v3.7.0: SVG-иконки)
+//  4. UI ОВЕРЛЕЙ (v3.8.1: SVG-иконки)
 // ═══════════════════════════════════════════════
 function buildOverlay() {
 const overlay = document.createElement('div');
@@ -425,3 +425,4 @@ style.id = 'ocr-styles';
 style.textContent = OCR_STYLES;
 document.head.appendChild(style);
 }
+// ─────────────────────────────────────────────
