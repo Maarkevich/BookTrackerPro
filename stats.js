@@ -827,4 +827,3 @@ style.id = 'stats-styles';
 style.textContent = STATS_STYLES;
 document.head.appendChild(style);
 }
-/* ─────────────────────────────────────────────
