@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — sw-register.js
-// 🔖 v3.8.2 | 2026-08-09
+// 🔖 v3.8.3 | 2026-08-14
 // 📝 Регистрация Service Worker + логика обновлений
 //
 //    Что делает:
@@ -12,6 +12,8 @@
 //      7. verifyCacheFreshness(): сверка версии кеша с version.json
 //        и принудительное обновление при расхождении
 //        (защита от «вечно старого кеша» после деплоя)
+//      8. 🆕 v3.8.3: registerPendingSync() — регистрация background sync
+//        для отложенных офлайн-операций (связь с sync в sw.js)
 //
 //    Поток обновления:
 //      reg.update() → updatefound → installing →
@@ -19,11 +21,16 @@
 //      «Обновить» → SKIP_WAITING → activate →
 //      controllerchange → reload
 //
-//    Новое в 3.7.0:
+//    Новое в 3.8.3:
+//      — registerPendingSync(tag) — публичный API для background sync
+//      — Улучшенная обработка ошибок periodic sync
+//      — Проверка поддержки Background Sync API перед регистрацией
+//      — Логирование версии кеша при старте (для отладки)
+//
+//    Сохранено из 3.7.0:
 //      — Повторная попытка регистрации SW при неудаче
 //        (оффлайн при первом запуске больше не ломает PWA)
 //      — Улучшенная обработка ошибок регистрации
-//      — Логирование версии кеша при старте (для отладки)
 // ─────────────────────────────────────────────
 
 // ═══════════════════════════════════════════════
@@ -55,104 +62,104 @@ let _reloading = false;
 // ═══════════════════════════════════════════════
 
 /**
-* Регистрирует Service Worker.
-* При неудаче (например, оффлайн при первом запуске) повторяет
-* попытку до MAX_REGISTER_RETRIES раз с увеличивающейся задержкой.
-*/
+ * Регистрирует Service Worker.
+ * При неудаче (например, оффлайн при первом запуске) повторяет
+ * попытку до MAX_REGISTER_RETRIES раз с увеличивающейся задержкой.
+ */
 export async function registerSW() {
-if (!('serviceWorker' in navigator)) {
-console.warn('[SW] Service Worker не поддерживается');
-return;
-}
+  if (!('serviceWorker' in navigator)) {
+    console.warn('[SW] Service Worker не поддерживается');
+    return;
+  }
 
-const isSecure = location.protocol === 'https:'
-|| location.hostname === 'localhost'
-|| location.hostname === '127.0.0.1';
+  const isSecure = location.protocol === 'https:'
+    || location.hostname === 'localhost'
+    || location.hostname === '127.0.0.1';
 
-if (!isSecure) {
-console.warn('[SW] Нужен HTTPS или localhost');
-return;
-}
+  if (!isSecure) {
+    console.warn('[SW] Нужен HTTPS или localhost');
+    return;
+  }
 
-// Повторные попытки регистрации (защита от оффлайна при первом запуске)
-let lastError = null;
-for (let attempt = 1; attempt <= MAX_REGISTER_RETRIES; attempt++) {
-try {
-_registration = await navigator.serviceWorker.register(SW_PATH, { scope: SW_SCOPE });
-console.log('[SW] Зарегистрирован, scope:', _registration.scope);
+  // Повторные попытки регистрации (защита от оффлайна при первом запуске)
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_REGISTER_RETRIES; attempt++) {
+    try {
+      _registration = await navigator.serviceWorker.register(SW_PATH, { scope: SW_SCOPE });
+      console.log('[SW] Зарегистрирован, scope:', _registration.scope);
 
-// Логируем версию кеша для отладки
-getCacheVersion().then(v => {
-if (v) console.log('[SW] Активная версия кеша:', v);
-});
+      // Логируем версию кеша для отладки
+      getCacheVersion().then(v => {
+        if (v) console.log('[SW] Активная версия кеша:', v);
+      });
 
-// Обнаружение нового SW
-_registration.addEventListener('updatefound', () => {
-const newWorker = _registration.installing;
-if (!newWorker) return;
+      // Обнаружение нового SW
+      _registration.addEventListener('updatefound', () => {
+        const newWorker = _registration.installing;
+        if (!newWorker) return;
 
-console.log('[SW] Найден новый Service Worker');
+        console.log('[SW] Найден новый Service Worker');
 
-newWorker.addEventListener('statechange', () => {
-// Новый SW установлен И есть активный контроллер → это обновление
-if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-console.log('[SW] Новый SW готов к активации');
-showUpdateBanner(newWorker);
-}
-});
-});
+        newWorker.addEventListener('statechange', () => {
+          // Новый SW установлен И есть активный контроллер → это обновление
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            console.log('[SW] Новый SW готов к активации');
+            showUpdateBanner(newWorker);
+          }
+        });
+      });
 
-// Перезагрузка после активации нового SW
-navigator.serviceWorker.addEventListener('controllerchange', () => {
-if (_reloading) return;
-_reloading = true;
-console.log('[SW] Контроллер изменился — перезагружаю');
-window.location.reload();
-});
+      // Перезагрузка после активации нового SW
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (_reloading) return;
+        _reloading = true;
+        console.log('[SW] Контроллер изменился — перезагружаю');
+        window.location.reload();
+      });
 
-setupPeriodicUpdateCheck();
-setupPeriodicSync();
+      setupPeriodicUpdateCheck();
+      setupPeriodicSync();
 
-// Проверяем, нет ли уже ожидающего SW
-if (_registration.waiting) {
-showUpdateBanner(_registration.waiting);
-}
+      // Проверяем, нет ли уже ожидающего SW
+      if (_registration.waiting) {
+        showUpdateBanner(_registration.waiting);
+      }
 
-// 🆕 v3.5.0+: сверка свежести кеша (чуть откладываем, чтобы не мешать старту)
-setTimeout(() => verifyCacheFreshness(), 4000);
+      // 🆕 v3.5.0+: сверка свежести кеша (чуть откладываем, чтобы не мешать старту)
+      setTimeout(() => verifyCacheFreshness(), 4000);
 
-// Успешная регистрация — выходим из цикла
-return;
+      // Успешная регистрация — выходим из цикла
+      return;
 
-} catch (error) {
-lastError = error;
-console.warn(`[SW] Попытка регистрации ${attempt}/${MAX_REGISTER_RETRIES} не удалась:`, error.message);
+    } catch (error) {
+      lastError = error;
+      console.warn(`[SW] Попытка регистрации ${attempt}/${MAX_REGISTER_RETRIES} не удалась:`, error.message);
 
-// Если это последняя попытка — выходим
-if (attempt === MAX_REGISTER_RETRIES) break;
+      // Если это последняя попытка — выходим
+      if (attempt === MAX_REGISTER_RETRIES) break;
 
-// Ждём перед следующей попыткой (экспоненциальная задержка)
-await new Promise(r => setTimeout(r, 2000 * attempt));
-}
-}
+      // Ждём перед следующей попыткой (экспоненциальная задержка)
+      await new Promise(r => setTimeout(r, 2000 * attempt));
+    }
+  }
 
-// Все попытки исчерпаны
-console.error('[SW] Регистрация не удалась после всех попыток:', lastError);
+  // Все попытки исчерпаны
+  console.error('[SW] Регистрация не удалась после всех попыток:', lastError);
 
-// Даже без SW приложение работает — просто без оффлайн-кеша.
-// Повторим регистрацию при следующем появлении сети.
-window.addEventListener('online', async function retryOnOnline() {
-window.removeEventListener('online', retryOnOnline);
-try {
-_registration = await navigator.serviceWorker.register(SW_PATH, { scope: SW_SCOPE });
-console.log('[SW] Зарегистрирован после восстановления сети');
-setupPeriodicUpdateCheck();
-setupPeriodicSync();
-setTimeout(() => verifyCacheFreshness(), 4000);
-} catch (e) {
-console.warn('[SW] Повторная регистрация не удалась:', e.message);
-}
-}, { once: true });
+  // Даже без SW приложение работает — просто без оффлайн-кеша.
+  // Повторим регистрацию при следующем появлении сети.
+  window.addEventListener('online', async function retryOnOnline() {
+    window.removeEventListener('online', retryOnOnline);
+    try {
+      _registration = await navigator.serviceWorker.register(SW_PATH, { scope: SW_SCOPE });
+      console.log('[SW] Зарегистрирован после восстановления сети');
+      setupPeriodicUpdateCheck();
+      setupPeriodicSync();
+      setTimeout(() => verifyCacheFreshness(), 4000);
+    } catch (e) {
+      console.warn('[SW] Повторная регистрация не удалась:', e.message);
+    }
+  }, { once: true });
 }
 
 // ═══════════════════════════════════════════════
@@ -160,31 +167,31 @@ console.warn('[SW] Повторная регистрация не удалась
 // ═══════════════════════════════════════════════
 
 function setupPeriodicUpdateCheck() {
-// При фокусе на вкладку
-document.addEventListener('visibilitychange', () => {
-if (document.visibilityState === 'visible') checkForUpdate();
-});
+  // При фокусе на вкладку
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkForUpdate();
+  });
 
-// При восстановлении сети
-window.addEventListener('online', () => checkForUpdate());
+  // При восстановлении сети
+  window.addEventListener('online', () => checkForUpdate());
 
-// Первая проверка через 10 секунд
-setTimeout(() => checkForUpdate(), 10_000);
+  // Первая проверка через 10 секунд
+  setTimeout(() => checkForUpdate(), 10_000);
 }
 
 async function checkForUpdate() {
-if (!_registration) return;
+  if (!_registration) return;
 
-const now = Date.now();
-if (now - _lastUpdateCheck < UPDATE_CHECK_INTERVAL) return;
-_lastUpdateCheck = now;
+  const now = Date.now();
+  if (now - _lastUpdateCheck < UPDATE_CHECK_INTERVAL) return;
+  _lastUpdateCheck = now;
 
-try {
-await _registration.update();
-console.log('[SW] Проверка обновления выполнена');
-} catch (error) {
-console.warn('[SW] Проверка обновления не удалась:', error.message);
-}
+  try {
+    await _registration.update();
+    console.log('[SW] Проверка обновления выполнена');
+  } catch (error) {
+    console.warn('[SW] Проверка обновления не удалась:', error.message);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -192,36 +199,36 @@ console.warn('[SW] Проверка обновления не удалась:', 
 // ═══════════════════════════════════════════════
 
 /**
-* Сверяет ожидаемую версию кеша (поле cache в version.json)
-* с фактической версией активного SW. При расхождении —
-* принудительно запрашивает обновление.
-*
-* Защищает от сценария, когда деплой уже содержит новый CACHE_NAME,
-* но браузер продолжает использовать старый SW со старым кешем
-* (например, после долгой работы в фоне или пропуска обновления).
-*/
+ * Сверяет ожидаемую версию кеша (поле cache в version.json)
+ * с фактической версией активного SW. При расхождении —
+ * принудительно запрашивает обновление.
+ *
+ * Защищает от сценария, когда деплой уже содержит новый CACHE_NAME,
+ * но браузер продолжает использовать старый SW со старым кешем
+ * (например, после долгой работы в фоне или пропуска обновления).
+ */
 async function verifyCacheFreshness() {
-if (!_registration) return;
+  if (!_registration) return;
 
-try {
-// cache-busting, чтобы гарантированно получить свежий version.json
-const r = await fetch(`${VERSION_URL}?_=${Date.now()}`, { cache: 'no-store' });
-if (!r.ok) return;
+  try {
+    // cache-busting, чтобы гарантированно получить свежий version.json
+    const r = await fetch(`${VERSION_URL}?_=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
 
-const meta = await r.json();
-const expected = meta.cache;
-if (!expected) return;
+    const meta = await r.json();
+    const expected = meta.cache;
+    if (!expected) return;
 
-const actual = await getCacheVersion();
+    const actual = await getCacheVersion();
 
-if (actual && actual !== expected) {
-console.log(`[SW] Кеш устарел (${actual} → ${expected}) — запрашиваю обновление`);
-_lastUpdateCheck = 0; // сброс троттлинга
-await _registration.update();
-}
-} catch (e) {
-console.warn('[SW] Проверка свежести кеша не удалась:', e.message);
-}
+    if (actual && actual !== expected) {
+      console.log(`[SW] Кеш устарел (${actual} → ${expected}) — запрашиваю обновление`);
+      _lastUpdateCheck = 0; // сброс троттлинга
+      await _registration.update();
+    }
+  } catch (e) {
+    console.warn('[SW] Проверка свежести кеша не удалась:', e.message);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -229,63 +236,63 @@ console.warn('[SW] Проверка свежести кеша не удалас�
 // ═══════════════════════════════════════════════
 
 function showUpdateBanner(worker) {
-if (_updateBannerShown) return;
-_updateBannerShown = true;
+  if (_updateBannerShown) return;
+  _updateBannerShown = true;
 
-const banner = document.getElementById('update-banner');
+  const banner = document.getElementById('update-banner');
 
-if (!banner) {
-createUpdateBanner(worker);
-return;
-}
+  if (!banner) {
+    createUpdateBanner(worker);
+    return;
+  }
 
-banner.classList.remove('hidden');
+  banner.classList.remove('hidden');
 
-const applyBtn = document.getElementById('update-apply');
-if (applyBtn) {
-const newBtn = applyBtn.cloneNode(true);
-applyBtn.parentNode.replaceChild(newBtn, applyBtn);
-newBtn.addEventListener('click', () => {
-activateNewWorker(worker);
-banner.classList.add('hidden');
-});
-}
+  const applyBtn = document.getElementById('update-apply');
+  if (applyBtn) {
+    const newBtn = applyBtn.cloneNode(true);
+    applyBtn.parentNode.replaceChild(newBtn, applyBtn);
+    newBtn.addEventListener('click', () => {
+      activateNewWorker(worker);
+      banner.classList.add('hidden');
+    });
+  }
 
-const dismissBtn = document.getElementById('update-dismiss');
-if (dismissBtn) {
-const newBtn = dismissBtn.cloneNode(true);
-dismissBtn.parentNode.replaceChild(newBtn, dismissBtn);
-newBtn.addEventListener('click', () => {
-banner.classList.add('hidden');
-_updateBannerShown = false;
-});
-}
+  const dismissBtn = document.getElementById('update-dismiss');
+  if (dismissBtn) {
+    const newBtn = dismissBtn.cloneNode(true);
+    dismissBtn.parentNode.replaceChild(newBtn, dismissBtn);
+    newBtn.addEventListener('click', () => {
+      banner.classList.add('hidden');
+      _updateBannerShown = false;
+    });
+  }
 }
 
 function createUpdateBanner(worker) {
-const banner = document.createElement('div');
-banner.className = 'update-banner';
-banner.innerHTML = `
-<span>↻ Доступна новая версия</span>
-<button class="btn-small" id="dyn-update-apply">Обновить</button>
-<button class="icon-btn" id="dyn-update-dismiss" style="width:28px;height:28px;padding:4px;flex-shrink:0"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
-`;
-document.body.appendChild(banner);
+  const banner = document.createElement('div');
+  banner.className = 'update-banner';
+  banner.innerHTML = `
+    <span>🔄 Доступна новая версия</span>
+    <button class="btn-small" id="dyn-update-apply">Обновить</button>
+    <button class="icon-btn" id="dyn-update-dismiss" style="width:28px;height:28px;font-size:.9rem">✕</button>
+  `;
+  document.body.appendChild(banner);
 
-banner.querySelector('#dyn-update-apply').addEventListener('click', () => {
-activateNewWorker(worker);
-banner.remove();
-});
+  banner.querySelector('#dyn-update-apply').addEventListener('click', () => {
+    activateNewWorker(worker);
+    banner.remove();
+  });
 
-banner.querySelector('#dyn-update-dismiss').addEventListener('click', () => {
-banner.remove();
-_updateBannerShown = false;
-});
+  banner.querySelector('#dyn-update-dismiss').addEventListener('click', () => {
+    banner.remove();
+    _updateBannerShown = false;
+  });
 }
 
 function activateNewWorker(worker) {
-console.log('[SW] Активирую новый Service Worker');
-worker.postMessage('SKIP_WAITING');
+  console.log('[SW] Активирую новый Service Worker');
+  worker.postMessage('SKIP_WAITING');
 }
 
 // ═══════════════════════════════════════════════
@@ -293,106 +300,156 @@ worker.postMessage('SKIP_WAITING');
 // ═══════════════════════════════════════════════
 
 async function setupPeriodicSync() {
-if (!_registration) return;
+  if (!_registration) return;
 
-try {
-const status = await navigator.permissions?.query({ name: 'periodic-background-sync' });
-if (status?.state !== 'granted') {
-console.log('[SW] Periodic sync не разрешён');
-return;
-}
+  try {
+    // Проверяем поддержку periodic-background-sync
+    if (!('periodicSync' in _registration)) {
+      console.log('[SW] Periodic sync не поддерживается браузером');
+      return;
+    }
 
-await _registration.periodicSync.register('btp-update-check', {
-minInterval: 24 * 60 * 60 * 1000 // раз в 24 часа
-});
-console.log('[SW] Periodic sync зарегистрирован');
-} catch (error) {
-console.log('[SW] Periodic sync недоступен:', error.message);
-}
+    const status = await navigator.permissions?.query({ name: 'periodic-background-sync' });
+    if (status?.state !== 'granted') {
+      console.log('[SW] Periodic sync не разрешён');
+      return;
+    }
+
+    await _registration.periodicSync.register('btp-update-check', {
+      minInterval: 24 * 60 * 60 * 1000 // раз в 24 часа
+    });
+    console.log('[SW] Periodic sync зарегистрирован');
+  } catch (error) {
+    console.log('[SW] Periodic sync недоступен:', error.message);
+  }
 }
 
 // ═══════════════════════════════════════════════
-//  6. УПРАВЛЕНИЕ КЕШЕМ
+//  6. BACKGROUND SYNC ДЛЯ ОФФЛАЙН ОПЕРАЦИЙ (🆕 v3.8.3)
 // ═══════════════════════════════════════════════
 
 /**
-* Возвращает версию кеша активного SW (CACHE_NAME из sw.js).
-* Используется для сверки свежести.
-*/
+ * Регистрирует background sync для отложенных операций.
+ * Вызывается из app.js / db.js при офлайн-добавлении книги.
+ *
+ * Синхронизируется с обработчиком 'sync' в sw.js:
+ *   tag 'sync-book-metadata' → syncBookMetadata() в sw.js
+ *
+ * @param {string} tag — идентификатор sync (например 'sync-book-metadata')
+ * @returns {Promise<boolean>} — true если sync зарегистрирован
+ */
+export async function registerPendingSync(tag = 'sync-book-metadata') {
+  if (!_registration) {
+    // Попробуем получить существующую регистрацию
+    try {
+      _registration = await navigator.serviceWorker?.getRegistration();
+    } catch { /* ignore */ }
+  }
+
+  if (!_registration) {
+    console.warn('[SW] Нет регистрации для background sync');
+    return false;
+  }
+
+  // Проверяем поддержку Background Sync API
+  if (!('sync' in _registration)) {
+    console.log('[SW] Background Sync API не поддерживается');
+    return false;
+  }
+
+  try {
+    await _registration.sync.register(tag);
+    console.log(`[SW] Background sync зарегистрирован: ${tag}`);
+    return true;
+  } catch (error) {
+    console.warn('[SW] Не удалось зарегистрировать background sync:', error.message);
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  7. УПРАВЛЕНИЕ КЕШЕМ
+// ═══════════════════════════════════════════════
+
+/**
+ * Возвращает версию кеша активного SW (CACHE_NAME из sw.js).
+ * Используется для сверки свежести.
+ */
 export async function getCacheVersion() {
-if (!navigator.serviceWorker?.controller) return null;
+  if (!navigator.serviceWorker?.controller) return null;
 
-return new Promise((resolve) => {
-const channel = new MessageChannel();
-channel.port1.onmessage = (event) => {
-if (event.data?.type === 'CACHE_VERSION') resolve(event.data.version);
-};
-navigator.serviceWorker.controller.postMessage('GET_CACHE_VERSION', [channel.port2]);
-// Таймаут на случай, если SW не ответит
-setTimeout(() => resolve(null), 2000);
-});
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      if (event.data?.type === 'CACHE_VERSION') resolve(event.data.version);
+    };
+    navigator.serviceWorker.controller.postMessage('GET_CACHE_VERSION', [channel.port2]);
+    // Таймаут на случай, если SW не ответит
+    setTimeout(() => resolve(null), 2000);
+  });
 }
 
 /**
-* Очищает кеш обложек (COVER_CACHE_NAME в sw.js).
-* Используется в Настройках → «Очистить кеш обложек».
-*/
+ * Очищает кеш обложек (COVER_CACHE_NAME в sw.js).
+ * Используется в Настройках → «Очистить кеш обложек».
+ */
 export async function clearCoverCache() {
-if (!navigator.serviceWorker?.controller) return false;
+  if (!navigator.serviceWorker?.controller) return false;
 
-return new Promise((resolve) => {
-const channel = new MessageChannel();
-channel.port1.onmessage = (event) => {
-if (event.data?.type === 'COVER_CACHE_CLEARED') resolve(true);
-};
-navigator.serviceWorker.controller.postMessage('CLEAR_COVER_CACHE', [channel.port2]);
-setTimeout(() => resolve(false), 3000);
-});
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      if (event.data?.type === 'COVER_CACHE_CLEARED') resolve(true);
+    };
+    navigator.serviceWorker.controller.postMessage('CLEAR_COVER_CACHE', [channel.port2]);
+    setTimeout(() => resolve(false), 3000);
+  });
 }
 
 /**
-* Принудительная проверка обновлений (сбрасывает троттлинг).
-* Вызывается по Ctrl+Shift+R.
-*/
+ * Принудительная проверка обновлений (сбрасывает троттлинг).
+ * Вызывается по Ctrl+Shift+R.
+ */
 export async function forceCheckUpdate() {
-if (!_registration) return false;
+  if (!_registration) return false;
 
-try {
-_lastUpdateCheck = 0; // сброс троттлинга
-await _registration.update();
-return true;
-} catch {
-return false;
-}
+  try {
+    _lastUpdateCheck = 0; // сброс троттлинга
+    await _registration.update();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ═══════════════════════════════════════════════
-//  7. ОНЛАЙН / ОФФЛАЙН ИНДИКАТОР
+//  8. ОНЛАЙН / ОФФЛАЙН ИНДИКАТОР
 // ═══════════════════════════════════════════════
 
 export function setupOnlineIndicator(showToast) {
-window.addEventListener('offline', () => {
-showToast('📴 Нет подключения — работаю оффлайн', 'info');
-});
+  window.addEventListener('offline', () => {
+    showToast('📴 Нет подключения — работаю оффлайн', 'info');
+  });
 
-window.addEventListener('online', () => {
-showToast('🟢 Подключение восстановлено', 'success');
-});
+  window.addEventListener('online', () => {
+    showToast('🟢 Подключение восстановлено', 'success');
+    // При восстановлении сети пробуем синхронизировать отложенные операции
+    registerPendingSync('sync-book-metadata').catch(() => {});
+  });
 }
 
 // ═══════════════════════════════════════════════
-//  8. ГОРЯЧИЕ КЛАВИШИ
+//  9. ГОРЯЧИЕ КЛАВИШИ
 // ═══════════════════════════════════════════════
 
 //  Ctrl+Shift+R (Cmd+Shift+R на Mac) — принудительная проверка обновлений
 if (typeof document !== 'undefined') {
-document.addEventListener('keydown', (e) => {
-if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
-e.preventDefault();
-forceCheckUpdate().then((ok) => {
-if (ok) console.log('[SW] Принудительная проверка обновления');
-});
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
+      e.preventDefault();
+      forceCheckUpdate().then((ok) => {
+        if (ok) console.log('[SW] Принудительная проверка обновления');
+      });
+    }
+  });
 }
-});
-}
-// ─────────────────────────────────────────────

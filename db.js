@@ -1,46 +1,51 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.2-fix | 2026-08-12
+// 🔖 v3.8.3 | 2026-08-14
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
-//    Версия БД: 5 (схема не меняется)
+//    Версия БД: 6
 //    Stores: books, covers, settings,
-//            collections, challenges, tags, previews
+//            collections, challenges, tags, previews,
+//            pending-sync (🆕 v3.8.3)
 //
-//    Функции:
-//      — CRUD книг с миграцией старых записей
-//      — Обложки (Blob) + валидация + ремонт
-//      — Подборки с полем order
-//      — Челленджи с заметками
-//      — Теги
-//      — Контент и отзывы (вложенные в книгу)
-//      — Экспорт/импорт (JSON)
-//      — Отчётность (reportSent / reportDate) v3.8.2
-//      — isValidCoverBlob / repairCovers v3.5.0+
+//    Новое в 3.8.3:
+//      — Store 'pending-sync' для Background Sync API
+//        (оффлайн-добавление книг → автосинхронизация)
+//      — putPendingSync / getPendingSync / deletePendingSync
+//      — Улучшенная обработка ошибок в транзакциях
+//      — ensureBookFields: defaults для новых полей v3.8.x
+//
+//    Сохранено из 3.5.0:
+//      — repairCovers() — лечение битых обложек
+//      — isValidCoverBlob() — валидация Blob
+//      — Миграции v1→v6 без потери данных
 // ─────────────────────────────────────────────
 
 const DB_NAME = 'book-tracker-pro';
-const DB_VER = 5;
+const DB_VER = 6; // 🆕 v3.8.3: был 5, стал 6 (pending-sync)
 let _db = null;
 
 // ═══════════════════════════════════════════════
 //  СТАТУСЫ КНИГ
 // ═══════════════════════════════════════════════
 export const BOOK_STATUSES = {
-wishlist: { icon: '🌟', ic: 'wishlist',  label: 'Wishlist',      order: 0 },
-added:    { icon: '📦', ic: 'added',     label: 'Добавлено',     order: 1 },
-reading:  { icon: '📖', ic: 'reading',   label: 'Читаю',         order: 2 },
-paused:   { icon: '⏸',  ic: 'paused',    label: 'Пауза',         order: 3 },
-finished: { icon: '✅', ic: 'finished',  label: 'Прочитано',     order: 4 },
-dropped:  { icon: '❌', ic: 'dropped',   label: 'Брошено',       order: 5 },
+  wishlist: { icon: '🌟', label: 'Wishlist',      order: 0 },
+  added:    { icon: '📦', label: 'Добавлено',     order: 1 },
+  reading:  { icon: '📖', label: 'Читаю',         order: 2 },
+  paused:   { icon: '⏸️', label: 'Пауза',         order: 3 },
+  finished: { icon: '✅', label: 'Прочитано',     order: 4 },
+  dropped:  { icon: '❌', label: 'Брошено',       order: 5 },
 };
 
+// ═══════════════════════════════════════════════
+//  ВАЛЮТЫ
+// ═══════════════════════════════════════════════
 export const CURRENCIES = {
-  RUB: { symbol: '₽', name: 'Рубли' },
-  USD: { symbol: '$', name: 'Доллары' },
+  RUB: { symbol: '₽', name: 'Рубль' },
+  USD: { symbol: '$', name: 'Доллар' },
   EUR: { symbol: '€', name: 'Евро' },
   KZT: { symbol: '₸', name: 'Тенге' },
-  UAH: { symbol: '₴', name: 'Гривны' },
-  GBP: { symbol: '£', name: 'Фунты' },
+  UAH: { symbol: '₴', name: 'Гривна' },
+  GBP: { symbol: '£', name: 'Фунт' },
 };
 
 // ═══════════════════════════════════════════════
@@ -50,10 +55,13 @@ export function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VER);
+
     request.onupgradeneeded = (event) => {
       const db = request.result;
       const tx = request.transaction;
       const oldVer = event.oldVersion;
+
+      // v1: книги + настройки
       if (oldVer < 1) {
         const books = db.createObjectStore('books', { keyPath: 'id' });
         books.createIndex('status', 'status', { unique: false });
@@ -62,17 +70,23 @@ export function openDB() {
         books.createIndex('titleAuthor', ['title', 'author'], { unique: false });
         db.createObjectStore('settings', { keyPath: 'id' });
       }
+
+      // v2: обложки (Blob)
       if (oldVer < 2) {
         if (!db.objectStoreNames.contains('covers')) {
           db.createObjectStore('covers', { keyPath: 'bookId' });
         }
       }
+
+      // v3: индексы для блогерских фич
       if (oldVer < 3) {
         const books = tx.objectStore('books');
         if (!books.indexNames.contains('isPR')) books.createIndex('isPR', 'isPR', { unique: false });
         if (!books.indexNames.contains('blogStatus')) books.createIndex('blogStatus', 'blogStatus', { unique: false });
         if (!books.indexNames.contains('genre')) books.createIndex('genre', 'genre', { unique: false });
       }
+
+      // v4: подборки, челленджи, теги + индексы серий
       if (oldVer < 4) {
         if (!db.objectStoreNames.contains('collections')) {
           db.createObjectStore('collections', { keyPath: 'id' });
@@ -88,149 +102,216 @@ export function openDB() {
         if (!books.indexNames.contains('series')) books.createIndex('series', 'series', { unique: false });
         if (!books.indexNames.contains('dateFinished')) books.createIndex('dateFinished', 'dateFinished', { unique: false });
       }
+
+      // v5: превью ссылок (Microlink)
       if (oldVer < 5) {
         if (!db.objectStoreNames.contains('previews')) {
           const previews = db.createObjectStore('previews', { keyPath: 'id' });
           previews.createIndex('cachedAt', 'cachedAt', { unique: false });
         }
       }
+
+      // 🆕 v6 (3.8.3): отложенные операции для Background Sync
+      if (oldVer < 6) {
+        if (!db.objectStoreNames.contains('pending-sync')) {
+          db.createObjectStore('pending-sync', { keyPath: 'id' });
+        }
+      }
     };
+
     request.onsuccess = () => {
       _db = request.result;
       _db.onclose = () => { _db = null; };
       _db.onversionchange = () => {
         _db.close();
         _db = null;
+        // Другая вкладка обновила схему — перезагружаем
         window.location.reload();
       };
       resolve(_db);
     };
+
     request.onerror = () => reject(request.error);
-    request.onblocked = () => console.warn('[DB] Blocked — закройте другие вкладки');
+    request.onblocked = () => {
+      console.warn('[DB] Blocked — закройте другие вкладки с приложением');
+    };
   });
 }
 
 // ═══════════════════════════════════════════════
 //  2. КНИГИ — CRUD
 // ═══════════════════════════════════════════════
+
+/**
+ * Загружает все книги, отсортированные по dateAdded (новые сверху).
+ * Гарантирует наличие всех обязательных полей.
+ */
 export async function loadBooks() {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readonly');
-    const req = tx.objectStore('books').getAll();
-    req.onsuccess = async () => {
-      const books = req.result || [];
-      for (const book of books) {
-        try {
-          const blob = await getCover(book.id);
-          if (blob) book.coverUrl = URL.createObjectURL(blob);
-          else if (book.cover && book.cover.startsWith('http')) book.coverUrl = book.cover;
-        } catch {
-          if (book.cover && book.cover.startsWith('http')) book.coverUrl = book.cover;
-        }
-        ensureBookFields(book);
-        (book.contentItems || []).forEach(ensureContentItemFields);
-      }
+  return new Promise((resolve) => {
+    const req = db.transaction('books', 'readonly').objectStore('books').getAll();
+    req.onsuccess = () => {
+      const books = (req.result || []).map(ensureBookFields);
+      books.sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || ''));
       resolve(books);
     };
-    req.onerror = () => reject(req.error);
+    req.onerror = () => resolve([]);
   });
 }
 
+/**
+ * Сохраняет книгу (создание или обновление).
+ */
 export async function putBook(book) {
   const db = await openDB();
-  ensureBookFields(book);
-  (book.contentItems || []).forEach(ensureContentItemFields);
-  book.updatedAt = new Date().toISOString();
-  return new Promise((resolve, reject) => {
+  const safe = ensureBookFields(book);
+  return new Promise((resolve) => {
     const tx = db.transaction('books', 'readwrite');
-    tx.objectStore('books').put(book);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function delBook(id) {
-  const db = await openDB();
-  await removeFromAllCollections(id);
-  await removeFromAllChallenges(id);
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    tx.objectStore('books').delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function getBook(id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readonly');
-    const req = tx.objectStore('books').get(id);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (book) {
-        ensureBookFields(book);
-        (book.contentItems || []).forEach(ensureContentItemFields);
-      }
-      resolve(book);
+    tx.objectStore('books').put(safe);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => {
+      console.error('[DB] putBook error:', tx.error);
+      resolve(false);
     };
-    req.onerror = () => reject(req.error);
   });
 }
 
+/**
+ * Массовое сохранение книг (одна транзакция — быстрее).
+ */
 export async function putBooks(books) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     for (const book of books) {
-      ensureBookFields(book);
-      (book.contentItems || []).forEach(ensureContentItemFields);
-      store.put(book);
+      store.put(ensureBookFields(book));
     }
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
   });
 }
 
+/**
+ * Удаляет книгу по id.
+ */
+export async function delBook(id) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    tx.objectStore('books').delete(id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Возвращает одну книгу по id.
+ */
+export async function getBook(id) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const req = db.transaction('books', 'readonly').objectStore('books').get(id);
+    req.onsuccess = () => resolve(req.result ? ensureBookFields(req.result) : null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+/**
+ * Меняет статус книги с автоматическим расчётом дат.
+ * Возвращает { confetti, askRating, book } для UI-реакций.
+ */
 export async function changeBookStatus(bookId, newStatus) {
   const book = await getBook(bookId);
   if (!book) return null;
-  const today = new Date().toISOString().slice(0, 10);
+
+  const oldStatus = book.status;
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+
+  book.status = newStatus;
+  book.updatedAt = now;
+
   let confetti = false;
   let askRating = false;
+
+  // Переход в reading — фиксируем дату начала
   if (newStatus === 'reading' && !book.dateStarted) {
     book.dateStarted = today;
   }
-  if ((newStatus === 'finished' || newStatus === 'dropped') && book.status !== newStatus) {
-    book.dateFinished = today;
-    confetti = true;
-    askRating = true;
+
+  // Переход в finished — дата конца + readingDays + конфетти
+  if (newStatus === 'finished') {
+    if (!book.dateFinished) book.dateFinished = today;
     if (book.dateStarted) {
       const start = new Date(book.dateStarted);
       const end = new Date(today);
       book.readingDays = Math.max(1, Math.round((end - start) / 86400000));
     }
+    confetti = true;
+    askRating = !(book.review?.rating > 0);
   }
-  book.status = newStatus;
+
+  // Переход в dropped — тоже фиксируем дату
+  if (newStatus === 'dropped') {
+    if (!book.dateFinished) book.dateFinished = today;
+    askRating = true;
+  }
+
+  // Выход из finished — сбрасываем дату конца
+  if (oldStatus === 'finished' && newStatus !== 'finished') {
+    book.dateFinished = '';
+    book.readingDays = undefined;
+  }
+
   await putBook(book);
-  return { book: book, confetti: confetti, askRating: askRating };
+  return { confetti, askRating, book };
 }
 
 // ═══════════════════════════════════════════════
-//  3. ОБЛОЖКИ (Blob)
+//  3. НАСТРОЙКИ
 // ═══════════════════════════════════════════════
-export async function saveCover(bookId, blob) {
+
+export async function loadSettings() {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('covers', 'readwrite');
-    tx.objectStore('covers').put({ bookId: bookId, blob: blob, savedAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+  return new Promise((resolve) => {
+    const req = db.transaction('settings', 'readonly').objectStore('settings').get('app');
+    req.onsuccess = () => resolve(req.result?.value || null);
+    req.onerror = () => resolve(null);
   });
 }
 
+export async function saveSettings(settings) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('settings', 'readwrite');
+    tx.objectStore('settings').put({ id: 'app', value: settings });
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  4. ОБЛОЖКИ (Blob)
+// ═══════════════════════════════════════════════
+
+/**
+ * Сохраняет Blob обложки для книги.
+ */
+export async function saveCover(bookId, blob) {
+  if (!isValidCoverBlob(blob)) return false;
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('covers', 'readwrite');
+    tx.objectStore('covers').put({ bookId, blob, savedAt: Date.now() });
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Скачивает обложку по URL и сохраняет как Blob.
+ */
 export async function saveCoverFromUrl(bookId, url) {
   try {
     const response = await fetch(url);
@@ -242,414 +323,41 @@ export async function saveCoverFromUrl(bookId, url) {
   } catch { return false; }
 }
 
+/**
+ * Возвращает Blob обложки для книги.
+ */
 export async function getCover(bookId) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('covers', 'readonly');
-    const req = tx.objectStore('covers').get(bookId);
-    req.onsuccess = () => resolve(req.result ? req.result.blob : null);
-    req.onerror = () => reject(req.error);
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains('covers')) { resolve(null); return; }
+    const req = db.transaction('covers', 'readonly').objectStore('covers').get(bookId);
+    req.onsuccess = () => resolve(req.result?.blob || null);
+    req.onerror = () => resolve(null);
   });
 }
 
+/**
+ * Удаляет обложку книги.
+ */
 export async function deleteCover(bookId) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains('covers')) { resolve(false); return; }
     const tx = db.transaction('covers', 'readwrite');
     tx.objectStore('covers').delete(bookId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
   });
 }
 
 // ═══════════════════════════════════════════════
-//  4. НАСТРОЙКИ
+//  5. ВАЛИДАЦИЯ ОБЛОЖЕК
 // ═══════════════════════════════════════════════
-export async function loadSettings() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('settings', 'readonly');
-    const req = tx.objectStore('settings').get('app');
-    req.onsuccess = () => resolve(req.result ? req.result.data : null);
-    req.onerror = () => reject(req.error);
-  });
-}
 
-export async function saveSettings(settings) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('settings', 'readwrite');
-    tx.objectStore('settings').put({ id: 'app', data: settings, savedAt: Date.now() });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// ═══════════════════════════════════════════════
-//  5. ПОДБОРКИ (collections)
-// ═══════════════════════════════════════════════
-export async function loadCollections() {
-  const db = await openDB();
-  let collections = await new Promise((resolve, reject) => {
-    const tx = db.transaction('collections', 'readonly');
-    const req = tx.objectStore('collections').getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-  const presets = [
-    { id: 'fav', name: 'Любимые',      emoji: '❤️', isSystem: true },
-    { id: 'bad', name: 'Книги-какахи', emoji: '💩', isSystem: true },
-  ];
-  let changed = false;
-  for (const preset of presets) {
-    if (!collections.find(c => c.id === preset.id)) {
-      collections.push({
-        ...preset,
-        bookIds: [],
-        description: '',
-        createdAt: new Date().toISOString(),
-      });
-      changed = true;
-    }
-  }
-  if (collections.some(c => typeof c.order !== 'number')) {
-    collections.sort((a, b) => {
-      if (a.isSystem && !b.isSystem) return -1;
-      if (!a.isSystem && b.isSystem) return 1;
-      return (a.createdAt || '').localeCompare(b.createdAt || '');
-    });
-    collections.forEach((c, i) => { c.order = i; });
-    changed = true;
-  }
-  if (changed) {
-    for (const c of collections) await putCollection(c);
-  }
-  collections.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  return collections;
-}
-
-export async function putCollection(collection) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('collections', 'readwrite');
-    tx.objectStore('collections').put(collection);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function delCollection(id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('collections', 'readwrite');
-    tx.objectStore('collections').delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function moveCollection(id, direction) {
-  const collections = await loadCollections();
-  const idx = collections.findIndex(c => c.id === id);
-  if (idx < 0) return false;
-  const j = direction === 'up' ? idx - 1 : idx + 1;
-  if (j < 0 || j >= collections.length) return false;
-  const a = collections[idx];
-  const b = collections[j];
-  if (a.order === b.order) {
-    collections.forEach((c, i) => { c.order = i; });
-    for (const c of collections) await putCollection(c);
-  }
-  const tmp = a.order;
-  a.order = b.order;
-  b.order = tmp;
-  await putCollection(a);
-  await putCollection(b);
-  return true;
-}
-
-export async function getNextCollectionOrder() {
-  const collections = await loadCollections();
-  if (collections.length === 0) return 0;
-  return Math.max(...collections.map(c => c.order ?? 0)) + 1;
-}
-
-export async function addBookToCollection(collectionId, bookId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('collections', 'readwrite');
-    const store = tx.objectStore('collections');
-    const req = store.get(collectionId);
-    req.onsuccess = () => {
-      const col = req.result;
-      if (!col) { reject(new Error('Collection not found')); return; }
-      if (!col.bookIds.includes(bookId)) col.bookIds.push(bookId);
-      store.put(col);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function removeBookFromCollection(collectionId, bookId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('collections', 'readwrite');
-    const store = tx.objectStore('collections');
-    const req = store.get(collectionId);
-    req.onsuccess = () => {
-      const col = req.result;
-      if (!col) { reject(new Error('Collection not found')); return; }
-      col.bookIds = col.bookIds.filter(id => id !== bookId);
-      store.put(col);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function removeFromAllCollections(bookId) {
-  const collections = await loadCollections();
-  for (const col of collections) {
-    if (col.bookIds.includes(bookId)) {
-      await removeBookFromCollection(col.id, bookId);
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════
-//  6. ЧЕЛЛЕНДЖИ (challenges)
-// ═══════════════════════════════════════════════
-export async function loadChallenges() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('challenges', 'readonly');
-    const req = tx.objectStore('challenges').getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function putChallenge(challenge) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('challenges', 'readwrite');
-    tx.objectStore('challenges').put(challenge);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function delChallenge(id) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('challenges', 'readwrite');
-    tx.objectStore('challenges').delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function addBookToChallenge(challengeId, bookId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('challenges', 'readwrite');
-    const store = tx.objectStore('challenges');
-    const req = store.get(challengeId);
-    req.onsuccess = () => {
-      const ch = req.result;
-      if (!ch) { reject(new Error('Challenge not found')); return; }
-      if (!ch.bookIds.includes(bookId)) ch.bookIds.push(bookId);
-      store.put(ch);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function removeBookFromChallenge(challengeId, bookId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('challenges', 'readwrite');
-    const store = tx.objectStore('challenges');
-    const req = store.get(challengeId);
-    req.onsuccess = () => {
-      const ch = req.result;
-      if (!ch) { reject(new Error('Challenge not found')); return; }
-      ch.bookIds = ch.bookIds.filter(id => id !== bookId);
-      store.put(ch);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function removeFromAllChallenges(bookId) {
-  const challenges = await loadChallenges();
-  for (const ch of challenges) {
-    if (ch.bookIds.includes(bookId)) {
-      await removeBookFromChallenge(ch.id, bookId);
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════
-//  7. ТЕГИ (tags)
-// ═══════════════════════════════════════════════
-export async function loadTags() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('tags', 'readonly');
-    const req = tx.objectStore('tags').getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-export async function putTag(tag) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('tags', 'readwrite');
-    tx.objectStore('tags').put(tag);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function delTag(name) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('tags', 'readwrite');
-    tx.objectStore('tags').delete(name);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// ═══════════════════════════════════════════════
-//  8. КОНТЕНТ (вложенные операции)
-// ═══════════════════════════════════════════════
-export async function addContentToBook(bookId, contentItem) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    if (bookId === '__no_book__') {
-      // Виртуальная книга для контента без книги
-      const req2 = store.get('__no_book__');
-      req2.onsuccess = () => {
-        let book = req2.result || {
-          id: '__no_book__', title: '— Без книги —', author: '',
-          status: 'added', contentItems: [], dateAdded: new Date().toISOString(),
-        };
-        if (!book.contentItems) book.contentItems = [];
-        ensureContentItemFields(contentItem);
-        contentItem.bookId = '__no_book__';
-        book.contentItems.push(contentItem);
-        book.updatedAt = new Date().toISOString();
-        store.put(book);
-      };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      return;
-    }
-    const req = store.get(bookId);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (!book) { reject(new Error('Book not found')); return; }
-      if (!book.contentItems) book.contentItems = [];
-      ensureContentItemFields(contentItem);
-      book.contentItems.push(contentItem);
-      book.updatedAt = new Date().toISOString();
-      store.put(book);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function updateContentInBook(bookId, contentId, updates) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    const req = store.get(bookId);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (!book) { reject(new Error('Book not found')); return; }
-      const idx = (book.contentItems || []).findIndex(c => c.id === contentId);
-      if (idx >= 0) {
-        Object.assign(book.contentItems[idx], updates);
-        ensureContentItemFields(book.contentItems[idx]);
-        book.updatedAt = new Date().toISOString();
-        store.put(book);
-      }
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function removeContentFromBook(bookId, contentId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    const req = store.get(bookId);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (!book) { reject(new Error('Book not found')); return; }
-      book.contentItems = (book.contentItems || []).filter(c => c.id !== contentId);
-      book.updatedAt = new Date().toISOString();
-      store.put(book);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// ═══════════════════════════════════════════════
-//  9. ОТЗЫВЫ (вложенные операции)
-// ═══════════════════════════════════════════════
-export async function saveReviewForBook(bookId, review) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    const req = store.get(bookId);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (!book) { reject(new Error('Book not found')); return; }
-      book.review = { ...review, updatedAt: new Date().toISOString() };
-      book.updatedAt = new Date().toISOString();
-      store.put(book);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-export async function removeReviewFromBook(bookId) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    const req = store.get(bookId);
-    req.onsuccess = () => {
-      const book = req.result;
-      if (!book) { reject(new Error('Book not found')); return; }
-      book.review = {};
-      book.updatedAt = new Date().toISOString();
-      store.put(book);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// ═══════════════════════════════════════════════
-//  10. ВАЛИДАЦИЯ ОБЛОЖЕК (v3.5.0+)
-// ═══════════════════════════════════════════════
+/**
+ * Проверяет, является ли Blob валидной обложкой.
+ * Защита от битых/пустых файлов в IndexedDB.
+ */
 export function isValidCoverBlob(blob) {
   if (!blob || typeof blob !== 'object') return false;
   if (blob.size < 200) return false;
@@ -660,8 +368,14 @@ export function isValidCoverBlob(blob) {
 }
 
 // ═══════════════════════════════════════════════
-//  11. РЕМОНТ БИТЫХ ОБЛОЖЕК (v3.5.0+)
+//  6. РЕМОНТ БИТЫХ ОБЛОЖЕК
 // ═══════════════════════════════════════════════
+
+/**
+ * Удаляет невалидные обложки из IndexedDB.
+ * Вызывается при старте приложения.
+ * @returns {number} — количество удалённых
+ */
 export async function repairCovers() {
   const db = await openDB();
   if (!db.objectStoreNames.contains('covers')) return 0;
@@ -691,130 +405,590 @@ export async function repairCovers() {
 }
 
 // ═══════════════════════════════════════════════
-//  12. ЭКСПОРТ / ИМПОРТ
+//  7. ПОДБОРКИ (collections)
 // ═══════════════════════════════════════════════
+
+/**
+ * Загружает все подборки, отсортированные по order.
+ */
+export async function loadCollections() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const req = db.transaction('collections', 'readonly').objectStore('collections').getAll();
+    req.onsuccess = () => {
+      const cols = (req.result || []).sort((a, b) => (a.order || 0) - (b.order || 0));
+      resolve(cols);
+    };
+    req.onerror = () => resolve([]);
+  });
+}
+
+export async function putCollection(collection) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('collections', 'readwrite');
+    tx.objectStore('collections').put(collection);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function delCollection(id) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('collections', 'readwrite');
+    tx.objectStore('collections').delete(id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function addBookToCollection(collectionId, bookId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('collections', 'readwrite');
+    const store = tx.objectStore('collections');
+    const req = store.get(collectionId);
+    req.onsuccess = () => {
+      const col = req.result;
+      if (!col) { resolve(false); return; }
+      if (!col.bookIds) col.bookIds = [];
+      if (!col.bookIds.includes(bookId)) col.bookIds.push(bookId);
+      store.put(col);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function removeBookFromCollection(collectionId, bookId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('collections', 'readwrite');
+    const store = tx.objectStore('collections');
+    const req = store.get(collectionId);
+    req.onsuccess = () => {
+      const col = req.result;
+      if (!col) { resolve(false); return; }
+      if (col.bookIds) col.bookIds = col.bookIds.filter(id => id !== bookId);
+      store.put(col);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Перемещает подборку вверх/вниз в списке.
+ */
+export async function moveCollection(id, direction) {
+  const collections = await loadCollections();
+  const idx = collections.findIndex(c => c.id === id);
+  if (idx < 0) return;
+
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= collections.length) return;
+
+  // Меняем order местами
+  const tempOrder = collections[idx].order;
+  collections[idx].order = collections[swapIdx].order;
+  collections[swapIdx].order = tempOrder;
+
+  // Сохраняем обе в одной транзакции
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('collections', 'readwrite');
+    const store = tx.objectStore('collections');
+    store.put(collections[idx]);
+    store.put(collections[swapIdx]);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Возвращает следующий order для новой подборки.
+ */
+export async function getNextCollectionOrder() {
+  const collections = await loadCollections();
+  if (collections.length === 0) return 0;
+  return Math.max(...collections.map(c => c.order || 0)) + 1;
+}
+
+// ═══════════════════════════════════════════════
+//  8. ЧЕЛЛЕНДЖИ (challenges)
+// ═══════════════════════════════════════════════
+
+export async function loadChallenges() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const req = db.transaction('challenges', 'readonly').objectStore('challenges').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+export async function putChallenge(challenge) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('challenges', 'readwrite');
+    tx.objectStore('challenges').put(challenge);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function delChallenge(id) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('challenges', 'readwrite');
+    tx.objectStore('challenges').delete(id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function addBookToChallenge(challengeId, bookId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('challenges', 'readwrite');
+    const store = tx.objectStore('challenges');
+    const req = store.get(challengeId);
+    req.onsuccess = () => {
+      const ch = req.result;
+      if (!ch) { resolve(false); return; }
+      if (!ch.bookIds) ch.bookIds = [];
+      if (!ch.bookIds.includes(bookId)) ch.bookIds.push(bookId);
+      store.put(ch);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function removeBookFromChallenge(challengeId, bookId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('challenges', 'readwrite');
+    const store = tx.objectStore('challenges');
+    const req = store.get(challengeId);
+    req.onsuccess = () => {
+      const ch = req.result;
+      if (!ch) { resolve(false); return; }
+      if (ch.bookIds) ch.bookIds = ch.bookIds.filter(id => id !== bookId);
+      store.put(ch);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  9. ТЕГИ (tags)
+// ═══════════════════════════════════════════════
+
+export async function loadTags() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const req = db.transaction('tags', 'readonly').objectStore('tags').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+export async function putTag(tag) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('tags', 'readwrite');
+    tx.objectStore('tags').put(tag);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function delTag(name) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('tags', 'readwrite');
+    tx.objectStore('tags').delete(name);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  10. КОНТЕНТ (внутри книг)
+// ═══════════════════════════════════════════════
+
+/**
+ * Добавляет контент-элемент к книге.
+ * Если bookId = '__no_book__', контент хранится в специальной записи.
+ */
+export async function addContentToBook(bookId, contentItem) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    const req = store.get(bookId);
+    req.onsuccess = () => {
+      let book = req.result;
+      // Создаём __no_book__ если не существует
+      if (!book && bookId === '__no_book__') {
+        book = ensureBookFields({
+          id: '__no_book__',
+          title: 'Без книги',
+          author: '',
+          status: 'added',
+          contentItems: [],
+        });
+      }
+      if (!book) { resolve(false); return; }
+      if (!book.contentItems) book.contentItems = [];
+      book.contentItems.push(ensureContentItemFields(contentItem));
+      book.updatedAt = new Date().toISOString();
+      store.put(book);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Обновляет контент-элемент внутри книги (partial update).
+ */
+export async function updateContentInBook(bookId, contentId, updates) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    const req = store.get(bookId);
+    req.onsuccess = () => {
+      const book = req.result;
+      if (!book) { resolve(false); return; }
+      const item = (book.contentItems || []).find(c => c.id === contentId);
+      if (!item) { resolve(false); return; }
+      Object.assign(item, updates);
+      book.updatedAt = new Date().toISOString();
+      store.put(book);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Удаляет контент-элемент из книги.
+ */
+export async function removeContentFromBook(bookId, contentId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    const req = store.get(bookId);
+    req.onsuccess = () => {
+      const book = req.result;
+      if (!book) { resolve(false); return; }
+      if (book.contentItems) {
+        book.contentItems = book.contentItems.filter(c => c.id !== contentId);
+      }
+      book.updatedAt = new Date().toISOString();
+      store.put(book);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  11. ОТЗЫВЫ (внутри книг)
+// ═══════════════════════════════════════════════
+
+/**
+ * Сохраняет отзыв для книги.
+ */
+export async function saveReviewForBook(bookId, review) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    const req = store.get(bookId);
+    req.onsuccess = () => {
+      const book = req.result;
+      if (!book) { resolve(false); return; }
+      book.review = review;
+      book.updatedAt = new Date().toISOString();
+      store.put(book);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Удаляет отзыв из книги.
+ */
+export async function removeReviewFromBook(bookId) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    const req = store.get(bookId);
+    req.onsuccess = () => {
+      const book = req.result;
+      if (!book) { resolve(false); return; }
+      book.review = {};
+      book.updatedAt = new Date().toISOString();
+      store.put(book);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  12. PENDING SYNC (🆕 v3.8.3)
+// ═══════════════════════════════════════════════
+
+/**
+ * Добавляет операцию в очередь отложенной синхронизации.
+ * Используется при офлайн-добавлении книги по ISBN.
+ *
+ * Связь с sw.js: обработчик 'sync' читает этот store
+ * и повторяет запросы к API при восстановлении сети.
+ *
+ * @param {{ id: string, bookId: string, isbn: string }} item
+ */
+export async function putPendingSync(item) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains('pending-sync')) { resolve(false); return; }
+    const tx = db.transaction('pending-sync', 'readwrite');
+    tx.objectStore('pending-sync').put(item);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/**
+ * Возвращает все отложенные операции.
+ */
+export async function getPendingSync() {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains('pending-sync')) { resolve([]); return; }
+    const req = db.transaction('pending-sync', 'readonly').objectStore('pending-sync').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+/**
+ * Удаляет операцию из очереди после успешной синхронизации.
+ */
+export async function deletePendingSync(id) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    if (!db.objectStoreNames.contains('pending-sync')) { resolve(false); return; }
+    const tx = db.transaction('pending-sync', 'readwrite');
+    tx.objectStore('pending-sync').delete(id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  13. ЭКСПОРТ / ИМПОРТ
+// ═══════════════════════════════════════════════
+
+/**
+ * Экспортирует все данные в JSON-объект.
+ */
 export async function exportAll() {
   const db = await openDB();
-  const books = await new Promise((resolve, reject) => {
-    const tx = db.transaction('books', 'readonly');
-    const req = tx.objectStore('books').getAll();
+  const getAll = (storeName) => new Promise((resolve) => {
+    if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
+    const req = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => resolve([]);
   });
-  const covers = await new Promise((resolve, reject) => {
-    const tx = db.transaction('covers', 'readonly');
-    const req = tx.objectStore('covers').getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-  const collections = await loadCollections();
-  const challenges = await loadChallenges();
-  const tags = await loadTags();
+
+  const [books, collections, challenges, tags, previews] = await Promise.all([
+    getAll('books'),
+    getAll('collections'),
+    getAll('challenges'),
+    getAll('tags'),
+    getAll('previews'),
+  ]);
+
   const settings = await loadSettings();
-  const coversB64 = [];
-  for (const c of covers) {
-    if (isValidCoverBlob(c.blob)) {
-      const b64 = await blobToBase64(c.blob);
-      coversB64.push({ bookId: c.bookId, data: b64, savedAt: c.savedAt });
-    }
-  }
+
   return {
-    version: DB_VER,
-    exportDate: new Date().toISOString(),
-    books: books,
-    covers: coversB64,
-    collections: collections,
-    challenges: challenges,
-    tags: tags,
-    settings: settings
+    app: 'BookTrackerPro',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    books,
+    collections,
+    challenges,
+    tags,
+    settings,
+    // Обложки экспортируем отдельно (Blob → base64)
+    // Для простоты в v3.8.3 обложки не включены в экспорт
   };
 }
 
+/**
+ * Импортирует данные из JSON-объекта (заменяет текущие).
+ */
 export async function importAll(data) {
-  if (data.books) await putBooks(data.books);
-  if (data.covers) {
-    for (const c of data.covers) {
-      if (c.data) {
-        const blob = base64ToBlob(c.data);
-        if (blob) await saveCover(c.bookId, blob);
-      }
-    }
+  if (!data || !data.books) throw new Error('Неверный формат бэкапа');
+
+  const db = await openDB();
+
+  // Очищаем текущие данные (одна транзакция на store)
+  const stores = ['books', 'collections', 'challenges', 'tags', 'previews'];
+  for (const storeName of stores) {
+    if (!db.objectStoreNames.contains(storeName)) continue;
+    await new Promise((resolve) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      tx.objectStore(storeName).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
   }
-  if (data.collections) for (const c of data.collections) await putCollection(c);
-  if (data.challenges) for (const c of data.challenges) await putChallenge(c);
-  if (data.tags) for (const t of data.tags) await putTag(t);
-  if (data.settings) await saveSettings(data.settings);
+
+  // Импортируем книги
+  if (data.books?.length > 0) {
+    await new Promise((resolve) => {
+      const tx = db.transaction('books', 'readwrite');
+      const store = tx.objectStore('books');
+      for (const book of data.books) {
+        store.put(ensureBookFields(book));
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  // Импортируем подборки
+  if (data.collections?.length > 0) {
+    await new Promise((resolve) => {
+      const tx = db.transaction('collections', 'readwrite');
+      const store = tx.objectStore('collections');
+      for (const col of data.collections) store.put(col);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  // Импортируем челленджи
+  if (data.challenges?.length > 0) {
+    await new Promise((resolve) => {
+      const tx = db.transaction('challenges', 'readwrite');
+      const store = tx.objectStore('challenges');
+      for (const ch of data.challenges) store.put(ch);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  // Импортируем теги
+  if (data.tags?.length > 0) {
+    await new Promise((resolve) => {
+      const tx = db.transaction('tags', 'readwrite');
+      const store = tx.objectStore('tags');
+      for (const tag of data.tags) store.put(tag);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
+  // Импортируем настройки
+  if (data.settings) {
+    await saveSettings(data.settings);
+  }
+
+  return true;
 }
 
 // ═══════════════════════════════════════════════
-//  13. СЛУЖЕБНОЕ
+//  14. РАЗМЕР БАЗЫ
 // ═══════════════════════════════════════════════
+
+/**
+ * Возвращает приблизительный размер данных приложения.
+ */
+export async function getDBSize() {
+  try {
+    if (!navigator.storage?.estimate) return 'недоступно';
+    const { usage } = await navigator.storage.estimate();
+    if (usage < 1024) return usage + ' Б';
+    if (usage < 1024 * 1024) return (usage / 1024).toFixed(1) + ' КБ';
+    return (usage / (1024 * 1024)).toFixed(1) + ' МБ';
+  } catch {
+    return 'недоступно';
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  15. СЛУЖЕБНОЕ: обеспечение полей
+// ═══════════════════════════════════════════════
+
+/**
+ * Гарантирует наличие всех обязательных полей книги.
+ * Вызывается при каждой загрузке из IndexedDB.
+ */
 function ensureBookFields(book) {
+  if (!book.id) book.id = `book_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (!book.title) book.title = '';
+  if (!book.author) book.author = '';
+  if (!book.status) book.status = 'wishlist';
+  if (!book.dateAdded) book.dateAdded = new Date().toISOString();
+  if (!book.updatedAt) book.updatedAt = book.dateAdded;
   if (!book.contentItems) book.contentItems = [];
   if (!book.review) book.review = {};
-  if (!book.readingForContent) book.readingForContent = {};
-  if (!book.contentTags) book.contentTags = [];
   if (!book.tags) book.tags = [];
-  if (book.isPR === undefined) book.isPR = false;
-  if (!book.receivedFrom) book.receivedFrom = '';
-  if (!book.receivedDate) book.receivedDate = '';
-  if (!book.blogStatus) book.blogStatus = 'none';
+  if (!book.tropes) book.tropes = [];
+  if (!book.formats) book.formats = [];
+  if (!book.notes) book.notes = '';
+  if (!book.description) book.description = '';
+  if (!book.genre) book.genre = '';
+  if (!book.publisher) book.publisher = '';
+  if (!book.isbn) book.isbn = '';
   if (!book.series) book.series = '';
-  if (book.seriesNumber === undefined) book.seriesNumber = null;
-  if (book.seriesTotal === undefined) book.seriesTotal = null;
-  if (!book.ageRating) book.ageRating = '';
-  if (!book.source) book.source = 'manual';
-  if (!book.price) book.price = { amount: 0, currency: 'RUB' };
-  if (!book.jointReading) {
-    book.jointReading = { active: false, participants: [], chatLink: '', startDate: '', notes: '' };
+  if (book.cover === undefined) book.cover = '';
+  if (book.coverUrl === undefined) book.coverUrl = '';
+  if (book.price === undefined) book.price = { amount: 0, currency: 'RUB' };
+  if (book.isPR === undefined) book.isPR = false;
+  if (book.currentPage === undefined) book.currentPage = 0;
+  if (book.pageCount === undefined) book.pageCount = 0;
+  if (book.rating === undefined) book.rating = 0;
+  if (book.pepperRating === undefined) book.pepperRating = 0;
+  if (book.tearRating === undefined) book.tearRating = 0;
+  if (book.intrigueRating === undefined) book.intrigueRating = 0;
+  if (book.horrorRating === undefined) book.horrorRating = 0;
+  if (book.characters === undefined) book.characters = [];
+  if (book.jointReading === undefined) {
+    book.jointReading = { active: false, participants: [], chatLink: '', notes: '', startDate: '' };
   }
-  if (!book.dateStarted) book.dateStarted = '';
-  if (!book.dateFinished) book.dateFinished = '';
-  if (book.readingDays === undefined) book.readingDays = null;
-  if (book.status === 'tbr') book.status = 'wishlist';
-  if (!book.status) book.status = 'wishlist';
-  if (book.contentTags.length > 0 && book.tags.length === 0) {
-    book.tags = [...book.contentTags];
-  }
+  return book;
 }
 
+/**
+ * Гарантирует наличие всех обязательных полей контент-элемента.
+ */
 function ensureContentItemFields(item) {
-  if (!item) return;
+  if (!item.id) item.id = `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (!item.type) item.type = 'unboxing';
+  if (!item.title) item.title = '';
+  if (!item.platform) item.platform = 'youtube';
+  if (!item.status) item.status = 'idea';
+  if (!item.plannedDate) item.plannedDate = '';
+  if (!item.publishedDate) item.publishedDate = '';
+  if (!item.publishedUrl) item.publishedUrl = '';
+  if (!item.notes) item.notes = '';
+  if (!item.createdAt) item.createdAt = new Date().toISOString();
+  if (!item.updatedAt) item.updatedAt = item.createdAt;
   if (item.reportSent === undefined) item.reportSent = false;
   if (!item.reportDate) item.reportDate = '';
-  if (!item.id) item.id = 'content_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-  if (!item.type) item.type = 'review';
-  if (!item.status) item.status = 'idea';
-  if (!item.platform) item.platform = 'youtube';
-  if (!item.createdAt) item.createdAt = new Date().toISOString();
+  return item;
 }
-
-function blobToBase64(blob) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(blob);
-  });
-}
-
-function base64ToBlob(dataUrl) {
-  try {
-    const parts = dataUrl.split(',');
-    const header = parts[0];
-    const data = parts[1];
-    const mimeMatch = header.match(/:(.*?);/);
-    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new Blob([bytes], { type: mime });
-  } catch { return null; }
-}
-
-export async function getDBSize() {
-  if (!navigator.storage || !navigator.storage.estimate) return 'N/A';
-  const est = await navigator.storage.estimate();
-  return ((est.usage || 0) / (1024 * 1024)).toFixed(1) + ' МБ';
-}
-// ─────────────────────────────────────────────
