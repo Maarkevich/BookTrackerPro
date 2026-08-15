@@ -56,7 +56,7 @@ import {
 } from './microlink.js';
 import { registerSW, setupOnlineIndicator } from './sw-register.js';
 import { showConfirm, attachCustomSelect } from './uikit.js';
-import { icon, statusIcon, CONTENT_TYPE_ICONS } from './icons.js';
+import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 // 🆕 v3.8.3/3.8.4: утилиты из utils.js + реэкспорт для совместимости
 import {
   esc, showToast, debounce, sanitizeColor,

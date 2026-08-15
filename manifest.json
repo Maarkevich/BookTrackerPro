@@ -2,7 +2,7 @@
   "id": "/BookTrackerPro/",
   "name": "Book Tracker Pro — Трекер книг для бук-блогера",
   "short_name": "BookTracker",
-  "description": "Трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, контент-план, отзывы, статистика. Новое в 3.8.3: безопасность (CSP, удаление секретных ключей), производительность (modulepreload, skeleton loading), доступность (focus trap, aria-live, keyboard navigation). Работает полностью оффлайн.",
+  "description": "Трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, контент-план, отзывы, статистика. Работает полностью оффлайн.",
   "lang": "ru",
   "dir": "ltr",
   "start_url": "/BookTrackerPro/",
@@ -19,36 +19,6 @@
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
-  "screenshots": [
-  {
-    "src": "screenshot-books.png",
-    "sizes": "720x1280",
-    "type": "image/png",
-    "form_factor": "narrow",
-    "label": "Библиотека книг с обложками и статусами"
-  },
-  {
-    "src": "screenshot-scanner.png",
-    "sizes": "720x1280",
-    "type": "image/png",
-    "form_factor": "narrow",
-    "label": "Сканер ISBN штрихкодов"
-  },
-  {
-    "src": "screenshot-stats.png",
-    "sizes": "720x1280",
-    "type": "image/png",
-    "form_factor": "narrow",
-    "label": "Статистика чтения"
-  },
-  {
-    "src": "screenshot-books-wide.png",
-    "sizes": "1280x720",
-    "type": "image/png",
-    "form_factor": "wide",
-    "label": "BookTrackerPro на десктопе"
-  }
-  ]
   "shortcuts": [
     {
       "name": "Добавить книгу",
