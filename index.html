@@ -4,53 +4,47 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
     <title>Book Tracker Pro</title>
-    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.3: безопасность, производительность, доступность. Работает полностью оффлайн."/>
+    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.4: шрифт Nunito, метки полок, компактность, SVG-иконки. Работает полностью оффлайн."/>
 
-    <!-- v3.8.3: CSP для защиты от XSS -->
+    <!-- v3.8.3: CSP -->
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self';
                    img-src 'self' data: blob: https:;
                    script-src 'self' 'unsafe-inline';
                    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                    font-src 'self' https://fonts.gstatic.com data:;
-                   connect-src 'self' https://www.googleapis.com https://openlibrary.org https://covers.openlibrary.org https://api.microlink.io https://pro-api.microlink.io https://catalit.litres.ru https://corsproxy.io https://open.er-api.com https://cv*.litres.ru https://api.litres.ru https://unpkg.com https://cdn.jsdelivr.net;
+                   connect-src 'self' https://www.googleapis.com https://openlibrary.org https://covers.openlibrary.org https://api.microlink.io https://pro-api.microlink.io https://catalit.litres.ru https://corsproxy.io https://open.er-api.com https://cv0.litres.ru https://cv1.litres.ru https://cv2.litres.ru https://cv3.litres.ru https://cv4.litres.ru https://cv5.litres.ru https://cv6.litres.ru https://cv7.litres.ru https://cv8.litres.ru https://cv9.litres.ru https://api.litres.ru https://unpkg.com https://cdn.jsdelivr.net;
                    media-src 'self' blob:;
                    worker-src 'self' blob:;"/>
 
-    <!-- v3.8.3: theme-color для браузерной строки -->
     <meta name="theme-color" content="#161210"/>
 
     <!-- iOS standalone -->
     <meta name="apple-mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
     <meta name="apple-mobile-web-app-title" content="BookTracker"/>
-    <!-- v3.8.3: apple-touch-icon -->
     <link rel="apple-touch-icon" href="icon-192.png"/>
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
-
     <link rel="manifest" href="manifest.json"/>
 
-    <!-- Preconnect к внешним ресурсам -->
+    <!-- 🆕 v3.8.4: шрифт Nunito (округлый, как в оригинале) -->
     <link rel="preconnect" href="https://fonts.googleapis.com"/>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
 
-    <!-- v3.8.3: modulepreload вместо preload as="script" (фикс двойной загрузки) -->
-    <link rel="modulepreload" href="utils.js?v=3.8.3"/>
-    <link rel="modulepreload" href="icons.js?v=3.8.3"/>
-    <link rel="modulepreload" href="uikit.js?v=3.8.3"/>
-    <link rel="modulepreload" href="db.js?v=3.8.3"/>
-    <link rel="modulepreload" href="microlink.js?v=3.8.3"/>
-    <link rel="modulepreload" href="app.js?v=3.8.3"/>
-
-    <link rel="stylesheet" href="app.css?v=3.8.3"/>
-    <link rel="stylesheet" href="style.css?v=3.8.3"/>
+    <link rel="modulepreload" href="utils.js?v=3.8.4"/>
+    <link rel="modulepreload" href="icons.js?v=3.8.4"/>
+    <link rel="modulepreload" href="uikit.js?v=3.8.4"/>
+    <link rel="modulepreload" href="db.js?v=3.8.4"/>
+    <link rel="modulepreload" href="microlink.js?v=3.8.4"/>
+    <link rel="modulepreload" href="app.js?v=3.8.4"/>
+    <link rel="stylesheet" href="app.css?v=3.8.4"/>
+    <link rel="stylesheet" href="style.css?v=3.8.4"/>
 </head>
 <body>
-    <!-- v3.8.3: Skip link для доступности -->
     <a href="#main-content" class="skip-link">Перейти к содержимому</a>
 
     <div id="app">
-        <!-- ═══ ТОПБАР ═══ -->
         <header class="topbar">
             <button id="menu-btn" class="icon-btn" aria-label="Открыть меню">☰</button>
             <button id="back-btn" class="icon-btn hidden" aria-label="Назад">←</button>
@@ -58,7 +52,6 @@
             <button id="search-toggle" class="icon-btn" aria-label="Поиск">🔍</button>
         </header>
 
-        <!-- ═══ ПОИСК ═══ -->
         <div id="search-bar" class="search-bar hidden">
             <div class="search-input-row">
                 <input type="text" id="search-input" placeholder="Поиск по названию, автору, ISBN, тегу..."
@@ -70,12 +63,9 @@
             <div id="search-results" class="search-results hidden"></div>
         </div>
 
-        <!-- ═══ АКТИВНЫЕ ФИЛЬТРЫ ═══ -->
         <div id="active-filters" class="active-filters hidden"></div>
 
-        <!-- ═══ ОСНОВНОЙ КОНТЕНТ ═══ -->
         <main id="main-content" class="main-content" role="main">
-            <!-- v3.8.3: Skeleton loading для LCP -->
             <div id="skeleton" class="book-list" aria-hidden="true">
                 <div class="book-card"><div class="book-cover skeleton"></div><div class="book-info"><div class="skeleton-line w-75"></div><div class="skeleton-line w-50"></div></div></div>
                 <div class="book-card"><div class="book-cover skeleton"></div><div class="book-info"><div class="skeleton-line w-75"></div><div class="skeleton-line w-50"></div></div></div>
@@ -85,14 +75,12 @@
             </div>
         </main>
 
-        <!-- ═══ ПЛАВАЮЩИЕ КНОПКИ ═══ -->
         <div class="fab-group">
             <button id="scan-btn" class="fab fab-secondary" aria-label="Сканер ISBN">📷</button>
             <button id="add-btn" class="fab fab-primary" aria-label="Добавить книгу">＋</button>
         </div>
     </div>
 
-    <!-- ═══ DRAWER (БОКОВОЕ МЕНЮ) ═══ -->
     <div id="backdrop" class="backdrop"></div>
     <aside id="drawer" class="drawer" role="navigation" aria-label="Главное меню">
         <div class="drawer-header">
@@ -113,16 +101,16 @@
             <button class="nav-item" data-tab="settings"><span class="nav-icon"></span> Настройки</button>
         </nav>
         <div class="drawer-section">
-            <button id="drawer-title-collections" class="drawer-section-title">📂 Подборки</button>
-            <div id="drawer-collections" class="drawer-sub"></div>
+            <button id="drawer-title-collections" class="drawer-section-title" aria-expanded="false">📂 Подборки</button>
+            <div id="drawer-collections" class="drawer-sub hidden"></div>
             <button id="drawer-add-collection" class="drawer-add-btn">＋ Новая подборка</button>
         </div>
         <div class="drawer-section">
-            <button id="drawer-title-series" class="drawer-section-title">📚 Серии</button>
-            <div id="drawer-series" class="drawer-sub"></div>
+            <button id="drawer-title-series" class="drawer-section-title" aria-expanded="false">📚 Серии</button>
+            <div id="drawer-series" class="drawer-sub hidden"></div>
         </div>
         <div class="drawer-section">
-            <button id="drawer-title-filters" class="drawer-section-title">🔍 Фильтры</button>
+            <button id="drawer-title-filters" class="drawer-section-title" aria-expanded="false">🔍 Фильтры</button>
             <div id="drawer-filters" class="drawer-sub"></div>
         </div>
         <div class="drawer-footer">
@@ -130,7 +118,6 @@
         </div>
     </aside>
 
-    <!-- ═══ ОВЕРЛЕЙ: ФОРМА КНИГИ ═══ -->
     <div id="form-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="form-title">
         <div class="overlay-panel">
             <div class="overlay-header">
@@ -142,7 +129,6 @@
         </div>
     </div>
 
-    <!-- ═══ ОВЕРЛЕЙ: КАРТОЧКА КНИГИ ═══ -->
     <div id="detail-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <div class="overlay-panel">
             <div class="overlay-header">
@@ -154,7 +140,6 @@
         </div>
     </div>
 
-    <!-- ═══ ОВЕРЛЕЙ: СКАНЕР ═══ -->
     <div id="scanner-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-label="Сканер ISBN">
         <div class="overlay-panel scanner-panel">
             <div class="overlay-header">
@@ -175,7 +160,6 @@
         </div>
     </div>
 
-    <!-- ═══ ОВЕРЛЕЙ: ФОРМА КОНТЕНТА ═══ -->
     <div id="content-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="content-form-title">
         <div class="overlay-panel">
             <div class="overlay-header">
@@ -186,7 +170,6 @@
         </div>
     </div>
 
-    <!-- ═══ ОВЕРЛЕЙ: ФОРМА ОТЗЫВА ═══ -->
     <div id="review-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="review-form-title">
         <div class="overlay-panel">
             <div class="overlay-header">
@@ -197,7 +180,6 @@
         </div>
     </div>
 
-    <!-- ═══ ОВЕРЛЕЙ: ПРОСМОТР ОБЛОЖКИ ═══ -->
     <div id="cover-overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-label="Просмотр обложки">
         <div class="overlay-panel cover-viewer-panel">
             <div class="overlay-header">
@@ -218,28 +200,21 @@
         </div>
     </div>
 
-    <!-- ═══ ТОСТ ═══ -->
-    <!-- v3.8.3: aria-live для screen readers -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-    <!-- ═══ КОНФЕТТИ ═══ -->
     <canvas id="confetti-canvas" class="confetti-canvas"></canvas>
 
-    <!-- ═══ БАННЕР ОБНОВЛЕНИЯ ═══ -->
     <div id="update-banner" class="pwa-banner hidden">
         <span>🔄 Доступна новая версия</span>
         <button class="btn-small" id="update-apply">Обновить</button>
         <button class="icon-btn" id="update-dismiss" aria-label="Скрыть">✕</button>
     </div>
 
-    <!-- ═══ БАННЕР УСТАНОВКИ ═══ -->
     <div id="install-banner" class="pwa-banner hidden">
         <span>📱 Установить BookTracker?</span>
         <button class="btn-small" id="install-apply">Установить</button>
         <button class="icon-btn" id="install-dismiss" aria-label="Скрыть">✕</button>
     </div>
 
-    <!-- v3.8.3: версия в query-параметрах для cache-busting -->
-    <script type="module" src="app.js?v=3.8.3"></script>
+    <script type="module" src="app.js?v=3.8.4"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — challenges.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.4 | 2026-08-15
 // 📝 Челленджи чтения
 //
 //    Типы целей:
@@ -10,37 +10,32 @@
 //      🎬 content — количество контента
 //
 //    Статусы:
-//      📅 planned → 🟢 active → 🏆 completed / 💀 failed
+//      📅 planned →  active →  completed / 💀 failed
 //
 //    Прогресс считается автоматически из данных книг.
 //    Книга может быть в нескольких челленджах.
 //    Заметки: notes: [{ text, date }]
 //
-//    Новое в 3.8.3:
-//      — 🏗️ trackOverlay/untrackOverlay из utils.js
+//    Новое в 3.8.4:
+//      — 🏗️ trackOverlay / untrackOverlay импортируются из utils.js
 //        (разрыв цикла app.js ↔ challenges.js)
-//      — ♿ role="radiogroup" + aria-checked на goal-type кнопках
-//      — ♿ role="dialog" + aria-modal на оверлеях
+//      — 🎨 SVG-статусы вместо эмодзи в карточках/списках/кнопках
+//        (эмодзи остаются ТОЛЬКО в поле «Эмодзи» формы создания)
 //      — ♿ aria-label на кнопках действий
-//      — ♿ focus-visible стили для keyboard navigation
-//      — ♿ prefers-reduced-motion для анимаций
-//      — JSDoc для публичных функций
 //
 //    Сохранено из 3.7.0:
 //      — esc / showToast из utils.js (разрыв цикла)
 //      — Кастомный селект статуса (uikit.js)
 //      — Дата-пикеры для периода (uikit.js)
-//
-//    Сохранено из 3.5.0:
 //      — SVG-иконки типов целей из icons.js (GOAL_ICONS)
-//      — Кнопки-хром на icon() (править/удалить/добавить/назад)
-//      — Пользовательские эмодзи и статусы
+//      — Пользовательские эмодзи в форме создания
 // ─────────────────────────────────────────────
 import { loadChallenges, putChallenge, delChallenge,
-         addBookToChallenge, removeBookFromChallenge } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.3: было trackOverlay из './app.js'
+         addBookToChallenge, removeBookFromChallenge,
+         BOOK_STATUSES } from './db.js';
+import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: trackOverlay из utils
 import { attachCustomSelect, attachDatePicker } from './uikit.js';
-import { icon, GOAL_ICONS } from './icons.js';
+import { icon, statusIcon, GOAL_ICONS } from './icons.js';
 
 // ═══════════════════════════════════════════════
 //  КОНСТАНТЫ
@@ -60,6 +55,17 @@ export const CHALLENGE_STATUSES = {
   failed:    { icon: '💀', label: 'Провален',     class: 'status-failed' },
 };
 
+// 🆕 v3.8.4: SVG-иконки статусов челленджа (вместо эмодзи в UI)
+const CH_STATUS_ICONS = {
+  planned:   'calendar',
+  active:    'fire',
+  completed: 'trophy',
+  failed:    'xCircle',
+};
+function chStatusIcon(status, size = 12) {
+  return icon(CH_STATUS_ICONS[status] || 'target', size);
+}
+
 /**
  * SVG-иконка типа цели (из icons.js).
  * @param {string} goalType — books / pages / tag / reviews / content
@@ -72,12 +78,11 @@ function goalIcon(goalType, size = 14) {
 // ═══════════════════════════════════════════════
 //  1. РАСЧЁТ ПРОГРЕССА
 // ═══════════════════════════════════════════════
-
 /**
  * Считает текущий прогресс челленджа из данных книг.
  * @param {object} challenge
  * @param {object[]} books — все книги
- * @returns {{ current: number, target: number, percent: number, detail: string }}
+ * @returns {{ current, target, percent, detail }}
  */
 export function calcChallengeProgress(challenge, books) {
   const target = challenge.goalValue || 1;
@@ -149,9 +154,6 @@ export function calcChallengeProgress(challenge, books) {
 
 /**
  * Определяет, завершён ли челлендж (для авто-проверки).
- * @param {object} challenge
- * @param {object[]} books
- * @returns {boolean}
  */
 export function isChallengeComplete(challenge, books) {
   const { current, target } = calcChallengeProgress(challenge, books);
@@ -160,8 +162,6 @@ export function isChallengeComplete(challenge, books) {
 
 /**
  * Осталось дней до конца челленджа.
- * @param {object} challenge
- * @returns {number|null}
  */
 export function daysLeft(challenge) {
   if (!challenge.endDate) return null;
@@ -171,16 +171,8 @@ export function daysLeft(challenge) {
 }
 
 // ═══════════════════════════════════════════════
-//  2. СПИСОК ЧЕЛЛЕНДЖЕЙ
+//  2. СПИСОК ЧЕЛЛЕНДЖЕЙ (🆕 SVG в заголовках секций)
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит вкладку челленджей.
- * @param {HTMLElement} container
- * @param {object[]} challenges
- * @param {object[]} books
- * @param {object} callbacks — { onOpen, onAdd, onEdit, onDelete }
- */
 export function renderChallengesList(container, challenges, books, callbacks) {
   // Сортировка: активные → запланированные → завершённые → проваленные
   const order = { active: 0, planned: 1, completed: 2, failed: 3 };
@@ -208,19 +200,19 @@ export function renderChallengesList(container, challenges, books, callbacks) {
     ` : `
       ${active.length > 0 ? `
         <div class="mb-16">
-          <div class="text-small text-muted mb-8" style="font-weight:700">🟢 Активные</div>
+          <div class="text-small text-muted mb-8" style="font-weight:700">${icon('fire', 12)} Активные</div>
           ${active.map(c => renderChallengeCard(c, books)).join('')}
         </div>
       ` : ''}
       ${planned.length > 0 ? `
         <div class="mb-16">
-          <div class="text-small text-muted mb-8" style="font-weight:700">📅 Запланированные</div>
+          <div class="text-small text-muted mb-8" style="font-weight:700">${icon('calendar', 12)} Запланированные</div>
           ${planned.map(c => renderChallengeCard(c, books)).join('')}
         </div>
       ` : ''}
       ${done.length > 0 ? `
         <div class="mb-16">
-          <div class="text-small text-muted mb-8" style="font-weight:700">🏁 Завершённые</div>
+          <div class="text-small text-muted mb-8" style="font-weight:700">${icon('trophy', 12)} Завершённые</div>
           ${done.map(c => renderChallengeCard(c, books)).join('')}
         </div>
       ` : ''}
@@ -244,6 +236,7 @@ export function renderChallengesList(container, challenges, books, callbacks) {
   });
 }
 
+// 🆕 v3.8.4: статус — SVG-иконка вместо эмодзи
 function renderChallengeCard(ch, books) {
   const st = CHALLENGE_STATUSES[ch.status] || CHALLENGE_STATUSES.planned;
   const gt = GOAL_TYPES[ch.goalType] || GOAL_TYPES.books;
@@ -252,7 +245,7 @@ function renderChallengeCard(ch, books) {
 
   return `
     <div class="challenge-card" data-ch-id="${ch.id}">
-      <div class="challenge-emoji">${ch.emoji || '🏆'}</div>
+      <div class="challenge-emoji" aria-hidden="true">${ch.emoji || '🏆'}</div>
       <div class="challenge-info">
         <div class="challenge-name">${esc(ch.name)}</div>
         <div class="challenge-meta">
@@ -261,7 +254,7 @@ function renderChallengeCard(ch, books) {
             ? ` · ${formatShort(ch.startDate)} — ${formatShort(ch.endDate)}`
             : ''}
           ${left !== null && ch.status === 'active'
-            ? ` · ⏳ ${left} дн.` : ''}
+            ? ` · ${icon('clock', 11)} ${left} дн.` : ''}
         </div>
         <div class="challenge-progress-track">
           <div class="challenge-progress-fill ${ch.status}"
@@ -270,24 +263,15 @@ function renderChallengeCard(ch, books) {
       </div>
       <div class="challenge-side">
         <span class="challenge-percent">${prog.percent}%</span>
-        <span class="challenge-status ${st.class}">${st.icon} ${st.label}</span>
+        <span class="challenge-status ${st.class}">${chStatusIcon(ch.status, 11)} ${st.label}</span>
       </div>
     </div>
   `;
 }
 
 // ═══════════════════════════════════════════════
-//  3. ЭКРАН ЧЕЛЛЕНДЖА
+//  3. ЭКРАН ЧЕЛЛЕНДЖА (🆕 SVG в кнопках/статусах)
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит экран одного челленджа.
- * @param {HTMLElement} container
- * @param {object} challenge
- * @param {object[]} books
- * @param {object} callbacks — { onBack, onEdit, onDelete, onOpenBook,
- *                              onAddBook, onStatusChange, onAddNote, onDelNote }
- */
 export function renderChallengeDetail(container, challenge, books, callbacks) {
   const st = CHALLENGE_STATUSES[challenge.status] || CHALLENGE_STATUSES.planned;
   const gt = GOAL_TYPES[challenge.goalType] || GOAL_TYPES.books;
@@ -297,34 +281,30 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
   const notes = challenge.notes || [];
 
   container.innerHTML = `
-    <button id="chd-back" class="btn-secondary mb-16" aria-label="Назад к списку челленджей">
-      ${icon('arrowLeft', 14)} Челленджи
-    </button>
+    <button id="chd-back" class="btn-secondary mb-16">${icon('arrowLeft', 14)} Челленджи</button>
 
     <!-- Шапка -->
     <div class="challenge-hero ${challenge.status}">
-      <div class="challenge-hero-emoji">${challenge.emoji || '🏆'}</div>
+      <div class="challenge-hero-emoji" aria-hidden="true">${challenge.emoji || '🏆'}</div>
       <div class="challenge-hero-info">
         <h2>${esc(challenge.name)}</h2>
         ${challenge.description
           ? `<div class="challenge-hero-desc">${esc(challenge.description)}</div>`
           : ''}
         <div class="challenge-hero-meta">
-          <span class="challenge-status ${st.class}">${st.icon} ${st.label}</span>
+          <span class="challenge-status ${st.class}">${chStatusIcon(challenge.status, 11)} ${st.label}</span>
           ${challenge.startDate && challenge.endDate
-            ? `<span>📅 ${formatShort(challenge.startDate)} — ${formatShort(challenge.endDate)}</span>`
-            : '<span>♾️ Без ограничения</span>'}
+            ? `<span>${icon('calendar', 12)} ${formatShort(challenge.startDate)} — ${formatShort(challenge.endDate)}</span>`
+            : `<span>${icon('clock', 12)} Без ограничения</span>`}
           ${left !== null && challenge.status === 'active'
-            ? `<span>⏳ Осталось ${left} дн.</span>` : ''}
+            ? `<span>${icon('clock', 12)} Осталось ${left} дн.</span>` : ''}
         </div>
       </div>
-      <div class="challenge-hero-actions" role="group" aria-label="Действия с челленджем">
+      <div class="challenge-hero-actions">
         <button id="chd-edit" class="btn-secondary" style="padding:8px 12px"
-                aria-label="Редактировать челлендж ${esc(challenge.name)}"
-                title="Редактировать">${icon('edit', 15)}</button>
+                aria-label="Редактировать челлендж" title="Редактировать">${icon('edit', 15)}</button>
         <button id="chd-del" class="btn-danger" style="padding:8px 12px"
-                aria-label="Удалить челлендж ${esc(challenge.name)}"
-                title="Удалить">${icon('trash', 15)}</button>
+                aria-label="Удалить челлендж" title="Удалить">${icon('trash', 15)}</button>
       </div>
     </div>
 
@@ -343,21 +323,21 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
       </div>
     </div>
 
-    <!-- Управление статусом -->
+    <!-- Управление статусом (🆕 SVG) -->
     ${challenge.status === 'planned' ? `
       <button id="chd-start" class="btn-primary mt-16">
-        🟢 Начать челлендж
+        ${icon('fire', 15)} Начать челлендж
       </button>
     ` : ''}
     ${challenge.status === 'active' && prog.percent >= 100 ? `
       <button id="chd-complete" class="btn-primary mt-16" style="background:var(--green)">
-        🏆 Завершить челлендж
+        ${icon('trophy', 15)} Завершить челлендж
       </button>
     ` : ''}
 
     <!-- Книги челленджа -->
     <div class="detail-section">
-      <h3>📚 Книги (${chBooks.length})</h3>
+      <h3>${icon('library', 14)} Книги (${chBooks.length})</h3>
       ${chBooks.length === 0
         ? '<div class="text-muted text-small">Добавьте книги в челлендж</div>'
         : chBooks.map(b => renderChallengeBook(b)).join('')}
@@ -368,7 +348,7 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
 
     <!-- Заметки -->
     <div class="detail-section">
-      <h3>📝 Заметки (${notes.length})</h3>
+      <h3>${icon('edit', 14)} Заметки (${notes.length})</h3>
       <div id="chd-notes">
         ${notes.length === 0
           ? '<div class="text-muted text-small">Пока нет заметок</div>'
@@ -378,15 +358,13 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
               <div class="challenge-note-text">${esc(n.text)}</div>
               <button data-note-del="${i}" class="icon-btn"
                       style="width:28px;height:28px;flex-shrink:0"
-                      aria-label="Удалить заметку от ${formatShort(n.date)}"
-                      title="Удалить заметку">${icon('trash', 13)}</button>
+                      aria-label="Удалить заметку" title="Удалить заметку">${icon('trash', 13)}</button>
             </div>
           `).join('')}
       </div>
       <div class="flex gap-8 mt-8">
         <input type="text" id="chd-note-input" placeholder="Новая заметка..."
-               style="flex:1" autocomplete="off"
-               aria-label="Текст новой заметки"/>
+               style="flex:1" autocomplete="off" aria-label="Текст заметки"/>
         <button id="chd-note-add" class="btn-secondary" style="width:auto;flex-shrink:0"
                 aria-label="Добавить заметку">${icon('plus', 14)}</button>
       </div>
@@ -400,7 +378,6 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
 
   const startBtn = container.querySelector('#chd-start');
   if (startBtn) startBtn.addEventListener('click', () => callbacks.onStatusChange(challenge.id, 'active'));
-
   const completeBtn = container.querySelector('#chd-complete');
   if (completeBtn) completeBtn.addEventListener('click', () => callbacks.onStatusChange(challenge.id, 'completed'));
 
@@ -412,7 +389,6 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
       callbacks.onOpenBook(el.dataset.chdBook);
     });
   });
-
   container.querySelectorAll('[data-chd-book-del]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -431,60 +407,41 @@ export function renderChallengeDetail(container, challenge, books, callbacks) {
     callbacks.onAddNote(challenge.id, text);
     input.value = '';
   };
-
   container.querySelector('#chd-note-add').addEventListener('click', addNote);
   container.querySelector('#chd-note-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addNote();
   });
-
   container.querySelectorAll('[data-note-del]').forEach(btn => {
     btn.addEventListener('click', () => callbacks.onDelNote(challenge.id, parseInt(btn.dataset.noteDel)));
   });
 }
 
+// 🆕 v3.8.4: статус книги — SVG (statusIcon) + label из BOOK_STATUSES
 function renderChallengeBook(b) {
-  const st = {
-    wishlist: { icon: '🌟', label: 'Wishlist' },
-    added:    { icon: '📦', label: 'Добавлено' },
-    reading:  { icon: '📖', label: 'Читаю' },
-    paused:   { icon: '⏸️', label: 'Пауза' },
-    finished: { icon: '✅', label: 'Прочитано' },
-    dropped:  { icon: '❌', label: 'Брошено' },
-  }[b.status] || { icon: '📕', label: b.status };
-
+  const st = BOOK_STATUSES[b.status] || { label: b.status };
   return `
     <div class="content-list-item" data-chd-book="${b.id}" style="cursor:pointer">
       ${b.coverUrl
-        ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer"
-                alt="Обложка: ${esc(b.title)}"
-                style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
-        : `<span style="font-size:1.2rem" aria-hidden="true">📕</span>`}
+        ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+        : `<span style="display:flex;align-items:center;justify-content:center;width:32px;height:48px">${icon('bookClosed', 18)}</span>`}
       <div class="content-list-info">
         <div class="content-list-title">${esc(b.title)}</div>
         <div class="content-list-sub">
-          ${st.icon} ${st.label}
+          ${statusIcon(b.status, 12)} ${st.label}
           ${b.status === 'finished' && b.readingDays ? ` · ${b.readingDays} дн.` : ''}
           ${b.pageCount ? ` · ${b.pageCount} стр.` : ''}
         </div>
       </div>
       <button data-chd-book-del="${b.id}" class="icon-btn"
               style="width:28px;height:28px;flex-shrink:0"
-              aria-label="Убрать книгу ${esc(b.title)} из челленджа"
-              title="Убрать из челленджа">${icon('close', 13)}</button>
+              aria-label="Убрать из челленджа" title="Убрать из челленджа">${icon('close', 13)}</button>
     </div>
   `;
 }
 
 // ═══════════════════════════════════════════════
-//  4. ФОРМА ЧЕЛЛЕНДЖА
+//  4. ФОРМА ЧЕЛЛЕНДЖА (эмодзи сохраняются — это выбор пользователя)
 // ═══════════════════════════════════════════════
-
-/**
- * Открывает форму создания/редактирования челленджа.
- * @param {object|null} challenge — null для нового
- * @param {object[]} books — для подсказок тегов
- * @param {function} onSave — (data) => void
- */
 export function openChallengeForm(challenge, books, onSave) {
   const c = challenge || {};
   const isEdit = !!challenge;
@@ -498,31 +455,29 @@ export function openChallengeForm(challenge, books, onSave) {
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
-  overlay.setAttribute('role', 'dialog');          // 🆕 v3.8.3
-  overlay.setAttribute('aria-modal', 'true');      // 🆕 v3.8.3
-  overlay.setAttribute('aria-label', isEdit ? 'Редактировать челлендж' : 'Новый челлендж');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
   overlay.innerHTML = `
     <div class="overlay-panel" style="max-height:88dvh">
       <div class="overlay-header">
         <h2>${isEdit ? `${icon('edit', 18)} Редактировать челлендж` : `${icon('trophy', 18)} Новый челлендж`}</h2>
-        <button class="icon-btn ch-form-close" aria-label="Закрыть форму">${icon('close', 16)}</button>
+        <button class="icon-btn ch-form-close" aria-label="Закрыть">${icon('close', 16)}</button>
       </div>
       <div class="overlay-body">
         <div class="form-row">
           <div class="form-group">
-            <label for="ch-f-emoji">Эмодзи</label>
+            <label>Эмодзи</label>
             <input type="text" id="ch-f-emoji" value="${esc(c.emoji || '🏆')}"
                    maxlength="4" style="text-align:center;font-size:1.5rem"/>
           </div>
           <div class="form-group">
-            <label for="ch-f-name">Название *</label>
+            <label>Название *</label>
             <input type="text" id="ch-f-name" value="${esc(c.name || '')}"
                    placeholder="Фэнтези-марафон" required/>
           </div>
         </div>
-
         <div class="form-group">
-          <label for="ch-f-desc">Описание</label>
+          <label>Описание</label>
           <textarea id="ch-f-desc" rows="2"
                     placeholder="Прочитать 5 книг в жанре фэнтези за август...">${esc(c.description || '')}</textarea>
         </div>
@@ -530,11 +485,10 @@ export function openChallengeForm(challenge, books, onSave) {
         <!-- Тип цели -->
         <div class="form-group">
           <label>Тип цели</label>
-          <div class="goal-type-grid" role="radiogroup" aria-label="Тип цели челленджа">
+          <div class="goal-type-grid">
             ${Object.entries(GOAL_TYPES).map(([key, gt]) => `
               <button class="goal-type-btn ${(c.goalType || 'books') === key ? 'active' : ''}"
-                      data-goal="${key}" role="radio"
-                      aria-checked="${(c.goalType || 'books') === key}">
+                      data-goal="${key}">
                 <span class="goal-type-icon">${goalIcon(key, 22)}</span>
                 <span class="goal-type-label">${gt.label}</span>
               </button>
@@ -545,12 +499,12 @@ export function openChallengeForm(challenge, books, onSave) {
         <!-- Значение цели -->
         <div class="form-row">
           <div class="form-group">
-            <label for="ch-f-value" id="ch-f-value-label">Цель (книг)</label>
+            <label id="ch-f-value-label">Цель (книг)</label>
             <input type="number" id="ch-f-value" value="${c.goalValue || 5}" min="1"/>
           </div>
           <div class="form-group" id="ch-f-tag-group"
                style="${(c.goalType || 'books') === 'tag' ? '' : 'display:none'}">
-            <label for="ch-f-tag">Тег / жанр</label>
+            <label>Тег / жанр</label>
             <input type="text" id="ch-f-tag" value="${esc(c.goalTag || '')}"
                    placeholder="фэнтези" list="ch-tag-suggestions"/>
             <datalist id="ch-tag-suggestions">
@@ -563,17 +517,17 @@ export function openChallengeForm(challenge, books, onSave) {
         <div class="form-group">
           <label>Период</label>
           <div class="toggle-row" style="padding:4px 0">
-            <span class="toggle-label text-small">📅 Ограничить датами</span>
+            <span class="toggle-label text-small">${icon('calendar', 12)} Ограничить датами</span>
             <div class="toggle ${c.startDate ? 'active' : ''}" id="ch-f-hasdates"
                  role="switch" aria-checked="${!!c.startDate}" tabindex="0"></div>
           </div>
           <div id="ch-f-dates" class="form-row" style="${c.startDate ? '' : 'display:none'}">
             <div class="form-group">
-              <label for="ch-f-start">Начало</label>
+              <label>Начало</label>
               <input type="date" id="ch-f-start" value="${c.startDate || ''}"/>
             </div>
             <div class="form-group">
-              <label for="ch-f-end">Конец</label>
+              <label>Конец</label>
               <input type="date" id="ch-f-end" value="${c.endDate || ''}"/>
             </div>
           </div>
@@ -581,14 +535,10 @@ export function openChallengeForm(challenge, books, onSave) {
 
         <!-- Статус -->
         <div class="form-group">
-          <label for="ch-f-status">Статус</label>
+          <label>Статус</label>
           <select id="ch-f-status">
-            <option value="planned" ${(c.status || 'planned') === 'planned' ? 'selected' : ''}>
-              📅 Запланирован
-            </option>
-            <option value="active" ${c.status === 'active' ? 'selected' : ''}>
-              🟢 Активен
-            </option>
+            <option value="planned" ${(c.status || 'planned') === 'planned' ? 'selected' : ''}>Запланирован</option>
+            <option value="active" ${c.status === 'active' ? 'selected' : ''}>Активен</option>
           </select>
         </div>
 
@@ -599,7 +549,7 @@ export function openChallengeForm(challenge, books, onSave) {
 
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // жест «назад»
+  trackOverlay(overlay);
 
   let goalType = c.goalType || 'books';
 
@@ -612,20 +562,19 @@ export function openChallengeForm(challenge, books, onSave) {
   overlay.querySelector('.ch-form-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  // Кастомный селект статуса + дата-пикеры
-  attachCustomSelect(overlay.querySelector('#ch-f-status'), {});
+  // Кастомный селект статуса (🆕 SVG) + дата-пикеры
+  attachCustomSelect(overlay.querySelector('#ch-f-status'), {
+    renderOption: (opt) => `<span style="display:flex;align-items:center;gap:8px">${chStatusIcon(opt.value, 14)} ${esc(opt.textContent)}</span>`,
+    renderTrigger: (opt) => `<span style="display:flex;align-items:center;gap:8px">${chStatusIcon(opt.value, 14)} ${esc(opt.textContent)}</span>`,
+  });
   attachDatePicker(overlay.querySelector('#ch-f-start'));
   attachDatePicker(overlay.querySelector('#ch-f-end'));
 
   // Тип цели
   overlay.querySelectorAll('.goal-type-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      overlay.querySelectorAll('.goal-type-btn').forEach(b => {
-        b.classList.remove('active');
-        b.setAttribute('aria-checked', 'false');  // 🆕 v3.8.3
-      });
+      overlay.querySelectorAll('.goal-type-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      btn.setAttribute('aria-checked', 'true');   // 🆕 v3.8.3
       goalType = btn.dataset.goal;
       const tagGroup = overlay.querySelector('#ch-f-tag-group');
       tagGroup.style.display = goalType === 'tag' ? '' : 'none';
@@ -634,21 +583,17 @@ export function openChallengeForm(challenge, books, onSave) {
     });
   });
 
-  // Период
-  const hasDatesToggle = overlay.querySelector('#ch-f-hasdates');
+  // Период (🆕 keyboard)
+  const hasDates = overlay.querySelector('#ch-f-hasdates');
   const toggleDates = function() {
     this.classList.toggle('active');
-    this.setAttribute('aria-checked', this.classList.contains('active'));  // 🆕 v3.8.3
+    this.setAttribute('aria-checked', this.classList.contains('active'));
     overlay.querySelector('#ch-f-dates').style.display =
       this.classList.contains('active') ? '' : 'none';
   };
-  hasDatesToggle.addEventListener('click', toggleDates);
-  // 🆕 v3.8.3: keyboard support для toggle
-  hasDatesToggle.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      toggleDates.call(hasDatesToggle);
-    }
+  hasDates.addEventListener('click', toggleDates);
+  hasDates.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDates.call(hasDates); }
   });
 
   // Сохранение
@@ -658,7 +603,7 @@ export function openChallengeForm(challenge, books, onSave) {
       showToast('⚠️ Введите название', 'error');
       return;
     }
-    const hasDates = overlay.querySelector('#ch-f-hasdates').classList.contains('active');
+    const hasDatesOn = overlay.querySelector('#ch-f-hasdates').classList.contains('active');
     const data = {
       id: c.id || `ch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name,
@@ -667,8 +612,8 @@ export function openChallengeForm(challenge, books, onSave) {
       goalType,
       goalValue: parseInt(overlay.querySelector('#ch-f-value').value) || 1,
       goalTag: goalType === 'tag' ? overlay.querySelector('#ch-f-tag').value.trim() : '',
-      startDate: hasDates ? overlay.querySelector('#ch-f-start').value : '',
-      endDate: hasDates ? overlay.querySelector('#ch-f-end').value : '',
+      startDate: hasDatesOn ? overlay.querySelector('#ch-f-start').value : '',
+      endDate: hasDatesOn ? overlay.querySelector('#ch-f-end').value : '',
       status: overlay.querySelector('#ch-f-status').value,
       bookIds: c.bookIds || [],
       notes: c.notes || [],
@@ -682,27 +627,18 @@ export function openChallengeForm(challenge, books, onSave) {
 // ═══════════════════════════════════════════════
 //  5. ВЫБОР КНИГ ДЛЯ ЧЕЛЛЕНДЖА
 // ═══════════════════════════════════════════════
-
-/**
- * Открывает оверлей: выбрать книги для челленджа.
- * @param {string} challengeId
- * @param {object} challenge
- * @param {object[]} books
- * @param {function} onDone
- */
 export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
   const inCh = new Set(challenge.bookIds);
   const available = books.filter(b => !inCh.has(b.id));
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
-  overlay.setAttribute('role', 'dialog');          // 🆕 v3.8.3
-  overlay.setAttribute('aria-modal', 'true');      // 🆕 v3.8.3
-  overlay.setAttribute('aria-label', `Добавить книги в челлендж ${challenge.name}`);
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
   overlay.innerHTML = `
     <div class="overlay-panel" style="max-height:80dvh">
       <div class="overlay-header">
-        <h2>${challenge.emoji || '🏆'} ${esc(challenge.name)}</h2>
+        <h2><span aria-hidden="true">${challenge.emoji || '🏆'}</span> ${esc(challenge.name)}</h2>
         <button class="icon-btn ch-books-close" aria-label="Закрыть">${icon('close', 16)}</button>
       </div>
       <div class="overlay-body">
@@ -714,18 +650,15 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
           <div class="form-group">
             <input type="text" id="ch-books-search"
                    placeholder="Поиск по названию или автору..."
-                   autocomplete="off"
-                   aria-label="Поиск книг для добавления в челлендж"/>
+                   autocomplete="off" aria-label="Поиск книг"/>
           </div>
           <div id="ch-books-list">
             ${available.map(b => `
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
-                <input type="checkbox" data-book-id="${b.id}"
-                       aria-label="Добавить книгу ${esc(b.title)}"/>
+                <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
-                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt=""
-                          style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
-                  : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px" aria-hidden="true">📕</span>`}
+                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                  : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
               </label>
             `).join('')}
@@ -778,19 +711,15 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
 // ═══════════════════════════════════════════════
 //  6. ОПЕРАЦИИ (для app.js)
 // ═══════════════════════════════════════════════
-
 export async function createChallenge(data) {
   await putChallenge(data);
 }
-
 export async function updateChallenge(data) {
   await putChallenge(data);
 }
-
 export async function deleteChallengeById(id) {
   await delChallenge(id);
 }
-
 export async function addChallengeNote(challengeId, text) {
   const challenges = await loadChallenges();
   const ch = challenges.find(c => c.id === challengeId);
@@ -799,7 +728,6 @@ export async function addChallengeNote(challengeId, text) {
   ch.notes.unshift({ text, date: new Date().toISOString().slice(0, 10) });
   await putChallenge(ch);
 }
-
 export async function removeChallengeNote(challengeId, index) {
   const challenges = await loadChallenges();
   const ch = challenges.find(c => c.id === challengeId);
@@ -811,7 +739,6 @@ export async function removeChallengeNote(challengeId, index) {
 // ═══════════════════════════════════════════════
 //  7. УТИЛИТЫ
 // ═══════════════════════════════════════════════
-
 function formatShort(dateStr) {
   if (!dateStr) return '';
   try {
@@ -874,6 +801,7 @@ const CHALLENGE_STYLES = `
 }
 .challenge-percent { font-size:1rem; font-weight:800; color:var(--accent); }
 .challenge-status {
+  display:inline-flex; align-items:center; gap:4px;
   font-size:.7rem; font-weight:700;
   padding:2px 8px; border-radius:10px;
   white-space:nowrap;
@@ -968,29 +896,10 @@ const CHALLENGE_STYLES = `
   color:var(--accent);
 }
 .goal-type-label { text-align:center; line-height:1.2; }
-
-/* 🆕 v3.8.3: keyboard focus */
-.challenge-card:focus-visible,
-.goal-type-btn:focus-visible,
-.challenge-hero-actions button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* 🆕 v3.8.3: prefers-reduced-motion */
-@media (prefers-reduced-motion: reduce) {
-  .challenge-card,
-  .challenge-progress-fill,
-  .goal-type-btn {
-    transition: none !important;
-  }
-}
-
 @media (max-width:400px) {
   .goal-type-grid { grid-template-columns:repeat(2,1fr); }
 }
 `;
-
 if (!document.getElementById('challenge-styles')) {
   const style = document.createElement('style');
   style.id = 'challenge-styles';

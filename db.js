@@ -1,27 +1,25 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.4 | 2026-08-15
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 6
 //    Stores: books, covers, settings,
 //            collections, challenges, tags, previews,
-//            pending-sync (🆕 v3.8.3)
+//            pending-sync
 //
-//    Новое в 3.8.3:
+//    Новое в 3.8.4:
+//      — ️ shelfMark { color, text } в ensureBookFields
+//        (метка полки: цвет + буква/цифра)
+//
+//    Сохранено из 3.8.3:
 //      — Store 'pending-sync' для Background Sync API
-//        (оффлайн-добавление книг → автосинхронизация)
-//      — putPendingSync / getPendingSync / deletePendingSync
-//      — Улучшенная обработка ошибок в транзакциях
-//      — ensureBookFields: defaults для новых полей v3.8.x
-//
-//    Сохранено из 3.5.0:
-//      — repairCovers() — лечение битых обложек
-//      — isValidCoverBlob() — валидация Blob
+//      — putBooks (batch) — одна транзакция для N книг
+//      — repairCovers() / isValidCoverBlob()
 //      — Миграции v1→v6 без потери данных
 // ─────────────────────────────────────────────
 
 const DB_NAME = 'book-tracker-pro';
-const DB_VER = 6; // 🆕 v3.8.3: был 5, стал 6 (pending-sync)
+const DB_VER = 6;
 let _db = null;
 
 // ═══════════════════════════════════════════════
@@ -61,7 +59,6 @@ export function openDB() {
       const tx = request.transaction;
       const oldVer = event.oldVersion;
 
-      // v1: книги + настройки
       if (oldVer < 1) {
         const books = db.createObjectStore('books', { keyPath: 'id' });
         books.createIndex('status', 'status', { unique: false });
@@ -70,23 +67,17 @@ export function openDB() {
         books.createIndex('titleAuthor', ['title', 'author'], { unique: false });
         db.createObjectStore('settings', { keyPath: 'id' });
       }
-
-      // v2: обложки (Blob)
       if (oldVer < 2) {
         if (!db.objectStoreNames.contains('covers')) {
           db.createObjectStore('covers', { keyPath: 'bookId' });
         }
       }
-
-      // v3: индексы для блогерских фич
       if (oldVer < 3) {
         const books = tx.objectStore('books');
         if (!books.indexNames.contains('isPR')) books.createIndex('isPR', 'isPR', { unique: false });
         if (!books.indexNames.contains('blogStatus')) books.createIndex('blogStatus', 'blogStatus', { unique: false });
         if (!books.indexNames.contains('genre')) books.createIndex('genre', 'genre', { unique: false });
       }
-
-      // v4: подборки, челленджи, теги + индексы серий
       if (oldVer < 4) {
         if (!db.objectStoreNames.contains('collections')) {
           db.createObjectStore('collections', { keyPath: 'id' });
@@ -102,16 +93,12 @@ export function openDB() {
         if (!books.indexNames.contains('series')) books.createIndex('series', 'series', { unique: false });
         if (!books.indexNames.contains('dateFinished')) books.createIndex('dateFinished', 'dateFinished', { unique: false });
       }
-
-      // v5: превью ссылок (Microlink)
       if (oldVer < 5) {
         if (!db.objectStoreNames.contains('previews')) {
           const previews = db.createObjectStore('previews', { keyPath: 'id' });
           previews.createIndex('cachedAt', 'cachedAt', { unique: false });
         }
       }
-
-      // 🆕 v6 (3.8.3): отложенные операции для Background Sync
       if (oldVer < 6) {
         if (!db.objectStoreNames.contains('pending-sync')) {
           db.createObjectStore('pending-sync', { keyPath: 'id' });
@@ -125,27 +112,18 @@ export function openDB() {
       _db.onversionchange = () => {
         _db.close();
         _db = null;
-        // Другая вкладка обновила схему — перезагружаем
         window.location.reload();
       };
       resolve(_db);
     };
-
     request.onerror = () => reject(request.error);
-    request.onblocked = () => {
-      console.warn('[DB] Blocked — закройте другие вкладки с приложением');
-    };
+    request.onblocked = () => console.warn('[DB] Blocked — закройте другие вкладки');
   });
 }
 
 // ═══════════════════════════════════════════════
 //  2. КНИГИ — CRUD
 // ═══════════════════════════════════════════════
-
-/**
- * Загружает все книги, отсортированные по dateAdded (новые сверху).
- * Гарантирует наличие всех обязательных полей.
- */
 export async function loadBooks() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -159,9 +137,6 @@ export async function loadBooks() {
   });
 }
 
-/**
- * Сохраняет книгу (создание или обновление).
- */
 export async function putBook(book) {
   const db = await openDB();
   const safe = ensureBookFields(book);
@@ -169,32 +144,21 @@ export async function putBook(book) {
     const tx = db.transaction('books', 'readwrite');
     tx.objectStore('books').put(safe);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => {
-      console.error('[DB] putBook error:', tx.error);
-      resolve(false);
-    };
+    tx.onerror = () => { console.error('[DB] putBook error:', tx.error); resolve(false); };
   });
 }
 
-/**
- * Массовое сохранение книг (одна транзакция — быстрее).
- */
 export async function putBooks(books) {
   const db = await openDB();
   return new Promise((resolve) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
-    for (const book of books) {
-      store.put(ensureBookFields(book));
-    }
+    for (const book of books) store.put(ensureBookFields(book));
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
   });
 }
 
-/**
- * Удаляет книгу по id.
- */
 export async function delBook(id) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -205,9 +169,6 @@ export async function delBook(id) {
   });
 }
 
-/**
- * Возвращает одну книгу по id.
- */
 export async function getBook(id) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -217,30 +178,17 @@ export async function getBook(id) {
   });
 }
 
-/**
- * Меняет статус книги с автоматическим расчётом дат.
- * Возвращает { confetti, askRating, book } для UI-реакций.
- */
 export async function changeBookStatus(bookId, newStatus) {
   const book = await getBook(bookId);
   if (!book) return null;
-
   const oldStatus = book.status;
   const now = new Date().toISOString();
   const today = now.slice(0, 10);
-
   book.status = newStatus;
   book.updatedAt = now;
-
   let confetti = false;
   let askRating = false;
-
-  // Переход в reading — фиксируем дату начала
-  if (newStatus === 'reading' && !book.dateStarted) {
-    book.dateStarted = today;
-  }
-
-  // Переход в finished — дата конца + readingDays + конфетти
+  if (newStatus === 'reading' && !book.dateStarted) book.dateStarted = today;
   if (newStatus === 'finished') {
     if (!book.dateFinished) book.dateFinished = today;
     if (book.dateStarted) {
@@ -251,19 +199,14 @@ export async function changeBookStatus(bookId, newStatus) {
     confetti = true;
     askRating = !(book.review?.rating > 0);
   }
-
-  // Переход в dropped — тоже фиксируем дату
   if (newStatus === 'dropped') {
     if (!book.dateFinished) book.dateFinished = today;
     askRating = true;
   }
-
-  // Выход из finished — сбрасываем дату конца
   if (oldStatus === 'finished' && newStatus !== 'finished') {
     book.dateFinished = '';
     book.readingDays = undefined;
   }
-
   await putBook(book);
   return { confetti, askRating, book };
 }
@@ -271,7 +214,6 @@ export async function changeBookStatus(bookId, newStatus) {
 // ═══════════════════════════════════════════════
 //  3. НАСТРОЙКИ
 // ═══════════════════════════════════════════════
-
 export async function loadSettings() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -294,10 +236,6 @@ export async function saveSettings(settings) {
 // ═══════════════════════════════════════════════
 //  4. ОБЛОЖКИ (Blob)
 // ═══════════════════════════════════════════════
-
-/**
- * Сохраняет Blob обложки для книги.
- */
 export async function saveCover(bookId, blob) {
   if (!isValidCoverBlob(blob)) return false;
   const db = await openDB();
@@ -309,9 +247,6 @@ export async function saveCover(bookId, blob) {
   });
 }
 
-/**
- * Скачивает обложку по URL и сохраняет как Blob.
- */
 export async function saveCoverFromUrl(bookId, url) {
   try {
     const response = await fetch(url);
@@ -323,9 +258,6 @@ export async function saveCoverFromUrl(bookId, url) {
   } catch { return false; }
 }
 
-/**
- * Возвращает Blob обложки для книги.
- */
 export async function getCover(bookId) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -336,9 +268,6 @@ export async function getCover(bookId) {
   });
 }
 
-/**
- * Удаляет обложку книги.
- */
 export async function deleteCover(bookId) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -351,13 +280,8 @@ export async function deleteCover(bookId) {
 }
 
 // ═══════════════════════════════════════════════
-//  5. ВАЛИДАЦИЯ ОБЛОЖЕК
+//  5. ВАЛИДАЦИЯ И РЕМОНТ ОБЛОЖЕК
 // ═══════════════════════════════════════════════
-
-/**
- * Проверяет, является ли Blob валидной обложкой.
- * Защита от битых/пустых файлов в IndexedDB.
- */
 export function isValidCoverBlob(blob) {
   if (!blob || typeof blob !== 'object') return false;
   if (blob.size < 200) return false;
@@ -367,29 +291,17 @@ export function isValidCoverBlob(blob) {
          type.startsWith('image/webp');
 }
 
-// ═══════════════════════════════════════════════
-//  6. РЕМОНТ БИТЫХ ОБЛОЖЕК
-// ═══════════════════════════════════════════════
-
-/**
- * Удаляет невалидные обложки из IndexedDB.
- * Вызывается при старте приложения.
- * @returns {number} — количество удалённых
- */
 export async function repairCovers() {
   const db = await openDB();
   if (!db.objectStoreNames.contains('covers')) return 0;
-
   const covers = await new Promise((resolve) => {
     const req = db.transaction('covers', 'readonly').objectStore('covers').getAll();
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
   });
-
   let removed = 0;
   for (const cover of covers) {
-    const blob = cover.blob;
-    if (!isValidCoverBlob(blob)) {
+    if (!isValidCoverBlob(cover.blob)) {
       try {
         await new Promise((resolve) => {
           const tx = db.transaction('covers', 'readwrite');
@@ -405,20 +317,13 @@ export async function repairCovers() {
 }
 
 // ═══════════════════════════════════════════════
-//  7. ПОДБОРКИ (collections)
+//  6. ПОДБОРКИ
 // ═══════════════════════════════════════════════
-
-/**
- * Загружает все подборки, отсортированные по order.
- */
 export async function loadCollections() {
   const db = await openDB();
   return new Promise((resolve) => {
     const req = db.transaction('collections', 'readonly').objectStore('collections').getAll();
-    req.onsuccess = () => {
-      const cols = (req.result || []).sort((a, b) => (a.order || 0) - (b.order || 0));
-      resolve(cols);
-    };
+    req.onsuccess = () => resolve((req.result || []).sort((a, b) => (a.order || 0) - (b.order || 0)));
     req.onerror = () => resolve([]);
   });
 }
@@ -478,23 +383,15 @@ export async function removeBookFromCollection(collectionId, bookId) {
   });
 }
 
-/**
- * Перемещает подборку вверх/вниз в списке.
- */
 export async function moveCollection(id, direction) {
   const collections = await loadCollections();
   const idx = collections.findIndex(c => c.id === id);
   if (idx < 0) return;
-
   const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
   if (swapIdx < 0 || swapIdx >= collections.length) return;
-
-  // Меняем order местами
   const tempOrder = collections[idx].order;
   collections[idx].order = collections[swapIdx].order;
   collections[swapIdx].order = tempOrder;
-
-  // Сохраняем обе в одной транзакции
   const db = await openDB();
   return new Promise((resolve) => {
     const tx = db.transaction('collections', 'readwrite');
@@ -506,9 +403,6 @@ export async function moveCollection(id, direction) {
   });
 }
 
-/**
- * Возвращает следующий order для новой подборки.
- */
 export async function getNextCollectionOrder() {
   const collections = await loadCollections();
   if (collections.length === 0) return 0;
@@ -516,9 +410,8 @@ export async function getNextCollectionOrder() {
 }
 
 // ═══════════════════════════════════════════════
-//  8. ЧЕЛЛЕНДЖИ (challenges)
+//  7. ЧЕЛЛЕНДЖИ
 // ═══════════════════════════════════════════════
-
 export async function loadChallenges() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -584,9 +477,8 @@ export async function removeBookFromChallenge(challengeId, bookId) {
 }
 
 // ═══════════════════════════════════════════════
-//  9. ТЕГИ (tags)
+//  8. ТЕГИ
 // ═══════════════════════════════════════════════
-
 export async function loadTags() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -617,13 +509,8 @@ export async function delTag(name) {
 }
 
 // ═══════════════════════════════════════════════
-//  10. КОНТЕНТ (внутри книг)
+//  9. КОНТЕНТ (внутри книг)
 // ═══════════════════════════════════════════════
-
-/**
- * Добавляет контент-элемент к книге.
- * Если bookId = '__no_book__', контент хранится в специальной записи.
- */
 export async function addContentToBook(bookId, contentItem) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -632,14 +519,10 @@ export async function addContentToBook(bookId, contentItem) {
     const req = store.get(bookId);
     req.onsuccess = () => {
       let book = req.result;
-      // Создаём __no_book__ если не существует
       if (!book && bookId === '__no_book__') {
         book = ensureBookFields({
-          id: '__no_book__',
-          title: 'Без книги',
-          author: '',
-          status: 'added',
-          contentItems: [],
+          id: '__no_book__', title: 'Без книги', author: '',
+          status: 'added', contentItems: [],
         });
       }
       if (!book) { resolve(false); return; }
@@ -653,9 +536,6 @@ export async function addContentToBook(bookId, contentItem) {
   });
 }
 
-/**
- * Обновляет контент-элемент внутри книги (partial update).
- */
 export async function updateContentInBook(bookId, contentId, updates) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -676,9 +556,6 @@ export async function updateContentInBook(bookId, contentId, updates) {
   });
 }
 
-/**
- * Удаляет контент-элемент из книги.
- */
 export async function removeContentFromBook(bookId, contentId) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -688,9 +565,7 @@ export async function removeContentFromBook(bookId, contentId) {
     req.onsuccess = () => {
       const book = req.result;
       if (!book) { resolve(false); return; }
-      if (book.contentItems) {
-        book.contentItems = book.contentItems.filter(c => c.id !== contentId);
-      }
+      if (book.contentItems) book.contentItems = book.contentItems.filter(c => c.id !== contentId);
       book.updatedAt = new Date().toISOString();
       store.put(book);
     };
@@ -700,12 +575,8 @@ export async function removeContentFromBook(bookId, contentId) {
 }
 
 // ═══════════════════════════════════════════════
-//  11. ОТЗЫВЫ (внутри книг)
+//  10. ОТЗЫВЫ (внутри книг)
 // ═══════════════════════════════════════════════
-
-/**
- * Сохраняет отзыв для книги.
- */
 export async function saveReviewForBook(bookId, review) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -724,9 +595,6 @@ export async function saveReviewForBook(bookId, review) {
   });
 }
 
-/**
- * Удаляет отзыв из книги.
- */
 export async function removeReviewFromBook(bookId) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -746,18 +614,8 @@ export async function removeReviewFromBook(bookId) {
 }
 
 // ═══════════════════════════════════════════════
-//  12. PENDING SYNC (🆕 v3.8.3)
+//  11. PENDING SYNC (Background Sync)
 // ═══════════════════════════════════════════════
-
-/**
- * Добавляет операцию в очередь отложенной синхронизации.
- * Используется при офлайн-добавлении книги по ISBN.
- *
- * Связь с sw.js: обработчик 'sync' читает этот store
- * и повторяет запросы к API при восстановлении сети.
- *
- * @param {{ id: string, bookId: string, isbn: string }} item
- */
 export async function putPendingSync(item) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -769,9 +627,6 @@ export async function putPendingSync(item) {
   });
 }
 
-/**
- * Возвращает все отложенные операции.
- */
 export async function getPendingSync() {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -782,9 +637,6 @@ export async function getPendingSync() {
   });
 }
 
-/**
- * Удаляет операцию из очереди после успешной синхронизации.
- */
 export async function deletePendingSync(id) {
   const db = await openDB();
   return new Promise((resolve) => {
@@ -797,12 +649,8 @@ export async function deletePendingSync(id) {
 }
 
 // ═══════════════════════════════════════════════
-//  13. ЭКСПОРТ / ИМПОРТ
+//  12. ЭКСПОРТ / ИМПОРТ
 // ═══════════════════════════════════════════════
-
-/**
- * Экспортирует все данные в JSON-объект.
- */
 export async function exportAll() {
   const db = await openDB();
   const getAll = (storeName) => new Promise((resolve) => {
@@ -811,41 +659,17 @@ export async function exportAll() {
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
   });
-
-  const [books, collections, challenges, tags, previews] = await Promise.all([
-    getAll('books'),
-    getAll('collections'),
-    getAll('challenges'),
-    getAll('tags'),
-    getAll('previews'),
+  const [books, collections, challenges, tags] = await Promise.all([
+    getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'),
   ]);
-
   const settings = await loadSettings();
-
-  return {
-    app: 'BookTrackerPro',
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    books,
-    collections,
-    challenges,
-    tags,
-    settings,
-    // Обложки экспортируем отдельно (Blob → base64)
-    // Для простоты в v3.8.3 обложки не включены в экспорт
-  };
+  return { app: 'BookTrackerPro', version: 1, exportedAt: new Date().toISOString(), books, collections, challenges, tags, settings };
 }
 
-/**
- * Импортирует данные из JSON-объекта (заменяет текущие).
- */
 export async function importAll(data) {
   if (!data || !data.books) throw new Error('Неверный формат бэкапа');
-
   const db = await openDB();
-
-  // Очищаем текущие данные (одна транзакция на store)
-  const stores = ['books', 'collections', 'challenges', 'tags', 'previews'];
+  const stores = ['books', 'collections', 'challenges', 'tags'];
   for (const storeName of stores) {
     if (!db.objectStoreNames.contains(storeName)) continue;
     await new Promise((resolve) => {
@@ -855,68 +679,46 @@ export async function importAll(data) {
       tx.onerror = () => resolve();
     });
   }
-
-  // Импортируем книги
   if (data.books?.length > 0) {
     await new Promise((resolve) => {
       const tx = db.transaction('books', 'readwrite');
       const store = tx.objectStore('books');
-      for (const book of data.books) {
-        store.put(ensureBookFields(book));
-      }
+      for (const book of data.books) store.put(ensureBookFields(book));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   }
-
-  // Импортируем подборки
   if (data.collections?.length > 0) {
     await new Promise((resolve) => {
       const tx = db.transaction('collections', 'readwrite');
-      const store = tx.objectStore('collections');
-      for (const col of data.collections) store.put(col);
+      for (const col of data.collections) tx.objectStore('collections').put(col);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   }
-
-  // Импортируем челленджи
   if (data.challenges?.length > 0) {
     await new Promise((resolve) => {
       const tx = db.transaction('challenges', 'readwrite');
-      const store = tx.objectStore('challenges');
-      for (const ch of data.challenges) store.put(ch);
+      for (const ch of data.challenges) tx.objectStore('challenges').put(ch);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   }
-
-  // Импортируем теги
   if (data.tags?.length > 0) {
     await new Promise((resolve) => {
       const tx = db.transaction('tags', 'readwrite');
-      const store = tx.objectStore('tags');
-      for (const tag of data.tags) store.put(tag);
+      for (const tag of data.tags) tx.objectStore('tags').put(tag);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   }
-
-  // Импортируем настройки
-  if (data.settings) {
-    await saveSettings(data.settings);
-  }
-
+  if (data.settings) await saveSettings(data.settings);
   return true;
 }
 
 // ═══════════════════════════════════════════════
-//  14. РАЗМЕР БАЗЫ
+//  13. РАЗМЕР БАЗЫ
 // ═══════════════════════════════════════════════
-
-/**
- * Возвращает приблизительный размер данных приложения.
- */
 export async function getDBSize() {
   try {
     if (!navigator.storage?.estimate) return 'недоступно';
@@ -924,19 +726,12 @@ export async function getDBSize() {
     if (usage < 1024) return usage + ' Б';
     if (usage < 1024 * 1024) return (usage / 1024).toFixed(1) + ' КБ';
     return (usage / (1024 * 1024)).toFixed(1) + ' МБ';
-  } catch {
-    return 'недоступно';
-  }
+  } catch { return 'недоступно'; }
 }
 
 // ═══════════════════════════════════════════════
-//  15. СЛУЖЕБНОЕ: обеспечение полей
+//  14. СЛУЖЕБНОЕ
 // ═══════════════════════════════════════════════
-
-/**
- * Гарантирует наличие всех обязательных полей книги.
- * Вызывается при каждой загрузке из IndexedDB.
- */
 function ensureBookFields(book) {
   if (!book.id) book.id = `book_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!book.title) book.title = '';
@@ -970,12 +765,13 @@ function ensureBookFields(book) {
   if (book.jointReading === undefined) {
     book.jointReading = { active: false, participants: [], chatLink: '', notes: '', startDate: '' };
   }
+  // 🆕 v3.8.4: метка полки { color, text }
+  if (book.shelfMark === undefined) {
+    book.shelfMark = { color: '', text: '' };
+  }
   return book;
 }
 
-/**
- * Гарантирует наличие всех обязательных полей контент-элемента.
- */
 function ensureContentItemFields(item) {
   if (!item.id) item.id = `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!item.type) item.type = 'unboxing';

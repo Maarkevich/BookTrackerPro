@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — series.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.4 | 2026-08-15
 // 📝 Серии книг
 //
 //    Серия — поля в книге: series, seriesNumber, seriesTotal
@@ -12,35 +12,28 @@
 //      — Автодополнение названия серии в форме
 //      — Прогресс серии (прочитано X из Y)
 //
-//    Новое в 3.8.3:
-//      — 🏗️ esc импортируется из utils.js
-//        (разрыв цикла app.js ↔ series.js)
-//      — ♿ aria-label на интерактивных элементах
-//      — ♿ role="listbox" на автодополнении серии
-//      — ♿ focus-visible стили для keyboard navigation
-//      — ♿ prefers-reduced-motion для анимаций
-//      — JSDoc для публичных функций
-//
-//    Сохранено из 3.7.0:
-//      — SVG-иконки из icons.js
-//      — Эмодзи серий подбираются по названию/жанру
-//      — Обложки: referrerpolicy no-referrer + onerror-фолбэк
+//    Новое в 3.8.4:
+//      — 🏗️ esc импортируется из utils.js (разрыв цикла)
+//      — 🎨 SVG-иконки в хроме/кнопках/статусах
+//        (эмодзи серии остаются как идентичность, aria-hidden)
+//      — ♿ aria-label + keyboard-навигация для карточек и слотов
 //
 //    Сохранено из 3.5.0:
 //      — UI-иконки из icons.js (SVG вместо эмодзи в хроме)
+//      — Эмодзи серий подбираются по названию/жанру
+//      — Обложки: referrerpolicy no-referrer + onerror-фолбэк
 // ─────────────────────────────────────────────
-import { esc } from './utils.js'; // 🆕 v3.8.3: было './app.js'
+import { esc } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
 import { BOOK_STATUSES } from './db.js';
 import { icon, statusIcon } from './icons.js';
 
 // ═══════════════════════════════════════════════
 //  1. ГРУППИРОВКА КНИГ ПО СЕРИЯМ
 // ═══════════════════════════════════════════════
-
 /**
  * Собирает все серии из книг.
  * @param {object[]} books
- * @returns {object[]} — [{ name, books, total, read, progress, emoji }]
+ * @returns {object[]} — [{ name, books, total, read, added, effectiveTotal, progress, emoji }]
  */
 export function getSeriesList(books) {
   const map = {};
@@ -87,7 +80,7 @@ export function getSeriesList(books) {
 
 /**
  * Пытается подобрать эмодзи для серии по названию/жанру.
- * (Контентная фича — сохранена в v3.5.0+)
+ * (Контентная фича — эмодзи остаётся как идентичность серии)
  * @param {string} name
  * @param {object[]} books
  * @returns {string}
@@ -109,22 +102,15 @@ function guessSeriesEmoji(name, books) {
 }
 
 // ═══════════════════════════════════════════════
-//  2. ЭКРАН «ВСЕ СЕРИИ»
+//  2. ЭКРАН «ВСЕ СЕРИИ» (🆕 SVG в хроме)
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит список всех серий.
- * @param {HTMLElement} container
- * @param {object[]} books
- * @param {object} callbacks — { onOpenSeries }
- */
 export function renderSeriesList(container, books, callbacks) {
   const series = getSeriesList(books);
 
   if (series.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">${icon('library', 56)}</div>
+        <div class="empty-icon">${icon('layers', 56)}</div>
         <div class="empty-title">Нет серий</div>
         <div class="empty-text">
           Добавьте книгу и укажите серию в форме —
@@ -144,7 +130,7 @@ export function renderSeriesList(container, books, callbacks) {
     <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
       <div class="stat-card">
         <div class="stat-value">${totalSeries}</div>
-        <div class="stat-label">${icon('library', 13)} Всего серий</div>
+        <div class="stat-label">${icon('layers', 13)} Всего серий</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">${inProgressSeries}</div>
@@ -180,7 +166,7 @@ export function renderSeriesList(container, books, callbacks) {
   container.querySelectorAll('.series-card').forEach(card => {
     const openSeries = () => callbacks.onOpenSeries(card.dataset.series);
     card.addEventListener('click', openSeries);
-    // 🆕 v3.8.3: keyboard support
+    // 🆕 v3.8.4: keyboard support
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -191,16 +177,8 @@ export function renderSeriesList(container, books, callbacks) {
 }
 
 // ═══════════════════════════════════════════════
-//  3. ЭКРАН ОДНОЙ СЕРИИ
+//  3. ЭКРАН ОДНОЙ СЕРИИ (🆕 метка полки не нужна, SVG в хроме)
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит экран серии: книги по порядку + пустые слоты.
- * @param {HTMLElement} container
- * @param {string} seriesName
- * @param {object[]} books — все книги
- * @param {object} callbacks — { onOpenBook, onAddBook, onBack }
- */
 export function renderSeriesDetail(container, seriesName, books, callbacks) {
   const seriesBooks = books
     .filter(b => (b.series || '').trim() === seriesName)
@@ -269,7 +247,7 @@ export function renderSeriesDetail(container, seriesName, books, callbacks) {
   container.querySelectorAll('[data-series-book]').forEach(el => {
     const openBook = () => callbacks.onOpenBook(el.dataset.seriesBook);
     el.addEventListener('click', openBook);
-    // 🆕 v3.8.3: keyboard support
+    // 🆕 v3.8.4: keyboard support
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -316,7 +294,7 @@ function buildSeriesSlots(seriesBooks, total) {
 
 /**
  * Рендер одного слота серии (книга или пустое место).
- * 🆕 v3.8.3: tabindex + aria-label для keyboard navigation.
+ * 🆕 v3.8.4: tabindex + aria-label для keyboard navigation.
  * @param {object} slot
  * @returns {string}
  */
@@ -339,7 +317,7 @@ function renderSeriesSlot(slot) {
   const isCurrent = b.status === 'reading';
 
   const coverHtml = b.coverUrl
-    ? `<img class="series-slot-cover" src="${b.coverUrl}" alt="Обложка: ${esc(b.title)}" loading="lazy"
+    ? `<img class="series-slot-cover" src="${b.coverUrl}" alt="" loading="lazy"
             referrerpolicy="no-referrer" onerror="this.style.display='none'"/>`
     : `<div class="series-slot-cover placeholder">${icon('bookClosed', 22)}</div>`;
 
@@ -366,7 +344,6 @@ function renderSeriesSlot(slot) {
 // ═══════════════════════════════════════════════
 //  4. АВТОДОПОЛНЕНИЕ НАЗВАНИЯ СЕРИИ
 // ═══════════════════════════════════════════════
-
 /**
  * Возвращает список существующих серий для автодополнения.
  * @param {object[]} books
@@ -391,7 +368,7 @@ export function suggestSeries(books, query) {
  * Подключает автодополнение к input.
  * Создаёт выпадающий список под полем.
  *
- * 🆕 v3.8.3: role="listbox" на dropdown, aria-label на items.
+ * 🆕 v3.8.4: role="listbox" на dropdown, aria-label на items.
  *
  * @param {HTMLInputElement} input
  * @param {object[]} books
@@ -401,8 +378,8 @@ export function attachSeriesAutocomplete(input, books, onSelect) {
   // Контейнер подсказок
   let dropdown = document.createElement('div');
   dropdown.className = 'autocomplete-dropdown hidden';
-  dropdown.setAttribute('role', 'listbox');                      // 🆕 v3.8.3
-  dropdown.setAttribute('aria-label', 'Подсказки названий серий'); // 🆕 v3.8.3
+  dropdown.setAttribute('role', 'listbox');
+  dropdown.setAttribute('aria-label', 'Подсказки названий серий');
   input.parentNode.style.position = 'relative';
   input.parentNode.appendChild(dropdown);
 
@@ -415,13 +392,13 @@ export function attachSeriesAutocomplete(input, books, onSelect) {
     dropdown.innerHTML = suggestions.map(s => `
       <div class="autocomplete-item" data-value="${esc(s)}"
            role="option" aria-label="Серия: ${esc(s)}">
-        ${icon('library', 13)} ${esc(s)}
+        ${icon('layers', 13)} ${esc(s)}
       </div>
     `).join('');
     dropdown.classList.remove('hidden');
     dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
       item.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // чтобы не потерять фокус
+        e.preventDefault(); // не терять фокус
         input.value = item.dataset.value;
         dropdown.classList.add('hidden');
         if (onSelect) onSelect(item.dataset.value);
@@ -434,8 +411,7 @@ export function attachSeriesAutocomplete(input, books, onSelect) {
   input.addEventListener('blur', () => {
     setTimeout(() => dropdown.classList.add('hidden'), 150);
   });
-
-  // 🆕 v3.8.3: Escape закрывает dropdown
+  // 🆕 v3.8.4: Escape закрывает dropdown
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') dropdown.classList.add('hidden');
   });
@@ -598,22 +574,19 @@ const SERIES_STYLES = `
 }
 .autocomplete-item {
   display:flex; align-items:center; gap:8px;
-  padding:10px 14px;
-  font-size:.88rem;
-  cursor:pointer;
-  transition:background .15s;
+  padding:10px 14px; font-size:.88rem;
+  color:var(--text-secondary); cursor:pointer;
+  transition:background .13s;
 }
 .autocomplete-item:hover { background:var(--accent-dim); color:var(--accent); }
-
-/* 🆕 v3.8.3: keyboard focus */
+/* 🆕 v3.8.4: keyboard focus */
 .series-card:focus-visible,
 .series-slot.book:focus-visible,
 .autocomplete-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-
-/* 🆕 v3.8.3: prefers-reduced-motion */
+/* 🆕 v3.8.4: prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   .series-card,
   .series-progress-fill,
@@ -623,7 +596,6 @@ const SERIES_STYLES = `
   }
 }
 `;
-
 if (!document.getElementById('series-styles')) {
   const style = document.createElement('style');
   style.id = 'series-styles';

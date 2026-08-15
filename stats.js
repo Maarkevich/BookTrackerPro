@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — stats.js
-// 🔖 v3.8.3 | 2026-08-14
+// 🔖 v3.8.4 | 2026-08-15
 // 📝 Статистика + Календарь
 //
 //    Подвкладки:
@@ -8,27 +8,20 @@
 //      💰 Финансы  — траты, средняя цена, по издательствам
 //      🏆 Блог     — PR, конверсия, челленджи, серии, цитаты
 //
-//    Живая статистика: count-up чисел, анимация баров
-//
-//    Новое в 3.8.3:
-//      — 🏗️ esc/formatPrice/convertToDefault из utils.js
-//        (разрыв цикла app.js ↔ stats.js)
-//      — ♿ role="group" + aria-pressed на фильтрах подвкладок
-//      — ♿ prefers-reduced-motion: отключение анимаций
-//      — ♿ aria-label на интерактивных элементах календаря
-//      — JSDoc для публичных функций
+//    Новое в 3.8.4:
+//      — 🏗️ esc / formatPrice / convertToDefault импортируются
+//        из utils.js (разрыв цикла app.js ↔ stats.js)
+//      — 📐 Компактные карточки: убраны инлайн-переопределения
+//        padding/шрифта — размером правит CSS (.stat-card/.stat-value)
 //
 //    Сохранено из 3.7.0:
-//      — ФИКС РЕГРЕССИИ: renderStatsTab(container, books, settings, challenges)
-//        принимает челленджи 4-м параметром (убран window._challengesCache)
-//      — Навигация назад по подвкладкам: экспортируется STATS_SUB_ORDER
-//        и диспатчится событие 'btp-stats-sub' при переключении,
-//        чтобы app.js мог pushState для жеста «назад»
-//      — SVG-иконки из icons.js в хроме
-//      — referrerpolicy no-referrer на обложках
+//      — renderStatsTab(container, books, settings, challenges)
+//        принимает челленджи 4-м параметром (без глобала)
+//      — STATS_SUB_ORDER + событие 'btp-stats-sub' для жеста «назад»
+//      — SVG-иконки, referrerpolicy no-referrer
 //      — Кликабельный контент в календаре → onOpenContent
 // ─────────────────────────────────────────────
-import { esc, formatPrice, convertToDefault, formatDateRu } from './utils.js'; // 🆕 v3.8.3: было './app.js'
+import { esc, formatPrice, convertToDefault } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
 import { BOOK_STATUSES, CURRENCIES } from './db.js';
 import { CONTENT_TYPES, CONTENT_STATUSES, PLATFORMS, platformIcon } from './content.js';
 import { calcChallengeProgress } from './challenges.js';
@@ -40,13 +33,6 @@ import { icon, statusIcon, contentTypeIcon, CONTENT_STATUS_ICONS } from './icons
 // ═══════════════════════════════════════════════
 export const STATS_SUB_ORDER = ['books', 'content', 'money', 'blog'];
 
-/**
- * Возвращает предыдущую подвкладку статистики или null,
- * если текущая — первая (books). Используется app.js
- * для обработки жеста «назад».
- * @param {string} currentSub
- * @returns {string|null}
- */
 export function getPrevStatsSub(currentSub) {
   const idx = STATS_SUB_ORDER.indexOf(currentSub);
   if (idx <= 0) return null;
@@ -56,28 +42,16 @@ export function getPrevStatsSub(currentSub) {
 // ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «СТАТИСТИКА»
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит вкладку статистики.
- * @param {HTMLElement} container
- * @param {object[]} books
- * @param {object} settings
- * @param {object[]} challenges — передаются из app.js явно
- */
 export function renderStatsTab(container, books, settings, challenges = []) {
   if (!container._statsSub) container._statsSub = 'books';
   const sub = container._statsSub;
 
   container.innerHTML = `
-    <div class="filter-bar no-scrollbar" role="group" aria-label="Подвкладки статистики">
-      <button class="filter-chip ${sub === 'books' ? 'active' : ''}" data-ssub="books"
-              aria-pressed="${sub === 'books'}">${icon('bookOpen', 13)} Книги</button>
-      <button class="filter-chip ${sub === 'content' ? 'active' : ''}" data-ssub="content"
-              aria-pressed="${sub === 'content'}">${icon('film', 13)} Контент</button>
-      <button class="filter-chip ${sub === 'money' ? 'active' : ''}" data-ssub="money"
-              aria-pressed="${sub === 'money'}">${icon('coin', 13)} Финансы</button>
-      <button class="filter-chip ${sub === 'blog' ? 'active' : ''}" data-ssub="blog"
-              aria-pressed="${sub === 'blog'}">${icon('trophy', 13)} Блог</button>
+    <div class="filter-bar no-scrollbar">
+      <button class="filter-chip ${sub === 'books' ? 'active' : ''}" data-ssub="books">${icon('bookOpen', 13)} Книги</button>
+      <button class="filter-chip ${sub === 'content' ? 'active' : ''}" data-ssub="content">${icon('film', 13)} Контент</button>
+      <button class="filter-chip ${sub === 'money' ? 'active' : ''}" data-ssub="money">${icon('coin', 13)} Финансы</button>
+      <button class="filter-chip ${sub === 'blog' ? 'active' : ''}" data-ssub="blog">${icon('trophy', 13)} Блог</button>
     </div>
     <div id="stats-body"></div>
   `;
@@ -88,7 +62,6 @@ export function renderStatsTab(container, books, settings, challenges = []) {
     btn.addEventListener('click', () => {
       const newSub = btn.dataset.ssub;
       container._statsSub = newSub;
-      // Уведомляем app.js для pushState (жест «назад»)
       document.dispatchEvent(new CustomEvent('btp-stats-sub', { detail: { sub: newSub } }));
       renderStatsTab(container, books, settings, challenges);
     });
@@ -99,7 +72,6 @@ export function renderStatsTab(container, books, settings, challenges = []) {
   else if (sub === 'money') renderMoneyStats(body, books, settings);
   else renderBlogStats(body, books, settings, challenges);
 
-  // Запуск анимаций после вставки в DOM
   requestAnimationFrame(() => {
     animateBars(body);
     animateNumbers(body);
@@ -109,14 +81,9 @@ export function renderStatsTab(container, books, settings, challenges = []) {
 // ═══════════════════════════════════════════════
 //  2. АНИМАЦИИ (count-up + бары)
 // ═══════════════════════════════════════════════
-
-/**
- * Анимирует числа (count-up) с easing.
- * 🆕 v3.8.3: уважает prefers-reduced-motion.
- */
 function animateNumbers(container) {
-  // 🆕 v3.8.3: если пользователь предпочитает без анимаций
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // 🆕 v3.8.4: уважаем prefers-reduced-motion
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   container.querySelectorAll('[data-countup]').forEach(el => {
     const target = parseFloat(el.dataset.countup);
@@ -124,15 +91,13 @@ function animateNumbers(container) {
     const suffix = el.dataset.suffix || '';
     if (isNaN(target)) return;
 
-    // Без анимации — сразу финальное значение
-    if (prefersReducedMotion) {
+    if (reduced) {
       el.textContent = (decimals > 0 ? target.toFixed(decimals) : Math.round(target).toLocaleString('ru')) + suffix;
       return;
     }
 
     const duration = 900;
     const start = performance.now();
-
     function tick(now) {
       const p = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - p, 3);
@@ -144,17 +109,10 @@ function animateNumbers(container) {
   });
 }
 
-/**
- * Анимирует ширину баров.
- * 🆕 v3.8.3: уважает prefers-reduced-motion.
- */
 function animateBars(container) {
-  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   container.querySelectorAll('.stat-bar-fill[data-w]').forEach(el => {
-    if (prefersReducedMotion) {
-      el.style.transition = 'none';
-    }
+    if (reduced) el.style.transition = 'none';
     el.style.width = el.dataset.w + '%';
   });
 }
@@ -162,12 +120,10 @@ function animateBars(container) {
 // ═══════════════════════════════════════════════
 //  3. СТАТИСТИКА: КНИГИ
 // ═══════════════════════════════════════════════
-
 function renderBookStats(container, books) {
   const total = books.length;
   const byStatus = {};
   for (const b of books) byStatus[b.status] = (byStatus[b.status] || 0) + 1;
-
   const finished = byStatus.finished || 0;
   const rated = books.filter(b => (b.review?.rating || b.rating || 0) > 0);
   const avgRating = rated.length > 0
@@ -175,7 +131,6 @@ function renderBookStats(container, books) {
     : 0;
   const readPages = books.filter(b => b.status === 'finished').reduce((s, b) => s + (b.pageCount || 0), 0);
 
-  // Время чтения
   const withDays = books.filter(b => b.readingDays > 0);
   const avgDays = withDays.length > 0
     ? Math.round(withDays.reduce((s, b) => s + b.readingDays, 0) / withDays.length) : 0;
@@ -199,13 +154,13 @@ function renderBookStats(container, books) {
       ${statCard(readPages, `${icon('bookClosed', 14)} Страниц прочитано`, true)}
     </div>
 
-    <!-- По статусам -->
+    <!-- По статусам (🆕 компактные карточки, без инлайн-переопределений) -->
     <div class="stat-section">
       <h3>${icon('chart', 14)} По статусам</h3>
-      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stats-grid stats-grid-3">
         ${Object.entries(BOOK_STATUSES).map(([key, st]) => `
-          <div class="stat-card" style="padding:12px 8px">
-            <div class="stat-value" style="font-size:1.3rem" data-countup="${byStatus[key] || 0}">0</div>
+          <div class="stat-card">
+            <div class="stat-value" data-countup="${byStatus[key] || 0}">0</div>
             <div class="stat-label">${statusIcon(key, 13)} ${st.label}</div>
           </div>
         `).join('')}
@@ -216,7 +171,7 @@ function renderBookStats(container, books) {
     ${withDays.length > 0 ? `
     <div class="stat-section">
       <h3>${icon('clock', 14)} Время чтения</h3>
-      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stats-grid stats-grid-3">
         <div class="stat-card"><div class="stat-value" data-countup="${avgDays}">0</div><div class="stat-label">дн. в среднем</div></div>
         <div class="stat-card"><div class="stat-value" data-countup="${fastest.readingDays}">0</div><div class="stat-label">${icon('fire', 12)} быстрее всего</div></div>
         <div class="stat-card"><div class="stat-value" data-countup="${slowest.readingDays}">0</div><div class="stat-label">${icon('clock', 12)} дольше всего</div></div>
@@ -243,10 +198,8 @@ function renderBookStats(container, books) {
 // ═══════════════════════════════════════════════
 //  4. СТАТИСТИКА: КОНТЕНТ
 // ═══════════════════════════════════════════════
-
 function renderContentStats(container, books) {
   const allContent = books.flatMap(b => (b.contentItems || []).map(c => ({ ...c, bookTitle: b.title })));
-
   const total = allContent.length;
   const published = allContent.filter(c => c.status === 'published').length;
   const inProgress = allContent.filter(c => ['planned','filming','editing'].includes(c.status)).length;
@@ -259,7 +212,6 @@ function renderContentStats(container, books) {
   const bookContent = {};
   for (const c of allContent) bookContent[c.bookTitle] = (bookContent[c.bookTitle] || 0) + 1;
   const topBooks = topEntries(bookContent, 5);
-
   const monthly = calcMonthlyContent(allContent);
 
   const maxType = byType[0]?.[1] || 1;
@@ -306,10 +258,10 @@ function renderContentStats(container, books) {
 
     <div class="stat-section">
       <h3>${icon('chart', 14)} По статусам</h3>
-      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stats-grid stats-grid-3">
         ${Object.entries(CONTENT_STATUSES).map(([key, s]) => `
-          <div class="stat-card" style="padding:12px 8px">
-            <div class="stat-value" style="font-size:1.3rem" data-countup="${byStatus[key] || 0}">0</div>
+          <div class="stat-card">
+            <div class="stat-value" data-countup="${byStatus[key] || 0}">0</div>
             <div class="stat-label">${icon(CONTENT_STATUS_ICONS[key] || 'film', 13)} ${s.label}</div>
           </div>
         `).join('')}
@@ -335,7 +287,6 @@ function renderContentStats(container, books) {
 // ═══════════════════════════════════════════════
 //  5. СТАТИСТИКА: ФИНАНСЫ
 // ═══════════════════════════════════════════════
-
 function renderMoneyStats(container, books, settings) {
   if (!settings.showPriceInStats) {
     container.innerHTML = `
@@ -432,7 +383,7 @@ function renderMoneyStats(container, books, settings) {
       <h3>${icon('trophy', 14)} Самая дорогая книга</h3>
       <div class="content-card" style="cursor:default">
         ${mostExpensive.book.coverUrl
-          ? `<img src="${mostExpensive.book.coverUrl}" alt="Обложка: ${esc(mostExpensive.book.title)}" referrerpolicy="no-referrer" style="width:44px;height:66px;border-radius:6px;object-fit:cover"/>`
+          ? `<img src="${mostExpensive.book.coverUrl}" referrerpolicy="no-referrer" style="width:44px;height:66px;border-radius:6px;object-fit:cover"/>`
           : `<div style="width:44px;height:66px;border-radius:6px;background:var(--bg-input);display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
         <div class="content-info">
           <div class="content-title">${esc(mostExpensive.book.title)}</div>
@@ -475,10 +426,10 @@ function renderMoneyStats(container, books, settings) {
     ${Object.keys(byCurrency).length > 1 ? `
     <div class="stat-section">
       <h3>${icon('coin', 14)} По валютам (оригинал)</h3>
-      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stats-grid stats-grid-3">
         ${Object.entries(byCurrency).map(([cur, d]) => `
-          <div class="stat-card" style="padding:12px 8px">
-            <div class="stat-value" style="font-size:1.1rem">${d.sum.toLocaleString('ru')} ${(CURRENCIES[cur] || {}).symbol || cur}</div>
+          <div class="stat-card">
+            <div class="stat-value">${d.sum.toLocaleString('ru')} ${(CURRENCIES[cur] || {}).symbol || cur}</div>
             <div class="stat-label">${d.count} книг</div>
           </div>
         `).join('')}
@@ -491,18 +442,9 @@ function renderMoneyStats(container, books, settings) {
 // ═══════════════════════════════════════════════
 //  6. СТАТИСТИКА: БЛОГ
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит подвкладку «Блог».
- * @param {HTMLElement} container
- * @param {object[]} books
- * @param {object} settings
- * @param {object[]} challenges — передаются явно, без глобала
- */
 function renderBlogStats(container, books, settings, challenges = []) {
   const prBooks = books.filter(b => b.isPR);
   const totalPR = prBooks.length;
-
   const prByPub = topEntries(countBy(prBooks.filter(b => b.receivedFrom), b => b.receivedFrom), 8);
   const maxPR = prByPub[0]?.[1] || 1;
 
@@ -515,11 +457,9 @@ function renderBlogStats(container, books, settings, challenges = []) {
   const totalQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).length, 0);
   const usedQuotes = books.reduce((s, b) => s + (b.review?.quotes || []).filter(q => q.used).length, 0);
 
-  // Челленджи из параметра, не из window
   const activeCh = challenges.filter(c => c.status === 'active');
   const doneCh = challenges.filter(c => c.status === 'completed');
 
-  // Серии
   const series = getSeriesList(books);
   const completedSeries = series.filter(s => s.read >= s.effectiveTotal && s.effectiveTotal > 0);
 
@@ -578,7 +518,7 @@ function renderBlogStats(container, books, settings, challenges = []) {
     ${series.length > 0 ? `
     <div class="stat-section">
       <h3>${icon('layers', 14)} Серии</h3>
-      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stats-grid stats-grid-3">
         <div class="stat-card"><div class="stat-value" data-countup="${series.length}">0</div><div class="stat-label">всего серий</div></div>
         <div class="stat-card"><div class="stat-value" data-countup="${series.filter(s => s.read > 0 && s.read < s.effectiveTotal).length}">0</div><div class="stat-label">в процессе</div></div>
         <div class="stat-card"><div class="stat-value" data-countup="${completedSeries.length}">0</div><div class="stat-label">${icon('trophy', 12)} завершено</div></div>
@@ -589,7 +529,7 @@ function renderBlogStats(container, books, settings, challenges = []) {
     <!-- Цитаты -->
     <div class="stat-section">
       <h3>${icon('quote', 14)} Цитаты</h3>
-      <div class="stats-grid" style="grid-template-columns:1fr 1fr">
+      <div class="stats-grid">
         <div class="stat-card"><div class="stat-value" data-countup="${totalQuotes}">0</div><div class="stat-label">всего цитат</div></div>
         <div class="stat-card"><div class="stat-value" data-countup="${usedQuotes}">0</div><div class="stat-label">${icon('check', 12)} использовано</div></div>
       </div>
@@ -613,26 +553,17 @@ function convBar(label, value, total, color) {
 // ═══════════════════════════════════════════════
 //  7. ВКЛАДКА «КАЛЕНДАРЬ»
 // ═══════════════════════════════════════════════
-
-/**
- * Рендерит вкладку календаря контент-плана.
- * @param {HTMLElement} container
- * @param {object[]} books
- * @param {object} callbacks — { onDayClick, onAdd, onOpenContent }
- */
 export function renderCalendarTab(container, books, callbacks) {
   if (!container._calYear) {
     const now = new Date();
     container._calYear = now.getFullYear();
     container._calMonth = now.getMonth();
   }
-
   const year = container._calYear;
   const month = container._calMonth;
   const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
   const dayNames = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
-  // Собираем контент по датам (с bookId для открытия карточки)
   const contentByDate = {};
   for (const book of books) {
     for (const c of (book.contentItems || [])) {
@@ -647,7 +578,6 @@ export function renderCalendarTab(container, books, callbacks) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   let startDow = firstDay.getDay() - 1;
   if (startDow < 0) startDow = 6;
-
   const todayStr = new Date().toISOString().slice(0, 10);
 
   const cells = [];
@@ -661,7 +591,7 @@ export function renderCalendarTab(container, books, callbacks) {
   for (let i = 1; i <= rem; i++) cells.push({ day: i, other: true });
 
   container.innerHTML = `
-    <div class="calendar" role="grid" aria-label="Календарь контент-плана: ${monthNames[month]} ${year}">
+    <div class="calendar">
       <div class="calendar-header">
         <h3>${monthNames[month]} ${year}</h3>
         <div class="calendar-nav">
@@ -671,16 +601,13 @@ export function renderCalendarTab(container, books, callbacks) {
         </div>
       </div>
       <div class="calendar-grid">
-        ${dayNames.map(d => `<div class="calendar-day-name" role="columnheader">${d}</div>`).join('')}
+        ${dayNames.map(d => `<div class="calendar-day-name">${d}</div>`).join('')}
         ${cells.map(cell => {
-          if (cell.other) return `<div class="calendar-day other-month" role="gridcell" aria-disabled="true"><span class="day-num">${cell.day}</span></div>`;
+          if (cell.other) return `<div class="calendar-day other-month"><span class="day-num">${cell.day}</span></div>`;
           const dots = cell.content.slice(0, 4).map(c => `<span class="calendar-dot ${c.type || 'review'}"></span>`).join('');
-          const hasContent = cell.content.length > 0;
           return `
             <div class="calendar-day ${cell.isToday ? 'today' : ''}" data-date="${cell.dateStr}"
-                 role="gridcell"
-                 ${hasContent ? 'tabindex="0" style="cursor:pointer"' : ''}
-                 aria-label="${cell.day} ${monthNames[month]}${hasContent ? ', ' + cell.content.length + ' контент' : ''}${cell.isToday ? ', сегодня' : ''}">
+                 ${cell.content.length > 0 ? 'style="cursor:pointer" tabindex="0" role="button"' : ''}>
               <span class="day-num">${cell.day}</span>
               ${dots ? `<div class="calendar-dots">${dots}</div>` : ''}
             </div>
@@ -693,7 +620,7 @@ export function renderCalendarTab(container, books, callbacks) {
         `).join('')}
       </div>
     </div>
-    <div id="cal-day-content" class="mt-16" aria-live="polite"></div>
+    <div id="cal-day-content" class="mt-16"></div>
     <button id="cal-add" class="btn-primary mt-16">${icon('plus', 16)} Запланировать контент</button>
   `;
 
@@ -702,13 +629,11 @@ export function renderCalendarTab(container, books, callbacks) {
     if (container._calMonth < 0) { container._calMonth = 11; container._calYear--; }
     renderCalendarTab(container, books, callbacks);
   });
-
   container.querySelector('#cal-next').addEventListener('click', () => {
     container._calMonth++;
     if (container._calMonth > 11) { container._calMonth = 0; container._calYear++; }
     renderCalendarTab(container, books, callbacks);
   });
-
   container.querySelector('#cal-today').addEventListener('click', () => {
     const now = new Date();
     container._calYear = now.getFullYear();
@@ -716,19 +641,15 @@ export function renderCalendarTab(container, books, callbacks) {
     renderCalendarTab(container, books, callbacks);
   });
 
-  // 🆕 v3.8.3: keyboard support для дней с контентом
   container.querySelectorAll('.calendar-day[data-date]').forEach(day => {
-    const handleDayClick = () => {
+    const openDay = () => {
       const dateStr = day.dataset.date;
       const dayContent = contentByDate[dateStr] || [];
       const dayEl = container.querySelector('#cal-day-content');
-
       if (dayContent.length === 0) {
         dayEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:20px">${icon('calendar', 14)} ${formatDateRu(dateStr)}: нет контента</div>`;
         return;
       }
-
-      // Кликабельные карточки → карточка контента
       dayEl.innerHTML = `
         <div class="text-small text-muted mb-8" style="font-weight:700">${icon('calendar', 13)} ${formatDateRu(dateStr)}</div>
         ${dayContent.map(c => {
@@ -738,9 +659,7 @@ export function renderCalendarTab(container, books, callbacks) {
           return `
             <div class="content-card cal-content-item"
                  data-cal-book="${c.bookId}" data-cal-content="${c.id}"
-                 style="cursor:pointer" title="Открыть карточку контента"
-                 tabindex="0" role="button"
-                 aria-label="Открыть контент: ${esc(c.title || t.label)}">
+                 style="cursor:pointer" title="Открыть карточку контента">
               <div class="content-icon ${t.color || ''}">${contentTypeIcon(c.type, 20)}</div>
               <div class="content-info">
                 <div class="content-title">${esc(c.title || t.label)}</div>
@@ -750,13 +669,11 @@ export function renderCalendarTab(container, books, callbacks) {
                   <span class="platform-badge">${platformIcon(c.platform, 12)} ${p.label}</span>
                 </div>
               </div>
-              <span class="cal-content-arrow" aria-hidden="true">›</span>
+              <span class="cal-content-arrow">›</span>
             </div>
           `;
         }).join('')}
       `;
-
-      // Привязка кликов → карточка контента
       dayEl.querySelectorAll('.cal-content-item').forEach(el => {
         const openContent = () => {
           const book = books.find(b => b.id === el.dataset.calBook);
@@ -764,23 +681,14 @@ export function renderCalendarTab(container, books, callbacks) {
           if (item && callbacks.onOpenContent) callbacks.onOpenContent(item, el.dataset.calBook);
         };
         el.addEventListener('click', openContent);
-        // 🆕 v3.8.3: keyboard support
         el.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openContent();
-          }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openContent(); }
         });
       });
     };
-
-    day.addEventListener('click', handleDayClick);
-    // 🆕 v3.8.3: keyboard support для дней
+    day.addEventListener('click', openDay);
     day.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        handleDayClick();
-      }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDay(); }
     });
   });
 
@@ -790,7 +698,6 @@ export function renderCalendarTab(container, books, callbacks) {
 // ═══════════════════════════════════════════════
 //  8. УТИЛИТЫ
 // ═══════════════════════════════════════════════
-
 function countBy(arr, keyFn) {
   const r = {};
   for (const item of arr) {
@@ -799,11 +706,9 @@ function countBy(arr, keyFn) {
   }
   return r;
 }
-
 function topEntries(obj, n) {
   return Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, n);
 }
-
 function statCard(value, label, countup, decimals = 0) {
   return `
     <div class="stat-card">
@@ -812,7 +717,6 @@ function statCard(value, label, countup, decimals = 0) {
     </div>
   `;
 }
-
 function barSection(title, entries, max, palette, offset = 0) {
   if (entries.length === 0) return '';
   return `
@@ -822,7 +726,6 @@ function barSection(title, entries, max, palette, offset = 0) {
     </div>
   `;
 }
-
 function barRow(label, count, max, color, suffix = '') {
   return `
     <div class="stat-bar-row">
@@ -834,7 +737,6 @@ function barRow(label, count, max, color, suffix = '') {
     </div>
   `;
 }
-
 function calcMonthlyBooks(books) {
   const now = new Date();
   const months = [];
@@ -848,7 +750,6 @@ function calcMonthlyBooks(books) {
   while (months.length > 0 && months[0].count === 0) months.shift();
   return months;
 }
-
 function calcMonthlyContent(allContent) {
   const now = new Date();
   const months = [];
@@ -862,14 +763,12 @@ function calcMonthlyContent(allContent) {
   while (months.length > 0 && months[0].count === 0) months.shift();
   return months;
 }
-
 function formatMonth(key) {
   try {
     const d = new Date(key + '-01T00:00:00');
     return d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' });
   } catch { return key; }
 }
-
 function getTypeColor(type) {
   const colors = {
     unboxing:'#e0955c', read_with_me:'#94b878', review:'#b092d6', lipsync:'#d98aa8',
@@ -877,15 +776,17 @@ function getTypeColor(type) {
   };
   return colors[type] || '#e8a33d';
 }
-
-// 🆕 v3.8.3: formatDateRu импортируется из utils.js
-// Локальная версия удалена для устранения дублирования
+function formatDateRu(dateStr) {
+  try {
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  } catch { return dateStr; }
+}
 
 // ═══════════════════════════════════════════════
 //  9. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
 const STATS_STYLES = `
-/* Кликабельный контент в календаре */
+/* v3.7.0: кликабельный контент в календаре */
 .cal-content-item { position: relative; }
 .cal-content-arrow {
   font-size: 1.3rem; font-weight: 700; color: var(--text-muted);
@@ -899,28 +800,12 @@ const STATS_STYLES = `
   border-color: var(--accent);
   background: var(--bg-card-hover);
 }
-/* 🆕 v3.8.3: keyboard focus для дней календаря */
-.calendar-day[data-date]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: 6px;
-}
-.cal-content-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* 🆕 v3.8.3: prefers-reduced-motion */
-@media (prefers-reduced-motion: reduce) {
-  .stat-bar-fill {
-    transition: none !important;
-  }
-  .cal-content-arrow {
-    transition: none !important;
-  }
+/* 🆕 v3.8.4: 3-колоночная компактная сетка (статусы/серии/валюты) */
+.stats-grid-3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 400px) {
+  .stats-grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
 `;
-
 if (!document.getElementById('stats-styles')) {
   const style = document.createElement('style');
   style.id = 'stats-styles';
