@@ -265,6 +265,34 @@ async function init() {
   handleManifestShortcuts();
 }
 
+// ═══════════════════════════════════════════════
+//  🆕 v3.8.5: АККОРДЕОН DRAWER (Подборки/Серии/Фильтры)
+// ═══════════════════════════════════════════════
+function bindDrawerAccordion() {
+  const pairs = [
+    ['drawerTitleCollections', 'drawerCollections'],
+    ['drawerTitleSeries', 'drawerSeries'],
+    ['drawerTitleFilters', 'drawerFilters'],
+  ];
+  pairs.forEach(([t, l]) => {
+    let title = DOM[t];
+    const list = DOM[l];
+    if (!title || !list) return;
+
+    // Клонируем узел, чтобы сбросить старые обработчики
+    // (навигация из 3.8.4), если они остались в bindEvents
+    const clone = title.cloneNode(true);
+    title.replaceWith(clone);
+    DOM[t] = clone;
+
+    clone.addEventListener('click', () => {
+      const nowOpen = list.classList.toggle('hidden') === false;
+      clone.classList.toggle('open', nowOpen);
+      clone.setAttribute('aria-expanded', String(nowOpen));
+    });
+  });
+}
+
 // 🆕 v3.8.4: восстановление Object URL обложек из IndexedDB
 const _coverUrlCache = new Map();
 async function restoreCoverUrls(books) {
