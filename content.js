@@ -1,18 +1,20 @@
 // 📦 BookTrackerPro — content.js
-// 🔖 v3.8.4 | 2026-08-15
+// 🔖 v3.8.5 | 2026-08-17
 // 📝 Контент-план для бук-блогера
 //
-//    Новое в 3.8.4:
-//      — defaultPlatform берётся из настроек (3-й аргумент openContentForm)
-//      — Заголовки групп дат — SVG-иконки вместо эмодзи
-//      — Совместимость: openContentForm(item, bookId, settings)
+//    Новое в 3.8.5:
+//      — openContentDetail() — read-only карточка контента.
+//        Открывается вместо редактора при клике по контенту
+//        (из карточки книги, контент-плана, календаря).
+//        Внутри — «Редактировать», «Удалить», «→ след. статус».
 //
-//    Сохранено из 3.8.0:
-//      — Отчётность издательству, кастомные селекты/дата-пикеры
-//      — SVG-иконки соцсетей, превью публикаций (Microlink, лениво)
+//    Сохранено из 3.8.4:
+//      — defaultPlatform из настроек (3-й аргумент openContentForm)
+//      — Отчётность издательству, превью публикаций (Microlink)
+//      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
 import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
-import { esc, showToast, formatDateRu } from './utils.js';
+import { esc, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
@@ -56,7 +58,7 @@ export function platformIcon(key, size = 16) {
 const STATUS_ORDER = ['idea', 'planned', 'filming', 'editing', 'published'];
 
 // ═══════════════════════════════════════════════
-//  1. ВКЛАДКА «КОНТЕНТ-ПЛАН»
+//  1. ВКЛАДКА «КОНТЕНТ»
 // ═══════════════════════════════════════════════
 export function renderContentTab(container, books, settings, callbacks) {
   const allContent = [];
@@ -140,6 +142,7 @@ export function renderContentTab(container, books, settings, callbacks) {
   if (addBtn) addBtn.addEventListener('click', () => callbacks.onAdd());
   if (emptyAdd) emptyAdd.addEventListener('click', () => callbacks.onAdd());
 
+  // 🆕 v3.8.5: клик по карточке → READ-ONLY карточка (onEdit теперь = onOpenDetail)
   container.querySelectorAll('.content-card').forEach(card => {
     card.addEventListener('click', (e) => {
       if (e.target.closest('button') || e.target.closest('a')) return;
@@ -176,7 +179,7 @@ export function renderContentTab(container, books, settings, callbacks) {
 }
 
 // ═══════════════════════════════════════════════
-//  2. КАРТОЧКА КОНТЕНТА
+//  2. КАРТОЧКА КОНТЕНТА (в списке)
 // ═══════════════════════════════════════════════
 function renderContentCard(item) {
   const type = CONTENT_TYPES[item.type] || { icon: '🎬', label: item.type, color: '' };
@@ -225,6 +228,7 @@ function renderContentCard(item) {
             data-content-id="${item.id}"
             data-new-status="${nextStatus}"
             class="btn-small" style="padding:6px 10px"
+            aria-label="Следующий статус: ${nextInfo.label}"
             title="→ ${nextInfo.label}">
             ${icon(CONTENT_STATUS_ICONS[nextStatus] || 'film', 14)}
           </button>
@@ -233,7 +237,7 @@ function renderContentCard(item) {
           data-book-id="${item.bookId}"
           data-content-id="${item.id}"
           class="icon-btn" style="width:32px;height:32px"
-          title="Удалить">
+          aria-label="Удалить" title="Удалить">
           ${icon('trash', 15)}
         </button>
       </div>
@@ -245,12 +249,9 @@ function renderContentCard(item) {
 //  2.1 ПРЕВЬЮ ПУБЛИКАЦИЙ (Microlink)
 // ═══════════════════════════════════════════════
 function loadContentPreviews(container) {
-  const els = container.querySelectorAll('.content-published[data-preview-url]');
+  const els = container.querySelectorAll('.content-published[data-preview-url], .cd-published[data-preview-url]');
   if (els.length === 0) return;
-  if (!('IntersectionObserver' in window)) {
-    els.forEach(hydratePreview);
-    return;
-  }
+  if (!('IntersectionObserver' in window)) { els.forEach(hydratePreview); return; }
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
@@ -288,7 +289,140 @@ async function hydratePreview(el) {
 }
 
 // ═══════════════════════════════════════════════
-//  3. ФОРМА КОНТЕНТА (🆕 settings → defaultPlatform)
+//  🆕 2.2 READ-ONLY КАРТОЧКА КОНТЕНТА (v3.8.5)
+// ═══════════════════════════════════════════════
+/**
+ * Открывает карточку контента (просмотр), НЕ редактор.
+ * Самодостаточна: редактирование / удаление / смена статуса / превью.
+ *
+ * @param {object} item  — контент-элемент
+ * @param {object} book  — книга-владелец (может быть null)
+ * @param {object} opts  — { settings } (для defaultPlatform при редактировании)
+ */
+export function openContentDetail(item, book, opts = {}) {
+  if (!item) return;
+  const settings = opts.settings || {};
+
+  const type = CONTENT_TYPES[item.type] || { label: item.type || 'Контент', color: '' };
+  const status = CONTENT_STATUSES[item.status] || { label: item.status || '', class: '' };
+  const platform = PLATFORMS[item.platform] || { label: item.platform || '' };
+  const idx = STATUS_ORDER.indexOf(item.status);
+  const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
+  const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="overlay-panel" style="max-height:85dvh">
+      <div class="overlay-header">
+        <h2><span class="content-icon ${type.color}" style="width:34px;height:34px">${icon(CONTENT_TYPE_ICONS[item.type] || 'film', 18)}</span> ${esc(item.title || type.label)}</h2>
+        <button class="icon-btn cd-close" aria-label="Закрыть">${icon('close', 16)}</button>
+      </div>
+      <div class="overlay-body">
+        <!-- Книга -->
+        ${book ? `
+          <div class="cd-book">
+            ${book.coverUrl
+              ? `<img src="${book.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:40px;height:60px;border-radius:5px;object-fit:cover"/>`
+              : `<span style="width:40px;height:60px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:5px">${icon('bookClosed', 20)}</span>`}
+            <div>
+              <div style="font-weight:700;font-size:.9rem">${esc(book.title)}</div>
+              <div class="text-small text-muted">${esc(book.author)}</div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Статусы -->
+        <div class="content-meta" style="margin:12px 0">
+          <span class="content-list-status ${status.class}">${icon(CONTENT_STATUS_ICONS[item.status] || 'film', 12)} ${status.label}</span>
+          <span class="platform-badge">${brandIcon(item.platform, 12)} ${platform.label}</span>
+          ${item.reportSent ? `<span class="cc-report-badge sent">${icon('checkBadge', 11)} отчёт</span>` : ''}
+        </div>
+
+        <!-- Даты -->
+        <div class="cd-dates">
+          ${item.plannedDate ? `<div class="cd-date">${icon('calendar', 13)} План: <b>${formatDateRu(item.plannedDate)}</b></div>` : ''}
+          ${item.publishedDate ? `<div class="cd-date">${icon('send', 13)} Публикация: <b>${formatDateRu(item.publishedDate)}</b></div>` : ''}
+          ${item.reportSent && item.reportDate ? `<div class="cd-date">${icon('report', 13)} Отчёт: <b>${formatDateRu(item.reportDate)}</b></div>` : ''}
+        </div>
+
+        <!-- Заметки -->
+        ${item.notes ? `
+          <div class="detail-section">
+            <h3>${icon('edit', 14)} Заметки</h3>
+            <div class="detail-description">${esc(item.notes)}</div>
+          </div>
+        ` : ''}
+
+        <!-- Публикация -->
+        ${item.publishedUrl ? `
+          <div class="detail-section">
+            <h3>${icon('link', 14)} Публикация</h3>
+            <div class="cd-published" data-preview-url="${esc(item.publishedUrl)}">
+              <a href="${esc(item.publishedUrl)}" target="_blank" rel="noopener" class="text-small">
+                ${icon('external', 12)} Открыть ссылку
+              </a>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Действия -->
+        <div class="btn-group mt-16">
+          ${nextInfo ? `
+            <button id="cd-next" class="btn-primary">
+              ${icon(CONTENT_STATUS_ICONS[nextStatus] || 'film', 14)} → ${nextInfo.label}
+            </button>
+          ` : ''}
+          <button id="cd-edit" class="btn-secondary">${icon('edit', 14)} Редактировать</button>
+          <button id="cd-delete" class="btn-danger" aria-label="Удалить">${icon('trash', 14)}</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+  trackOverlay(overlay);
+
+  const close = () => {
+    overlay.remove();
+    untrackOverlay(overlay);
+    document.body.style.overflow = '';
+  };
+
+  overlay.querySelector('.cd-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  overlay.querySelector('#cd-edit').addEventListener('click', () => {
+    close();
+    openContentForm(item, book?.id, settings);
+  });
+
+  overlay.querySelector('#cd-delete').addEventListener('click', async () => {
+    const ok = await showConfirm('Удалить этот контент?', { danger: true, okText: 'Удалить' });
+    if (!ok) return;
+    await removeContentFromBook(book?.id, item.id);
+    close();
+    showToast('🗑️ Контент удалён', 'info');
+    document.dispatchEvent(new CustomEvent('data-changed'));
+  });
+
+  const nextBtn = overlay.querySelector('#cd-next');
+  if (nextBtn) nextBtn.addEventListener('click', async () => {
+    await updateContentStatus(book?.id, item.id, nextStatus);
+    close();
+    if (nextStatus === 'published') showToast('📤 Контент опубликован! 🎉', 'success');
+    else showToast(`Статус: ${nextInfo.label}`, 'success');
+    document.dispatchEvent(new CustomEvent('data-changed'));
+  });
+
+  loadContentPreviews(overlay);
+}
+
+// ═══════════════════════════════════════════════
+//  3. ФОРМА КОНТЕНТА (редактор)
 // ═══════════════════════════════════════════════
 export function openContentForm(item, bookId, settings = {}) {
   const overlay = document.getElementById('content-overlay');
@@ -310,7 +444,6 @@ export function openContentForm(item, bookId, settings = {}) {
 
 function renderContentFormBody(body, books, item, preselectedBookId, settings = {}) {
   const c = item || {};
-  // 🆕 v3.8.4: площадка по умолчанию из настроек
   const defaultPlatform = settings.defaultPlatform || 'youtube';
 
   body.innerHTML = `
@@ -376,7 +509,7 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       <h3>${icon('report', 15)} Отчёт издательству</h3>
       <div class="toggle-row">
         <span class="toggle-label">${icon('send', 14)} Отчёт отправлен</span>
-        <div class="toggle ${c.reportSent ? 'active' : ''}" id="cf-report-toggle"></div>
+        <div class="toggle ${c.reportSent ? 'active' : ''}" id="cf-report-toggle" role="switch" aria-checked="${!!c.reportSent}" tabindex="0"></div>
       </div>
       <div id="cf-report-fields" class="${c.reportSent ? '' : 'hidden'}">
         <div class="form-group">
@@ -427,9 +560,15 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
   attachDatePicker(body.querySelector('#cf-published'));
   attachDatePicker(body.querySelector('#cf-report-date'));
 
-  body.querySelector('#cf-report-toggle').addEventListener('click', function() {
+  const reportToggle = body.querySelector('#cf-report-toggle');
+  const toggleReport = function() {
     this.classList.toggle('active');
+    this.setAttribute('aria-checked', this.classList.contains('active'));
     body.querySelector('#cf-report-fields').classList.toggle('hidden');
+  };
+  reportToggle.addEventListener('click', toggleReport);
+  reportToggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleReport.call(reportToggle); }
   });
 
   body.querySelector('#cf-save').addEventListener('click', async () => {
@@ -527,18 +666,16 @@ function findContentItem(books, bookId, contentId) {
   return (book.contentItems || []).find(c => c.id === contentId) || null;
 }
 
-// 🆕 v3.8.4: группы дат с SVG-иконками (вместо эмодзи)
+// 🆕 v3.8.4: группы дат с SVG-иконками
 function groupByDate(items) {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const groups = {};
-
   const ensure = (label, ic) => {
     if (!groups[label]) groups[label] = { label, ic, items: [] };
     return groups[label];
   };
-
   for (const item of items) {
     const date = item.plannedDate || item.publishedDate || '';
     if (!date) ensure('Без даты', 'calendarX').items.push(item);
@@ -548,7 +685,6 @@ function groupByDate(items) {
     else if (date < today) ensure('Прошедшие', 'clock').items.push(item);
     else ensure(formatDateRu(date), 'calendar').items.push(item);
   }
-
   const order = ['Сегодня', 'Завтра'];
   return Object.values(groups).sort((a, b) => {
     const ai = order.indexOf(a.label), bi = order.indexOf(b.label);
@@ -564,7 +700,7 @@ function groupByDate(items) {
 }
 
 // ═══════════════════════════════════════════════
-//  6. СТИЛИ ФОРМЫ (инжектируются один раз)
+//  6. СТИЛИ (инжектируются один раз)
 // ═══════════════════════════════════════════════
 const CONTENT_FORM_STYLES = `
 .content-type-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
@@ -601,6 +737,11 @@ const CONTENT_FORM_STYLES = `
   text-transform:uppercase; letter-spacing:.04em;
 }
 .cc-report-badge.sent { background:var(--green-dim); color:var(--green); }
+/* 🆕 v3.8.5: карточка контента */
+.cd-book { display:flex; gap:10px; align-items:center; }
+.cd-dates { display:flex; flex-direction:column; gap:6px; }
+.cd-date { display:flex; align-items:center; gap:6px; font-size:.85rem; color:var(--text-secondary); }
+.cd-date b { color:var(--text-primary); font-weight:700; }
 @media (max-width:400px) {
   .content-type-grid { grid-template-columns:repeat(2,1fr); }
   .platform-grid { grid-template-columns:repeat(2,1fr); }

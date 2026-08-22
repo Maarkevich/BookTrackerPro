@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.4 | 2026-08-15
+// 🔖 v3.8.5 | 2026-08-17
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 6
@@ -7,13 +7,15 @@
 //            collections, challenges, tags, previews,
 //            pending-sync
 //
-//    Новое в 3.8.4:
-//      — ️ shelfMark { color, text } в ensureBookFields
-//        (метка полки: цвет + буква/цифра)
+//    Новое в 3.8.5:
+//      — importAll = СИНХРОНИЗАЦИЯ (merge):
+//        добавляет только отсутствующие записи (по id/name),
+//        дубли пропускает, возвращает сводку { added*, skipped* }
 //
-//    Сохранено из 3.8.3:
-//      — Store 'pending-sync' для Background Sync API
+//    Сохранено из 3.8.4:
+//      — shelfMark { color, text } в ensureBookFields
 //      — putBooks (batch) — одна транзакция для N книг
+//      — Store 'pending-sync' для Background Sync API
 //      — repairCovers() / isValidCoverBlob()
 //      — Миграции v1→v6 без потери данных
 // ─────────────────────────────────────────────
@@ -649,7 +651,7 @@ export async function deletePendingSync(id) {
 }
 
 // ═══════════════════════════════════════════════
-//  12. ЭКСПОРТ / ИМПОРТ
+//  12. ЭКСПОРТ
 // ═══════════════════════════════════════════════
 export async function exportAll() {
   const db = await openDB();
@@ -663,61 +665,72 @@ export async function exportAll() {
     getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'),
   ]);
   const settings = await loadSettings();
-  return { app: 'BookTrackerPro', version: 1, exportedAt: new Date().toISOString(), books, collections, challenges, tags, settings };
-}
-
-export async function importAll(data) {
-  if (!data || !data.books) throw new Error('Неверный формат бэкапа');
-  const db = await openDB();
-  const stores = ['books', 'collections', 'challenges', 'tags'];
-  for (const storeName of stores) {
-    if (!db.objectStoreNames.contains(storeName)) continue;
-    await new Promise((resolve) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      tx.objectStore(storeName).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-  if (data.books?.length > 0) {
-    await new Promise((resolve) => {
-      const tx = db.transaction('books', 'readwrite');
-      const store = tx.objectStore('books');
-      for (const book of data.books) store.put(ensureBookFields(book));
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-  if (data.collections?.length > 0) {
-    await new Promise((resolve) => {
-      const tx = db.transaction('collections', 'readwrite');
-      for (const col of data.collections) tx.objectStore('collections').put(col);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-  if (data.challenges?.length > 0) {
-    await new Promise((resolve) => {
-      const tx = db.transaction('challenges', 'readwrite');
-      for (const ch of data.challenges) tx.objectStore('challenges').put(ch);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-  if (data.tags?.length > 0) {
-    await new Promise((resolve) => {
-      const tx = db.transaction('tags', 'readwrite');
-      for (const tag of data.tags) tx.objectStore('tags').put(tag);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-  }
-  if (data.settings) await saveSettings(data.settings);
-  return true;
+  return {
+    app: 'BookTrackerPro',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    books, collections, challenges, tags, settings,
+  };
 }
 
 // ═══════════════════════════════════════════════
-//  13. РАЗМЕР БАЗЫ
+//  🆕 13. ИМПОРТ = СИНХРОНИЗАЦИЯ (v3.8.5)
+// ═══════════════════════════════════════════════
+/**
+ * Импорт в режиме СИНХРОНИЗАЦИИ (merge).
+ * Добавляет только отсутствующие записи; существующие
+ * (совпадающие по id / name) пропускает — данные НЕ затираются.
+ *
+ * @param {object} data — результат exportAll()
+ * @returns {object} сводка { addedBooks, skippedBooks, ... }
+ */
+export async function importAll(data) {
+  if (!data || !Array.isArray(data.books)) throw new Error('Неверный формат бэкапа');
+
+  const summary = {
+    addedBooks: 0, skippedBooks: 0,
+    addedCollections: 0, skippedCollections: 0,
+    addedChallenges: 0, skippedChallenges: 0,
+    addedTags: 0, skippedTags: 0,
+  };
+
+  // ── Книги: добавляем отсутствующие (по id) ──
+  const existingBooks = await loadBooks();
+  const bookIds = new Set(existingBooks.map(b => b.id));
+  const newBooks = (data.books || []).filter(b => b.id && !bookIds.has(b.id));
+  summary.skippedBooks = (data.books || []).length - newBooks.length;
+  summary.addedBooks = newBooks.length;
+  if (newBooks.length > 0) await putBooks(newBooks);
+
+  // ── Подборки: добавляем отсутствующие (по id) ──
+  const existingCols = await loadCollections();
+  const colIds = new Set(existingCols.map(c => c.id));
+  const newCols = (data.collections || []).filter(c => c.id && !colIds.has(c.id));
+  summary.skippedCollections = (data.collections || []).length - newCols.length;
+  summary.addedCollections = newCols.length;
+  for (const c of newCols) await putCollection(c);
+
+  // ── Челленджи: добавляем отсутствующие (по id) ──
+  const existingCh = await loadChallenges();
+  const chIds = new Set(existingCh.map(c => c.id));
+  const newCh = (data.challenges || []).filter(c => c.id && !chIds.has(c.id));
+  summary.skippedChallenges = (data.challenges || []).length - newCh.length;
+  summary.addedChallenges = newCh.length;
+  for (const c of newCh) await putChallenge(c);
+
+  // ── Теги: добавляем отсутствующие (по name) ──
+  const existingTags = await loadTags();
+  const tagNames = new Set(existingTags.map(t => t.name));
+  const newTags = (data.tags || []).filter(t => t.name && !tagNames.has(t.name));
+  summary.skippedTags = (data.tags || []).length - newTags.length;
+  summary.addedTags = newTags.length;
+  for (const t of newTags) await putTag(t);
+
+  return summary;
+}
+
+// ═══════════════════════════════════════════════
+//  14. РАЗМЕР БАЗЫ
 // ═══════════════════════════════════════════════
 export async function getDBSize() {
   try {
@@ -730,7 +743,7 @@ export async function getDBSize() {
 }
 
 // ═══════════════════════════════════════════════
-//  14. СЛУЖЕБНОЕ
+//  15. СЛУЖЕБНОЕ
 // ═══════════════════════════════════════════════
 function ensureBookFields(book) {
   if (!book.id) book.id = `book_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -765,7 +778,6 @@ function ensureBookFields(book) {
   if (book.jointReading === undefined) {
     book.jointReading = { active: false, participants: [], chatLink: '', notes: '', startDate: '' };
   }
-  // 🆕 v3.8.4: метка полки { color, text }
   if (book.shelfMark === undefined) {
     book.shelfMark = { color: '', text: '' };
   }

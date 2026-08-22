@@ -4,7 +4,7 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
     <title>Book Tracker Pro</title>
-    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.4: шрифт Nunito, метки полок, компактность, SVG-иконки. Работает полностью оффлайн."/>
+    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.5: read-only карточка контента, FAB-меню, импорт-синхронизация, SVG доп.оценки. Работает полностью оффлайн."/>
 
     <!-- v3.8.3: CSP -->
     <meta http-equiv="Content-Security-Policy"
@@ -19,7 +19,7 @@
 
     <meta name="theme-color" content="#161210"/>
 
-    <!-- iOS standalone -->
+    <!-- iOS / Android standalone -->
     <meta name="mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
@@ -28,19 +28,19 @@
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
     <link rel="manifest" href="manifest.json"/>
 
-    <!-- 🆕 v3.8.4: шрифт Nunito (округлый, как в оригинале) -->
+    <!-- Шрифт Nunito (v3.8.4) -->
     <link rel="preconnect" href="https://fonts.googleapis.com"/>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
 
-    <link rel="modulepreload" href="utils.js?v=3.8.4"/>
-    <link rel="modulepreload" href="icons.js?v=3.8.4"/>
-    <link rel="modulepreload" href="uikit.js?v=3.8.4"/>
-    <link rel="modulepreload" href="db.js?v=3.8.4"/>
-    <link rel="modulepreload" href="microlink.js?v=3.8.4"/>
-    <link rel="modulepreload" href="app.js?v=3.8.4"/>
-    <link rel="stylesheet" href="app.css?v=3.8.4"/>
-    <link rel="stylesheet" href="style.css?v=3.8.4"/>
+    <link rel="modulepreload" href="utils.js?v=3.8.5"/>
+    <link rel="modulepreload" href="icons.js?v=3.8.5"/>
+    <link rel="modulepreload" href="uikit.js?v=3.8.5"/>
+    <link rel="modulepreload" href="db.js?v=3.8.5"/>
+    <link rel="modulepreload" href="microlink.js?v=3.8.5"/>
+    <link rel="modulepreload" href="app.js?v=3.8.5"/>
+    <link rel="stylesheet" href="app.css?v=3.8.5"/>
+    <link rel="stylesheet" href="style.css?v=3.8.5"/>
 </head>
 <body>
     <a href="#main-content" class="skip-link">Перейти к содержимому</a>
@@ -78,7 +78,7 @@
 
         <div class="fab-group">
             <button id="scan-btn" class="fab fab-secondary" aria-label="Сканер ISBN">📷</button>
-            <button id="add-btn" class="fab fab-primary" aria-label="Добавить книгу">＋</button>
+            <button id="add-btn" class="fab fab-primary" aria-label="Добавить">＋</button>
         </div>
     </div>
 
@@ -92,7 +92,7 @@
         <div id="drawer-offline" class="drawer-offline hidden">📴 Оффлайн-режим</div>
         <nav class="drawer-nav">
             <button class="nav-item" data-tab="books"><span class="nav-icon"></span> Мои книги <span class="nav-count" id="nav-count-books"></span></button>
-            <button class="nav-item" data-tab="content"><span class="nav-icon"></span> Контент-план <span class="nav-count" id="nav-count-content"></span></button>
+            <button class="nav-item" data-tab="content"><span class="nav-icon"></span> Контент <span class="nav-count" id="nav-count-content"></span></button>
             <button class="nav-item" data-tab="reviews"><span class="nav-icon"></span> Отзывы <span class="nav-count" id="nav-count-reviews"></span></button>
             <button class="nav-item" data-tab="calendar"><span class="nav-icon"></span> Календарь</button>
             <button class="nav-item" data-tab="challenges"><span class="nav-icon"></span> Челленджи <span class="nav-count" id="nav-count-challenges"></span></button>
@@ -102,16 +102,16 @@
             <button class="nav-item" data-tab="settings"><span class="nav-icon"></span> Настройки</button>
         </nav>
         <div class="drawer-section">
-            <button id="drawer-title-collections" class="drawer-section-title" aria-expanded="false">📂 Подборки</button>
-            <div id="drawer-collections" class="drawer-sub hidden"></div>
-            <button id="drawer-add-collection" class="drawer-add-btn">＋ Новая подборка</button>
+            <button id="drawer-title-collections" class="drawer-section-title">📂 Подборки</button>
+            <div id="drawer-collections" class="drawer-sub"></div>
+            <!-- 🆕 v3.8.5: кнопка «+ Новая подборка» убрана (создание — через FAB «+») -->
         </div>
         <div class="drawer-section">
-            <button id="drawer-title-series" class="drawer-section-title" aria-expanded="false">📚 Серии</button>
-            <div id="drawer-series" class="drawer-sub hidden"></div>
+            <button id="drawer-title-series" class="drawer-section-title">📚 Серии</button>
+            <div id="drawer-series" class="drawer-sub"></div>
         </div>
         <div class="drawer-section">
-            <button id="drawer-title-filters" class="drawer-section-title" aria-expanded="false">🔍 Фильтры</button>
+            <button id="drawer-title-filters" class="drawer-section-title">🔍 Фильтры</button>
             <div id="drawer-filters" class="drawer-sub"></div>
         </div>
         <div class="drawer-footer">
@@ -216,6 +216,6 @@
         <button class="icon-btn" id="install-dismiss" aria-label="Скрыть">✕</button>
     </div>
 
-    <script type="module" src="app.js?v=3.8.4"></script>
+    <script type="module" src="app.js?v=3.8.5"></script>
 </body>
 </html>

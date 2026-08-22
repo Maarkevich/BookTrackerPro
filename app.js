@@ -1,19 +1,22 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.4 | 2026-08-15
+// 🔖 v3.8.5 | 2026-08-17
 // 📝 Точка входа: навигация, рендеринг, события
 //
-//    Новое в 3.8.4:
-//      — 🐛 Фикс: обложки из Галереи восстанавливаются после перезагрузки
-//        (restoreCoverUrls — Object URL из IndexedDB store 'covers')
-//      — ️ Метка полки (shelfMark): в карточке, detail и форме
-//      — 📂 Drawer: «Подборки»/«Серии» — аккордеон (только список)
-//      — 🎨 Эмодзи → SVG везде (кроме форм создания подборок/серий/челленджей)
-//      — 🎨 Заголовки: иконка + текст (янтарь задаётся в CSS)
-//      — 🔒 Убран хардкод секретного ключа ЛитРес
+//    Новое в 3.8.5:
+//      — Контент: клик по контенту (книга/контент-план/календарь/поиск)
+//        открывает READ-ONLY карточку openContentDetail, не редактор
+//      — FAB «+» → меню: книга / контент / отзыв / челлендж / серия / подборка
+//      — Убрана кнопка «+ Новая подборка» из drawer
+//      — «Контент-план» переименован в «Контент»
+//      — Настройки: площадка через attachCustomSelect с brand-иконками
+//      — Форма книги: attachDatePicker для даты получения PR
+//      — Доп.оценки: SVG (pepper/droplet/mystery/facePalm),
+//        имена «Горячесть/Слезливость/Интрига/Жуткость», выбор иконками
+//      — Импорт = синхронизация (добавляет отсутствующее, дубли.skip)
 //
-//    Сохранено из 3.8.3:
-//      — esc/showToast/trackOverlay/formatPrice и т.д. из utils.js
-//      — History API жест «назад», focus trap, sanitizeColor
+//    Сохранено из 3.8.4:
+//      — restoreCoverUrls, shelfMark, SVG-иконки, аккордеон drawer,
+//        янтарные заголовки, разрыв циклов через utils.js
 // ─────────────────────────────────────────────
 import {
   openDB, loadBooks, putBook, delBook, loadSettings, saveSettings,
@@ -30,7 +33,8 @@ import {
 } from './isbn.js';
 import { startScanner, stopScanner } from './scanner.js';
 import {
-  renderContentTab, openContentForm, deleteContentItem, updateContentStatus,
+  renderContentTab, openContentForm, openContentDetail,
+  deleteContentItem, updateContentStatus,
   platformIcon, CONTENT_TYPES, CONTENT_STATUSES
 } from './content.js';
 import { renderReviewsTab, openReviewForm, deleteReview } from './review.js';
@@ -55,9 +59,8 @@ import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
 import { registerSW, setupOnlineIndicator } from './sw-register.js';
-import { showConfirm, attachCustomSelect } from './uikit.js';
+import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
-// 🆕 v3.8.3/3.8.4: утилиты из utils.js + реэкспорт для совместимости
 import {
   esc, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
@@ -71,39 +74,28 @@ export { esc, showToast, trackOverlay, untrackOverlay, formatPrice, convertToDef
 //  СОСТОЯНИЕ
 // ═══════════════════════════════════════════════
 const S = {
-  books: [],
-  collections: [],
-  challenges: [],
-  tags: [],
+  books: [], collections: [], challenges: [], tags: [],
   settings: {
-    // 🔒 v3.8.4: секрет больше не хардкодится
-    lrAppId: '', lrSecret: '',
-    lrPartnerId: '', lrPartnerSecret: '',
+    lrAppId: '', lrSecret: '', lrPartnerId: '', lrPartnerSecret: '',
     microlinkApiKey: '',
     confetti: true, sound: true,
     defaultPlatform: 'youtube',
     bloggerMode: true,
     defaultCurrency: 'RUB',
-    showPriceInCards: true,
-    showPriceInDetail: true,
-    showPriceInStats: true,
+    showPriceInCards: true, showPriceInDetail: true, showPriceInStats: true,
     exchangeRates: { USD: 90, EUR: 98, KZT: 0.18, UAH: 2.2, GBP: 115 },
     ratesUpdated: '',
   },
   currentTab: 'books',
   bookFilter: 'all',
-  searchQuery: '',
-  searchScope: 'all',
-  searchBookTag: null,
+  searchQuery: '', searchScope: 'all', searchBookTag: null,
   editingBookId: null,
   activeFilter: null,
-  openSeries: null,
-  openCollection: null,
-  openChallenge: null,
+  openSeries: null, openCollection: null, openChallenge: null,
   deferredPrompt: null,
 };
 
-// 🆕 v3.8.4: SVG-иконки вместо эмодзи в скоупах поиска
+// 🆕 v3.8.5: «Контент» вместо «Контент-план»
 const SEARCH_SCOPES = [
   { id: 'all', icon: 'search', label: 'Всё' },
   { id: 'books', icon: 'library', label: 'Книги' },
@@ -116,16 +108,22 @@ const SEARCH_SCOPES = [
   { id: 'tags', icon: 'tag', label: 'Теги' },
 ];
 
-// 🆕 v3.8.4: форматы с SVG-иконками
 const BOOK_FORMATS = {
   paper: { icon: 'bookClosed', label: 'Бумажная' },
   ebook: { icon: 'smartphone', label: 'Электронная' },
   audio: { icon: 'headphones', label: 'Аудиокнига' },
 };
 
-// 🆕 v3.8.4: заголовки без эмодзи (иконка добавляется в renderTab)
+// 🆕 v3.8.5: доп.оценки — SVG-иконки и новые имена
+const EXTRA_RATINGS = [
+  { id: 'bf-pepper',    icon: 'pepper',   label: 'Горячесть',   color: 'var(--red)' },
+  { id: 'bf-tear',      icon: 'droplet',  label: 'Слезливость', color: 'var(--cyan)' },
+  { id: 'bf-intrigue',  icon: 'mystery',  label: 'Интрига',     color: 'var(--purple)' },
+  { id: 'bf-horror',    icon: 'facePalm', label: 'Жуткость',    color: 'var(--orange)' },
+];
+
 const TAB_TITLES = {
-  books: 'Мои книги', content: 'Контент-план', reviews: 'Отзывы',
+  books: 'Мои книги', content: 'Контент', reviews: 'Отзывы',
   calendar: 'Календарь', challenges: 'Челленджи', stats: 'Статистика',
   settings: 'Настройки', series: 'Серии', collections: 'Подборки',
 };
@@ -135,10 +133,19 @@ const TAB_ICONS = {
   series: 'layers', collections: 'folder',
 };
 const NAV_ICON_SIZES = {
-  books: 22, content: 22,
-  reviews: 20, calendar: 20, challenges: 20, stats: 20,
-  settings: 18, series: 20, collections: 20,
+  books: 22, content: 22, reviews: 20, calendar: 20, challenges: 20,
+  stats: 20, settings: 18, series: 20, collections: 20,
 };
+
+// 🆕 v3.8.5: FAB-меню создания
+const FAB_ITEMS = [
+  { id: 'book',       icon: 'bookClosed', label: 'Книга' },
+  { id: 'content',    icon: 'film',       label: 'Контент' },
+  { id: 'review',     icon: 'pen',        label: 'Отзыв' },
+  { id: 'challenge',  icon: 'trophy',     label: 'Челлендж' },
+  { id: 'series',     icon: 'layers',     label: 'Серия' },
+  { id: 'collection', icon: 'folder',     label: 'Подборка' },
+];
 
 // ═══════════════════════════════════════════════
 //  DOM
@@ -166,34 +173,6 @@ function cacheDom() {
    'drawer-title-collections','drawer-title-series','drawer-title-filters',
    'nav-count-books','nav-count-content','nav-count-reviews','nav-count-challenges'
   ].forEach(id => { DOM[camel(id)] = document.getElementById(id); });
-}
-
-// ═══════════════════════════════════════════════
-//  🆕 v3.8.4: ВОССТАНОВЛЕНИЕ ОБЛОЖЕК (фикс галереи)
-// ═══════════════════════════════════════════════
-// Object URL живёт только до закрытия вкладки. После перезагрузки
-// book.coverUrl = "blob:..." невалиден. Пересоздаём из IndexedDB.
-const _coverUrlCache = new Map();
-
-async function restoreCoverUrls(books) {
-  for (const book of books) {
-    if (_coverUrlCache.has(book.id)) {
-      book.coverUrl = _coverUrlCache.get(book.id);
-      continue;
-    }
-    const blob = await getCover(book.id);
-    if (blob) {
-      const url = URL.createObjectURL(blob);
-      _coverUrlCache.set(book.id, url);
-      book.coverUrl = url;
-    } else if (book.coverUrl && book.coverUrl.startsWith('blob:')) {
-      book.coverUrl = ''; // протухший Object URL
-    }
-  }
-}
-
-function cacheCoverUrl(bookId, url) {
-  if (bookId && url) _coverUrlCache.set(bookId, url);
 }
 
 // ═══════════════════════════════════════════════
@@ -246,12 +225,16 @@ function setupBackGesture() {
 async function init() {
   cacheDom();
   bindEvents();
+
+  // 🆕 v3.8.5: убираем «+ Новая подборка» из drawer
+  DOM.drawerAddCollection?.remove();
+
   await openDB();
   const repaired = await repairCovers();
   if (repaired > 0) console.log('[Cover] Удалено битых обложек: ' + repaired);
 
   S.books = await loadBooks();
-  await restoreCoverUrls(S.books); // 🆕 v3.8.4
+  await restoreCoverUrls(S.books);
   S.collections = await loadCollections();
   S.challenges = await loadChallenges();
   S.tags = await loadTags();
@@ -271,7 +254,7 @@ async function init() {
   setupBackGesture();
   updateOfflineIndicator();
   injectNavIcons();
-  bindDrawerAccordion(); // 🆕 v3.8.4
+  bindDrawerAccordion();
   renderDrawer();
 
   const skeleton = document.getElementById('skeleton');
@@ -282,9 +265,26 @@ async function init() {
   handleManifestShortcuts();
 }
 
+// 🆕 v3.8.4: восстановление Object URL обложек из IndexedDB
+const _coverUrlCache = new Map();
+async function restoreCoverUrls(books) {
+  for (const book of books) {
+    if (_coverUrlCache.has(book.id)) { book.coverUrl = _coverUrlCache.get(book.id); continue; }
+    const blob = await getCover(book.id);
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      _coverUrlCache.set(book.id, url);
+      book.coverUrl = url;
+    } else if (book.coverUrl && book.coverUrl.startsWith('blob:')) {
+      book.coverUrl = '';
+    }
+  }
+}
+function cacheCoverUrl(bookId, url) { if (bookId && url) _coverUrlCache.set(bookId, url); }
+
 async function refreshData() {
   S.books = await loadBooks();
-  await restoreCoverUrls(S.books); // 🆕 v3.8.4
+  await restoreCoverUrls(S.books);
   S.collections = await loadCollections();
   S.challenges = await loadChallenges();
   S.tags = await loadTags();
@@ -316,15 +316,16 @@ function bindEvents() {
     });
   });
 
-  DOM.drawerAddCollection?.addEventListener('click', () => {
-    toggleDrawer(false);
-    openCollectionForm(null, async (data) => {
-      data.order = await getNextCollectionOrder();
-      await createCollection(data);
-      await refreshData();
-      showToast('✅ Подборка создана', 'success');
-    });
+  DOM.drawerTitleCollections?.addEventListener('click', () => {
+    S.openCollection = null; renderTab('collections'); toggleDrawer(false);
   });
+  DOM.drawerTitleSeries?.addEventListener('click', () => {
+    S.openSeries = null; renderTab('series'); toggleDrawer(false);
+  });
+  DOM.drawerTitleFilters?.addEventListener('click', () => {
+    S.activeFilter = null; renderTab('books'); toggleDrawer(false);
+  });
+  // 🆕 v3.8.5: drawerAddCollection удалён — обработчик не нужен
 
   // Глобальный поиск
   DOM.searchToggle.addEventListener('click', () => {
@@ -337,7 +338,8 @@ function bindEvents() {
     performGlobalSearch();
   }, 250));
 
-  DOM.addBtn.addEventListener('click', () => openBookForm());
+  // 🆕 v3.8.5: FAB «+» → меню создания
+  DOM.addBtn.addEventListener('click', () => toggleFabMenu());
   DOM.scanBtn.addEventListener('click', () => openScanner());
 
   // Закрытие оверлеев
@@ -388,9 +390,10 @@ function bindEvents() {
   });
   $('#install-dismiss')?.addEventListener('click', () => DOM.installBanner.classList.add('hidden'));
 
-  // Escape
+  // Escape (🆕 v3.8.5: сначала закрываем FAB-меню)
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (document.querySelector('.fab-menu')) { closeFabMenu(); return; }
     if (!DOM.scannerOverlay.classList.contains('hidden')) closeScanner();
     else if (!DOM.coverOverlay.classList.contains('hidden')) closeOverlay(DOM.coverOverlay);
     else if (!DOM.formOverlay.classList.contains('hidden')) closeOverlay(DOM.formOverlay);
@@ -402,29 +405,10 @@ function bindEvents() {
     closeStatusDropdown();
   });
 
+  // Клик вне — закрыть FAB-меню и dropdown статуса
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.status-dropdown') && !e.target.closest('.status-btn')) {
-      closeStatusDropdown();
-    }
-  });
-}
-
-// ═══════════════════════════════════════════════
-//  🆕 v3.8.4: АККОРДЕОН DRAWER
-// ═══════════════════════════════════════════════
-function bindDrawerAccordion() {
-  const pairs = [
-    [DOM.drawerTitleCollections, DOM.drawerCollections],
-    [DOM.drawerTitleSeries, DOM.drawerSeries],
-    [DOM.drawerTitleFilters, DOM.drawerFilters],
-  ];
-  pairs.forEach(([title, list]) => {
-    if (!title || !list) return;
-    title.addEventListener('click', () => {
-      const nowOpen = list.classList.toggle('hidden') === false;
-      title.classList.toggle('open', nowOpen);
-      title.setAttribute('aria-expanded', nowOpen);
-    });
+    if (!e.target.closest('.fab-menu') && !e.target.closest('#add-btn')) closeFabMenu();
+    if (!e.target.closest('.status-dropdown') && !e.target.closest('.status-btn')) closeStatusDropdown();
   });
 }
 
@@ -439,6 +423,12 @@ function injectNavIcons() {
     if (ic && name) ic.innerHTML = icon(name, size);
   });
 
+  // 🆕 v3.8.5: переименование «Контент-план» → «Контент» в drawer
+  const contentNav = document.querySelector('.nav-item[data-tab="content"]');
+  if (contentNav) {
+    contentNav.innerHTML = `<span class="nav-icon">${icon('film', 22)}</span> Контент <span class="nav-count" id="nav-count-content"></span>`;
+  }
+
   const logo = $('.drawer-logo');
   if (logo) logo.innerHTML = icon('bookOpen', 26);
 
@@ -448,13 +438,9 @@ function injectNavIcons() {
   DOM.menuBtn.innerHTML = icon('menu', 20);
   DOM.drawerClose.innerHTML = icon('close', 18);
 
-  // 🆕 v3.8.4: заголовки секций drawer со стрелкой аккордеона
-  if (DOM.drawerTitleCollections)
-    DOM.drawerTitleCollections.innerHTML = icon('folder', 13) + ' Подборки <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
-  if (DOM.drawerTitleSeries)
-    DOM.drawerTitleSeries.innerHTML = icon('layers', 13) + ' Серии <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
-  if (DOM.drawerTitleFilters)
-    DOM.drawerTitleFilters.innerHTML = icon('filter', 13) + ' Фильтры <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
+  if (DOM.drawerTitleCollections) DOM.drawerTitleCollections.innerHTML = icon('folder', 13) + ' Подборки <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
+  if (DOM.drawerTitleSeries) DOM.drawerTitleSeries.innerHTML = icon('layers', 13) + ' Серии <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
+  if (DOM.drawerTitleFilters) DOM.drawerTitleFilters.innerHTML = icon('filter', 13) + ' Фильтры <span class="drawer-arrow">' + icon('chevronRight', 11) + '</span>';
 
   if (DOM.formBack) DOM.formBack.innerHTML = icon('arrowLeft', 18);
   if (DOM.detailBack) DOM.detailBack.innerHTML = icon('arrowLeft', 18);
@@ -488,16 +474,6 @@ function handleManifestShortcuts() {
   else if (tab && TAB_TITLES[tab]) renderTab(tab);
   if (action || tab) history.replaceState({}, '', location.pathname);
 }
-// ═══════════════════════════════════════════════
-//  ХЕЛПЕР: ряд заполненных SVG-звёзд (рейтинг)
-// ═══════════════════════════════════════════════
-function starsRow(n, size = 11) {
-  let out = '';
-  for (let i = 0; i < n; i++) {
-    out += `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z"/></svg>`;
-  }
-  return out;
-}
 
 // ═══════════════════════════════════════════════
 //  ГЛОБАЛЬНЫЙ ПОИСК
@@ -510,7 +486,6 @@ function openGlobalSearch() {
   performGlobalSearch();
   setTimeout(() => DOM.searchInput.focus(), 50);
 }
-
 function closeGlobalSearch() {
   DOM.searchBar.classList.add('hidden');
   DOM.searchResults.classList.add('hidden');
@@ -519,8 +494,6 @@ function closeGlobalSearch() {
   S.searchQuery = '';
   S.searchBookTag = null;
 }
-
-// 🆕 v3.8.4: SVG-иконки вместо эмодзи в скоупах
 function renderSearchScopes() {
   DOM.searchScopes.innerHTML = SEARCH_SCOPES.map(s => `
     <button class="scope-chip ${S.searchScope === s.id ? 'active' : ''}" data-scope="${s.id}">
@@ -537,8 +510,6 @@ function renderSearchScopes() {
     });
   });
 }
-
-// 🆕 v3.8.4: sanitizeColor для тегов
 function renderSearchBookTags() {
   if (S.searchScope !== 'books') {
     DOM.searchBookTags.classList.add('hidden');
@@ -567,7 +538,6 @@ function renderSearchBookTags() {
     });
   });
 }
-
 function matchesBook(b, q) {
   if (!q) return true;
   return b.title.toLowerCase().includes(q) ||
@@ -579,13 +549,11 @@ function matchesBook(b, q) {
     (b.tags || []).some(t => t.toLowerCase().includes(q)) ||
     (b.tropes || []).some(t => t.toLowerCase().includes(q));
 }
-
 function performGlobalSearch() {
   const q = S.searchQuery;
   const scope = S.searchScope;
   const hasQuery = !!q || !!S.searchBookTag;
   const results = { books: [], content: [], reviews: [], quotes: [], collections: [], challenges: [], series: [], tags: [] };
-
   if (hasQuery) {
     if (scope === 'all' || scope === 'books') {
       results.books = S.books.filter(b => matchesBook(b, q));
@@ -631,13 +599,10 @@ function performGlobalSearch() {
   }
   renderSearchResults(results, hasQuery);
 }
-
-// 🆕 v3.8.4: SVG-иконки в результатах поиска
 function renderSearchResults(results, hasQuery) {
   const el = DOM.searchResults;
   el.classList.remove('hidden');
   DOM.mainContent.classList.add('hidden');
-
   if (!hasQuery) {
     el.innerHTML = `<div class="search-hint">${icon('search', 16)} Начните вводить — поиск идёт по всем разделам сразу</div>`;
     return;
@@ -647,7 +612,6 @@ function renderSearchResults(results, hasQuery) {
     el.innerHTML = `<div class="search-hint">Ничего не найдено${S.searchQuery ? ` по «${esc(S.searchQuery)}»` : ''}</div>`;
     return;
   }
-
   let html = '';
   if (results.books.length) {
     html += searchSection(icon('library', 13) + ' Книги', results.books.length, results.books.map(b => `
@@ -735,7 +699,6 @@ function renderSearchResults(results, hasQuery) {
   el.innerHTML = html;
   bindSearchResultEvents(el);
 }
-
 function searchSection(title, count, inner) {
   return `
     <div class="sr-section">
@@ -743,17 +706,17 @@ function searchSection(title, count, inner) {
       ${inner}
     </div>`;
 }
-
 function bindSearchResultEvents(el) {
   const go = (fn) => { closeGlobalSearch(); fn(); };
   el.querySelectorAll('[data-sr-book]').forEach(item => {
     item.addEventListener('click', () => go(() => openBookDetail(item.dataset.srBook)));
   });
+  // 🆕 v3.8.5: контент из поиска → read-only карточка
   el.querySelectorAll('[data-sr-content-book]').forEach(item => {
     item.addEventListener('click', () => {
       const book = S.books.find(b => b.id === item.dataset.srContentBook);
       const contentItem = (book?.contentItems || []).find(c => c.id === item.dataset.srContentId);
-      go(() => openContentForm(contentItem, item.dataset.srContentBook, S.settings));
+      go(() => openContentDetail(contentItem, book, { settings: S.settings }));
     });
   });
   el.querySelectorAll('[data-sr-collection]').forEach(item => {
@@ -769,13 +732,26 @@ function bindSearchResultEvents(el) {
     item.addEventListener('click', () => go(() => { S.activeFilter = { type: 'tag', value: item.dataset.srTag }; renderTab('books'); }));
   });
 }
+// ═══════════════════════════════════════════════
+//  ХЕЛПЕР: ряд SVG-звёзд (рейтинг)
+// ═══════════════════════════════════════════════
+function starsRow(n, size = 11) {
+  let out = '';
+  for (let i = 0; i < 5; i++) {
+    const filled = i < n;
+    out += `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" ` +
+      `fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.6" ` +
+      `aria-hidden="true" style="color:${filled ? 'var(--accent)' : 'var(--text-muted)'};vertical-align:middle">` +
+      `<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z"/></svg>`;
+  }
+  return out;
+}
 
 // ═══════════════════════════════════════════════
-//  НАВИГАЦИЯ / ТАБЫ (🆕 заголовок с иконкой)
+//  НАВИГАЦИЯ / ТАБЫ (🆕 контент → read-only карточка)
 // ═══════════════════════════════════════════════
 function renderTab(tab) {
   S.currentTab = tab;
-  // 🆕 v3.8.4: иконка + текст (янтарь задаётся в CSS .topbar-title)
   DOM.pageTitle.innerHTML = icon(TAB_ICONS[tab] || 'bookOpen', 20) + '<span>' + esc(TAB_TITLES[tab] || tab) + '</span>';
   $$('.nav-item[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
@@ -785,7 +761,11 @@ function renderTab(tab) {
   switch (tab) {
     case 'books': renderBooksTab(); break;
     case 'content': renderContentTab(mc, S.books, S.settings, {
-      onEdit: (item, bookId) => openContentForm(item, bookId, S.settings),
+      // 🆕 v3.8.5: клик по контенту → read-only карточка, не редактор
+      onEdit: (item, bookId) => {
+        const book = S.books.find(b => b.id === bookId);
+        openContentDetail(item, book, { settings: S.settings });
+      },
       onDelete: handleDeleteContent,
       onStatusChange: handleContentStatus,
       onAdd: () => openContentForm(null, null, S.settings),
@@ -794,7 +774,13 @@ function renderTab(tab) {
       onEdit: openReviewForm, onDelete: handleDeleteReview, onOpenBook: openBookDetail,
     }); break;
     case 'calendar': renderCalendarTab(mc, S.books, {
-      onDayClick: showDayContent, onAdd: () => openContentForm(null, null, S.settings),
+      onDayClick: showDayContent,
+      // 🆕 v3.8.5: клик по контенту в календаре → read-only карточка
+      onOpenContent: (item, bookId) => {
+        const book = S.books.find(b => b.id === bookId);
+        openContentDetail(item, book, { settings: S.settings });
+      },
+      onAdd: () => openContentForm(null, null, S.settings),
     }); break;
     case 'challenges': renderChallenges(); break;
     case 'stats': renderStatsTab(mc, S.books, S.settings, S.challenges); break;
@@ -805,13 +791,18 @@ function renderTab(tab) {
 }
 
 // ═══════════════════════════════════════════════
-//  DRAWER
+//  DRAWER (🆕 без «+ Новая подборка»)
 // ═══════════════════════════════════════════════
 function renderDrawer() {
-  DOM.navCountBooks.textContent = S.books.filter(b => b.id !== '__no_book__').length || '';
-  DOM.navCountContent.textContent = S.books.reduce((s, b) => s + (b.contentItems || []).length, 0) || '';
-  DOM.navCountReviews.textContent = S.books.filter(b => b.review?.text || b.review?.rating > 0).length || '';
-  DOM.navCountChallenges.textContent = S.challenges.filter(c => c.status === 'active').length || '';
+  // 🆕 v3.8.5: считываем счётчики свежими (content-узел пересоздаётся в injectNavIcons)
+  const ncBooks = document.getElementById('nav-count-books');
+  const ncContent = document.getElementById('nav-count-content');
+  const ncReviews = document.getElementById('nav-count-reviews');
+  const ncCh = document.getElementById('nav-count-challenges');
+  if (ncBooks) ncBooks.textContent = S.books.filter(b => b.id !== '__no_book__').length || '';
+  if (ncContent) ncContent.textContent = S.books.reduce((s, b) => s + (b.contentItems || []).length, 0) || '';
+  if (ncReviews) ncReviews.textContent = S.books.filter(b => b.review?.text || b.review?.rating > 0).length || '';
+  if (ncCh) ncCh.textContent = S.challenges.filter(c => c.status === 'active').length || '';
 
   DOM.drawerCollections.innerHTML = S.collections.map(c => `
     <button class="nav-item sub" data-collection="${c.id}">
@@ -1014,12 +1005,11 @@ function renderBookCard(book) {
     return fmt ? `<span class="book-badge badge-format-${f}">${icon(fmt.icon, 11)} ${fmt.label}</span>` : '';
   }).join('');
 
-  // 🆕 v3.8.4: метка полки (круг → пилюля)
+  // 🆕 v3.8.5: метка полки (круг → пилюля) в строке заголовка
   const markHtml = (book.shelfMark?.text)
     ? `<span class="shelf-mark" style="background:${sanitizeColor(book.shelfMark.color, 'var(--accent)')}">${esc(book.shelfMark.text)}</span>`
     : '';
 
-  // 3 тега + «+N»
   const allTags = book.tags || [];
   const visible = allTags.slice(0, 3);
   const tagsHtml = visible.map(t => {
@@ -1063,7 +1053,6 @@ function renderBookCard(book) {
 //  DROPDOWN СТАТУСА (🆕 SVG)
 // ═══════════════════════════════════════════════
 let _statusDropdown = null;
-
 function openStatusDropdown(anchor, bookId) {
   closeStatusDropdown();
   const book = S.books.find(b => b.id === bookId);
@@ -1103,13 +1092,12 @@ function openStatusDropdown(anchor, bookId) {
     });
   });
 }
-
 function closeStatusDropdown() {
   if (_statusDropdown) { _statusDropdown.remove(); _statusDropdown = null; }
 }
 
 // ═══════════════════════════════════════════════
-//  МОДАЛКА ОЦЕНКИ
+//  МОДАЛКА ОЦЕНКИ (🆕 SVG)
 // ═══════════════════════════════════════════════
 function openRatingModal(book) {
   const isDropped = book.status === 'dropped';
@@ -1163,16 +1151,58 @@ function openRatingModal(book) {
   });
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 }
+
 // ═══════════════════════════════════════════════
-//  ФОРМА КНИГИ (🆕 метка полки + SVG)
+//  🆕 v3.8.5: ДОП.ОЦЕНКИ — SVG-иконки
+// ═══════════════════════════════════════════════
+function extraRowHtml(cfg, value) {
+  return `
+    <div class="form-group">
+      <label>${cfg.label}</label>
+      <div class="extra-rating-row" data-rating-id="${cfg.id}" style="color:${cfg.color}">
+        ${[1,2,3,4,5].map(i => `<span class="extra-star${value >= i ? ' filled' : ''}" data-val="${i}">${icon(cfg.icon, 18)}</span>`).join('')}
+        <input type="hidden" id="${cfg.id}" value="${value}"/>
+      </div>
+    </div>
+  `;
+}
+function bindExtraRatings(fb) {
+  fb.querySelectorAll('.extra-rating-row').forEach(row => {
+    const inputId = row.dataset.ratingId;
+    const input = fb.querySelector('#' + inputId);
+    const stars = row.querySelectorAll('.extra-star');
+    let currentVal = parseInt(input?.value || 0);
+    const update = (v) => stars.forEach((s, i) => s.classList.toggle('filled', i < v));
+    stars.forEach(s => {
+      s.addEventListener('click', () => {
+        const v = parseInt(s.dataset.val);
+        currentVal = (currentVal === v) ? 0 : v;
+        if (input) input.value = currentVal;
+        update(currentVal);
+      });
+      s.addEventListener('mouseenter', () => update(parseInt(s.dataset.val)));
+      s.addEventListener('mouseleave', () => update(currentVal));
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════
+//  ФОРМА КНИГИ (🆕 метка полки + SVG доп.оценки + дата-пикер PR)
 // ═══════════════════════════════════════════════
 function openBookForm(book = null) {
   S.editingBookId = book?.id || null;
-  DOM.formTitle.textContent = book ? 'Редактировать книгу' : 'Новая книга';
+  DOM.formTitle.innerHTML = book ? `${icon('edit', 18)} Редактировать книгу` : `${icon('library', 18)} Новая книга`;
   const b = book || {};
   const cur = b.price?.currency || S.settings.defaultCurrency;
   const selectedTags = new Set(b.tags || []);
   const selectedFormats = new Set(b.formats || []);
+
+  const extraValues = {
+    'bf-pepper': b.pepperRating || 0,
+    'bf-tear': b.tearRating || 0,
+    'bf-intrigue': b.intrigueRating || 0,
+    'bf-horror': b.horrorRating || 0,
+  };
 
   DOM.formBody.innerHTML = `
     <div class="form-group">
@@ -1232,16 +1262,16 @@ function openBookForm(book = null) {
       </div>
     </div>
 
-    <!-- 🆕 v3.8.4: Метка полки -->
+    <!-- 🆕 v3.8.5: Метка полки -->
     <div class="form-section">
       <h3>${icon('tag', 15)} Метка полки</h3>
       <div class="form-hint mb-8">Цветная метка, чтобы знать, на какой полке стоит книга</div>
       <div class="shelf-mark-row">
-        <input type="color" id="bf-shelf-color" value="${sanitizeColor(b.shelfMark?.color, '#e8a33d').replace('var(--accent)','#e8a33d')}"/>
-        <input type="text" id="bf-shelf-text" value="${esc(b.shelfMark?.text || '')}" maxlength="4" placeholder="А1"/>
+        <input type="color" id="bf-shelf-color" value="${sanitizeColor(b.shelfMark?.color, '#e8a33d').replace('var(--accent)','#e8a33d')}" aria-label="Цвет метки"/>
+        <input type="text" id="bf-shelf-text" value="${esc(b.shelfMark?.text || '')}" maxlength="4" placeholder="А1" aria-label="Текст метки"/>
         <span class="shelf-mark-preview" id="bf-shelf-preview"
               style="background:${sanitizeColor(b.shelfMark?.color, 'var(--accent)')}">${esc(b.shelfMark?.text || '')}</span>
-        <button type="button" id="bf-shelf-clear" class="icon-btn" title="Убрать метку" aria-label="Убрать метку">${icon('close', 14)}</button>
+        <button type="button" id="bf-shelf-clear" class="icon-btn" aria-label="Убрать метку">${icon('close', 14)}</button>
       </div>
     </div>
 
@@ -1292,16 +1322,22 @@ function openBookForm(book = null) {
       <h3>${icon('fire', 15)} Дополнительные оценки</h3>
       <div class="form-hint mb-8">Оценки от 0 до 5 по каждому параметру</div>
       <div class="form-row-2">
-        ${extraRatingBlock('bf-pepper', '🌶️ Перчики', b.pepperRating)}
-        ${extraRatingBlock('bf-tear', '💧 Капельки', b.tearRating)}
-        ${extraRatingBlock('bf-intrigue', '❓ Интрига', b.intrigueRating)}
-        ${extraRatingBlock('bf-horror', '🤦 Жуткость', b.horrorRating)}
+        ${EXTRA_RATINGS.map(cfg => extraRowHtml(cfg, extraValues[cfg.id])).join('')}
       </div>
     </div>
     <div class="form-section">
       <h3>${icon('users', 15)} Герои книги</h3>
+      <div class="form-hint mb-8">Добавьте персонажей и оцените их</div>
       <div id="bf-characters-list">
-        ${(b.characters || []).map((ch, i) => characterRow(ch, i)).join('')}
+        ${(b.characters || []).map((ch, i) => `
+          <div class="character-row" data-char-idx="${i}">
+            <input type="text" class="char-name-input" value="${esc(ch.name || '')}" placeholder="Имя персонажа" style="flex:1"/>
+            <div class="char-stars">
+              ${[1,2,3,4,5].map(s => `<span class="char-star${(ch.rating || 0) >= s ? ' filled' : ''}" data-star="${s}">★</span>`).join('')}
+              <input type="hidden" class="char-rating" value="${ch.rating || 0}"/>
+            </div>
+            <button type="button" class="icon-btn char-del" title="Удалить" aria-label="Удалить">${icon('close', 14)}</button>
+          </div>`).join('')}
       </div>
       <button type="button" id="bf-add-char" class="btn-secondary mt-8" style="width:100%">＋ Добавить персонажа</button>
     </div>
@@ -1328,14 +1364,15 @@ function openBookForm(book = null) {
       <h3>${icon('sparkles', 15)} Тропы</h3>
       <div class="form-group">
         <label>Тропы книги (через запятую)</label>
-        <input type="text" id="bf-tropes" value="${esc((b.tropes || []).join(', '))}" placeholder="enemies to lovers, slow burn"/>
+        <input type="text" id="bf-tropes" value="${esc((b.tropes || []).join(', '))}" placeholder="enemies to lovers, slow burn, академия магии"/>
+        <div class="form-hint">Тропы помогают находить книги по сюжетным паттернам</div>
       </div>
     </div>
     <div class="form-section">
       <h3>${icon('film', 15)} Для блога</h3>
       <div class="toggle-row">
         <span class="toggle-label">${icon('box', 13)} Получена от издательства (PR)</span>
-        <div class="toggle ${b.isPR ? 'active' : ''}" id="bf-pr-toggle"></div>
+        <div class="toggle ${b.isPR ? 'active' : ''}" id="bf-pr-toggle" role="switch" aria-checked="${!!b.isPR}" tabindex="0"></div>
       </div>
       <div id="bf-pr-fields" class="${b.isPR ? '' : 'hidden'}">
         <div class="form-group"><label>От кого</label><input type="text" id="bf-received-from" value="${esc(b.receivedFrom || '')}" placeholder="Издательство ЭКСМО"/></div>
@@ -1346,7 +1383,7 @@ function openBookForm(book = null) {
       <h3>${icon('users', 15)} Совместное чтение</h3>
       <div class="toggle-row">
         <span class="toggle-label">Читаем вместе с кем-то</span>
-        <div class="toggle ${b.jointReading?.active ? 'active' : ''}" id="bf-joint-toggle"></div>
+        <div class="toggle ${b.jointReading?.active ? 'active' : ''}" id="bf-joint-toggle" role="switch" aria-checked="${!!b.jointReading?.active}" tabindex="0"></div>
       </div>
       <div id="bf-joint-fields" class="${b.jointReading?.active ? '' : 'hidden'}">
         <div class="form-group"><label>Участники (через запятую)</label><input type="text" id="bf-joint-people" value="${esc((b.jointReading?.participants || []).join(', '))}" placeholder="Аня, Маша, Катя"/></div>
@@ -1365,7 +1402,6 @@ function openBookForm(book = null) {
   `;
 
   const fb = DOM.formBody;
-
   fb.querySelector('#bf-scan').addEventListener('click', () => { closeOverlay(DOM.formOverlay); openScanner(); });
   fb.querySelector('#bf-find').addEventListener('click', () => {
     const isbn = fb.querySelector('#bf-isbn').value.trim();
@@ -1381,8 +1417,11 @@ function openBookForm(book = null) {
     btn.disabled = true;
     const result = await extractBookPreview(url);
     btn.disabled = false;
-    if (result && result.merged && result.merged.title) openMicrolinkPreview(result, fb);
-    else showToast('❌ Не удалось извлечь данные', 'error');
+    if (result && result.merged && result.merged.title) {
+      openMicrolinkPreview(result, fb);
+    } else {
+      showToast('❌ Не удалось извлечь данные', 'error');
+    }
   });
 
   function updateCoverPreview() {
@@ -1395,7 +1434,7 @@ function openBookForm(book = null) {
   fb.querySelector('#bf-cover').addEventListener('input', debounce(updateCoverPreview, 400));
   updateCoverPreview();
 
-  // 🆕 v3.8.4: живой предпросмотр метки полки
+  // 🆕 v3.8.5: живой предпросмотр метки полки
   const shelfColor = fb.querySelector('#bf-shelf-color');
   const shelfText = fb.querySelector('#bf-shelf-text');
   const shelfPrev = fb.querySelector('#bf-shelf-preview');
@@ -1452,34 +1491,80 @@ function openBookForm(book = null) {
 
   attachSeriesAutocomplete(fb.querySelector('#bf-series'), S.books, (name) => {
     const total = getSeriesTotal(S.books, name);
-    if (total && !fb.querySelector('#bf-series-total').value) fb.querySelector('#bf-series-total').value = total;
+    if (total && !fb.querySelector('#bf-series-total').value) {
+      fb.querySelector('#bf-series-total').value = total;
+    }
   });
   attachCustomSelect(fb.querySelector('#bf-currency'), {});
-  // 🆕 v3.8.4: статус — кастомный селект с SVG
+  // 🆕 v3.8.5: статус — кастомный селект с SVG
   attachCustomSelect(fb.querySelector('#bf-status'), {
     renderOption: (opt) => `<span style="display:flex;align-items:center;gap:8px">${statusIcon(opt.value, 14)} ${esc(BOOK_STATUSES[opt.value]?.label || opt.textContent)}</span>`,
     renderTrigger: (opt) => `<span style="display:flex;align-items:center;gap:8px">${statusIcon(opt.value, 14)} ${esc(BOOK_STATUSES[opt.value]?.label || opt.textContent)}</span>`,
   });
+  // 🆕 v3.8.5: дата-пикер для даты получения PR
+  attachDatePicker(fb.querySelector('#bf-received-date'));
 
-  fb.querySelector('#bf-pr-toggle').addEventListener('click', function() {
+  const prToggle = fb.querySelector('#bf-pr-toggle');
+  const togglePr = function() {
     this.classList.toggle('active');
+    this.setAttribute('aria-checked', this.classList.contains('active'));
     fb.querySelector('#bf-pr-fields').classList.toggle('hidden');
+  };
+  prToggle.addEventListener('click', togglePr);
+  prToggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePr.call(prToggle); }
   });
-  fb.querySelector('#bf-joint-toggle').addEventListener('click', function() {
+
+  const jointToggle = fb.querySelector('#bf-joint-toggle');
+  const toggleJoint = function() {
     this.classList.toggle('active');
+    this.setAttribute('aria-checked', this.classList.contains('active'));
     fb.querySelector('#bf-joint-fields').classList.toggle('hidden');
+  };
+  jointToggle.addEventListener('click', toggleJoint);
+  jointToggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleJoint.call(jointToggle); }
   });
 
   bindExtraRatings(fb);
-  refreshCharList(fb);
 
+  function refreshCharList() {
+    const list = fb.querySelector('#bf-characters-list');
+    if (!list) return;
+    list.querySelectorAll('.char-del').forEach(btn => {
+      btn.onclick = () => btn.closest('.character-row').remove();
+    });
+    list.querySelectorAll('.char-star').forEach(star => {
+      const row = star.closest('.char-stars');
+      const ratingInput = row.querySelector('.char-rating');
+      const allStars = row.querySelectorAll('.char-star');
+      let cv = parseInt(ratingInput?.value || 0);
+      const update = (v) => allStars.forEach((s, i) => s.classList.toggle('filled', i < v));
+      star.onclick = () => {
+        const v = parseInt(star.dataset.star);
+        cv = (cv === v) ? 0 : v;
+        if (ratingInput) ratingInput.value = cv;
+        update(cv);
+      };
+      star.onmouseenter = () => update(parseInt(star.dataset.star));
+      star.onmouseleave = () => update(cv);
+    });
+  }
+  refreshCharList();
   fb.querySelector('#bf-add-char')?.addEventListener('click', () => {
     const list = fb.querySelector('#bf-characters-list');
     const row = document.createElement('div');
     row.className = 'character-row';
-    row.innerHTML = characterRow(null, list.children.length);
+    row.innerHTML = `
+      <input type="text" class="char-name-input" placeholder="Имя персонажа" style="flex:1"/>
+      <div class="char-stars">
+        ${[1,2,3,4,5].map(s => `<span class="char-star" data-star="${s}">★</span>`).join('')}
+        <input type="hidden" class="char-rating" value="0"/>
+      </div>
+      <button type="button" class="icon-btn char-del" title="Удалить" aria-label="Удалить">${icon('close', 14)}</button>
+    `;
     list.appendChild(row);
-    refreshCharList(fb);
+    refreshCharList();
   });
 
   fb.querySelector('#bf-save').addEventListener('click', () => saveBookForm(selectedTags, selectedFormats));
@@ -1498,75 +1583,8 @@ function openBookForm(book = null) {
   openOverlay(DOM.formOverlay);
 }
 
-// Хелперы формы
-function extraRatingBlock(id, label, val) {
-  val = val || 0;
-  return `
-    <div class="form-group">
-      <label>${label}</label>
-      <div class="extra-rating-row" data-rating-id="${id}">
-        ${[1,2,3,4,5].map(i => `<span class="extra-star${val >= i ? ' filled' : ''}" data-val="${i}">★</span>`).join('')}
-        <input type="hidden" id="${id}" value="${val}"/>
-      </div>
-    </div>
-  `;
-}
-function bindExtraRatings(fb) {
-  fb.querySelectorAll('.extra-rating-row').forEach(row => {
-    const input = fb.querySelector('#' + row.dataset.ratingId);
-    const stars = row.querySelectorAll('.extra-star');
-    let currentVal = parseInt(input?.value || 0);
-    const update = (v) => stars.forEach((s, i) => s.classList.toggle('filled', i < v));
-    stars.forEach(s => {
-      s.addEventListener('click', () => {
-        const v = parseInt(s.dataset.val);
-        currentVal = (currentVal === v) ? 0 : v;
-        if (input) input.value = currentVal;
-        update(currentVal);
-      });
-      s.addEventListener('mouseenter', () => update(parseInt(s.dataset.val)));
-      s.addEventListener('mouseleave', () => update(currentVal));
-    });
-  });
-}
-function characterRow(ch, i) {
-  ch = ch || {};
-  return `
-    <div class="character-row" data-char-idx="${i}">
-      <input type="text" class="char-name-input" value="${esc(ch.name || '')}" placeholder="Имя персонажа" style="flex:1"/>
-      <div class="char-stars">
-        ${[1,2,3,4,5].map(s => `<span class="char-star${(ch.rating || 0) >= s ? ' filled' : ''}" data-star="${s}">★</span>`).join('')}
-        <input type="hidden" class="char-rating" value="${ch.rating || 0}"/>
-      </div>
-      <button type="button" class="icon-btn char-del" title="Удалить" aria-label="Удалить">${icon('close', 14)}</button>
-    </div>
-  `;
-}
-function refreshCharList(fb) {
-  const list = fb.querySelector('#bf-characters-list');
-  if (!list) return;
-  list.querySelectorAll('.char-del').forEach(btn => {
-    btn.onclick = () => btn.closest('.character-row').remove();
-  });
-  list.querySelectorAll('.char-star').forEach(star => {
-    const row = star.closest('.char-stars');
-    const ratingInput = row.querySelector('.char-rating');
-    const allStars = row.querySelectorAll('.char-star');
-    let cv = parseInt(ratingInput?.value || 0);
-    const update = (v) => allStars.forEach((s, i) => s.classList.toggle('filled', i < v));
-    star.onclick = () => {
-      const v = parseInt(star.dataset.star);
-      cv = (cv === v) ? 0 : v;
-      if (ratingInput) ratingInput.value = cv;
-      update(cv);
-    };
-    star.onmouseenter = () => update(parseInt(star.dataset.star));
-    star.onmouseleave = () => update(cv);
-  });
-}
-
 // ═══════════════════════════════════════════════
-//  СОХРАНЕНИЕ ФОРМЫ (🆕 метка полки + кэш обложек)
+//  СОХРАНЕНИЕ ФОРМЫ (🆕 shelfMark)
 // ═══════════════════════════════════════════════
 async function saveBookForm(selectedTags, selectedFormats) {
   const f = DOM.formBody;
@@ -1581,7 +1599,7 @@ async function saveBookForm(selectedTags, selectedFormats) {
   const tropes = f.querySelector('#bf-tropes').value.split(',').map(t => t.trim()).filter(Boolean);
   const formats = selectedFormats ? [...selectedFormats] : [];
 
-  // 🆕 v3.8.4: метка полки
+  // 🆕 v3.8.5: метка полки
   const shelfText = f.querySelector('#bf-shelf-text').value.trim();
   const shelfMark = shelfText
     ? { color: f.querySelector('#bf-shelf-color').value, text: shelfText }
@@ -1602,7 +1620,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
     series: f.querySelector('#bf-series').value.trim(),
     seriesNumber: parseInt(f.querySelector('#bf-series-num').value) || null,
     seriesTotal: parseInt(f.querySelector('#bf-series-total').value) || null,
-    price: { amount: parseFloat(f.querySelector('#bf-price').value) || 0, currency: f.querySelector('#bf-currency').value },
+    price: {
+      amount: parseFloat(f.querySelector('#bf-price').value) || 0,
+      currency: f.querySelector('#bf-currency').value,
+    },
     status: f.querySelector('#bf-status').value,
     currentPage: parseInt(f.querySelector('#bf-page').value) || 0,
     rating: parseInt(f.querySelector('#bf-rating').value) || 0,
@@ -1655,7 +1676,6 @@ async function saveBookForm(selectedTags, selectedFormats) {
     }
   }
 
-  // Обложка → Blob + 🆕 кэш Object URL
   const coverVal = bookData.cover;
   if (coverVal && coverVal.startsWith('data:')) {
     try {
@@ -1668,7 +1688,7 @@ async function saveBookForm(selectedTags, selectedFormats) {
       if (isValidCoverBlob(blob)) {
         await saveCover(bookData.id, blob);
         bookData.coverUrl = URL.createObjectURL(blob);
-        cacheCoverUrl(bookData.id, bookData.coverUrl); // 🆕
+        cacheCoverUrl(bookData.id, bookData.coverUrl);
         bookData.cover = '';
       }
     } catch (err) { console.warn('[Cover] dataURL save failed:', err); }
@@ -1678,7 +1698,7 @@ async function saveBookForm(selectedTags, selectedFormats) {
       if (isValidCoverBlob(blob)) {
         await saveCover(bookData.id, blob);
         bookData.coverUrl = URL.createObjectURL(blob);
-        cacheCoverUrl(bookData.id, bookData.coverUrl); // 🆕
+        cacheCoverUrl(bookData.id, bookData.coverUrl);
       } else {
         bookData.coverUrl = coverVal;
       }
@@ -1697,9 +1717,8 @@ function pickTagColor(i) {
   const colors = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#8aa3c9','#e0955c','#d97b6c'];
   return colors[i % colors.length];
 }
-
 // ═══════════════════════════════════════════════
-//  MICROLINK ПРЕДПРОСМОТР
+//  MICROLINK ПРЕДПРОСМОТР (маппинг полей)
 // ═══════════════════════════════════════════════
 function openMicrolinkPreview(result, fb) {
   const { merged, fields } = result;
@@ -1800,7 +1819,7 @@ async function handleWebSearch() {
   const resultsEl = fb.querySelector('#bf-webresults');
   if (!query) { showToast('⚠️ Введите название или автора', 'error'); return; }
 
-  resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу в интернете...</div>`;
+  resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу в интернете...</div>';
 
   const litresKeys = S.settings.lrAppId && S.settings.lrSecret
     ? { appId: S.settings.lrAppId, secretKey: S.settings.lrSecret } : null;
@@ -1876,12 +1895,45 @@ async function handleIsbnLookup(isbnInput) {
 }
 
 // ═══════════════════════════════════════════════
-//  КАРТОЧКА КНИГИ (🆕 метка полки в detail)
+//  🆕 v3.8.5: SVG-характеристики (Горячесть/Слезливость/...)
+// ═══════════════════════════════════════════════
+function extraDotsSvg(iconName, value, color) {
+  let out = '';
+  for (let i = 1; i <= 5; i++) {
+    out += `<span style="opacity:${i <= value ? 1 : .25};color:${color};display:inline-flex">${icon(iconName, 12)}</span>`;
+  }
+  return out;
+}
+function extraDisplayHtml(book) {
+  const items = [
+    { icon: 'pepper',   label: 'Горячесть',   color: 'var(--red)',    value: book.pepperRating || 0 },
+    { icon: 'droplet',  label: 'Слезливость', color: 'var(--cyan)',   value: book.tearRating || 0 },
+    { icon: 'mystery',  label: 'Интрига',     color: 'var(--purple)', value: book.intrigueRating || 0 },
+    { icon: 'facePalm', label: 'Жуткость',    color: 'var(--orange)', value: book.horrorRating || 0 },
+  ].filter(x => x.value > 0);
+  if (items.length === 0) return '';
+  return `
+    <div class="detail-section">
+      <h3>${icon('fire', 14)} Характеристики</h3>
+      <div class="extra-ratings-display">
+        ${items.map(x => `
+          <div class="extra-rating-item">
+            <span class="extra-label" style="color:${x.color}">${icon(x.icon, 12)} ${x.label}</span>
+            <span class="extra-dots">${extraDotsSvg(x.icon, x.value, x.color)}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════
+//  КАРТОЧКА КНИГИ (🆕 метка полки + SVG-характеристики)
 // ═══════════════════════════════════════════════
 function openBookDetail(bookId) {
   const book = S.books.find(b => b.id === bookId);
   if (!book) return;
-  DOM.detailTitle.textContent = book.title || 'Книга';
+  DOM.detailTitle.innerHTML = icon('bookOpen', 18) + ' ' + esc(book.title || 'Книга');
   const st = BOOK_STATUSES[book.status] || BOOK_STATUSES.wishlist;
   const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCount) * 100) : 0;
   const contentItems = book.contentItems || [];
@@ -1889,7 +1941,7 @@ function openBookDetail(bookId) {
   const quotes = review.quotes || [];
   const jr = book.jointReading || {};
 
-  // 🆕 v3.8.4: метка полки
+  // 🆕 v3.8.5: метка полки в строке заголовка
   const markHtml = (book.shelfMark?.text)
     ? `<span class="shelf-mark" style="background:${sanitizeColor(book.shelfMark.color, 'var(--accent)')}">${esc(book.shelfMark.text)}</span>`
     : '';
@@ -1963,15 +2015,18 @@ function openBookDetail(bookId) {
     <div class="detail-section">
       <h3>${icon('film', 14)} Контент по книге (${contentItems.length})</h3>
       ${contentItems.length === 0 ? '<div class="text-muted text-small">Пока нет контента</div>'
-        : contentItems.map(c => `
-          <div class="content-list-item content-clickable" data-content-id="${c.id}" title="Открыть контент">
-            <span class="content-list-icon">${icon(CONTENT_TYPE_ICONS[c.type] || 'film', 18)}</span>
-            <div class="content-list-info">
-              <div class="content-list-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
-              <div class="content-list-sub">${platformIcon(c.platform, 11)} ${PLATFORM_LABELS[c.platform] || c.platform}${c.publishedDate ? ' · ' + c.publishedDate : ''}</div>
-            </div>
-            <span class="content-list-status status-${c.status}">${icon(CONTENT_STATUS_ICONS[c.status] || 'film', 12)} ${CONTENT_STATUS_LABELS[c.status] || c.status}</span>
-          </div>`).join('')}
+        : contentItems.map(c => {
+            const cs = CONTENT_STATUSES[c.status] || { label: c.status, class: '' };
+            return `
+            <div class="content-list-item content-clickable" data-content-id="${c.id}" title="Открыть контент">
+              <span class="content-list-icon">${icon(CONTENT_TYPE_ICONS[c.type] || 'film', 20)}</span>
+              <div class="content-list-info">
+                <div class="content-list-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
+                <div class="content-list-sub">${platformIcon(c.platform, 11)} ${PLATFORM_LABELS[c.platform] || c.platform}${c.publishedDate ? ' · ' + c.publishedDate : ''}</div>
+              </div>
+              <span class="content-list-status ${cs.class}">${icon(CONTENT_STATUS_ICONS[c.status] || 'film', 12)} ${cs.label}</span>
+            </div>`;
+          }).join('')}
       <button id="detail-add-content" class="btn-secondary mt-8" style="width:100%">＋ Добавить контент</button>
     </div>
     <div class="detail-section">
@@ -1991,16 +2046,7 @@ function openBookDetail(bookId) {
       </div>
       <button id="dq-ocr" class="btn-secondary mt-8" style="width:100%">${icon('camera', 14)} Сфотографировать цитату (OCR)</button>
     </div>
-    ${(book.pepperRating > 0 || book.tearRating > 0 || book.intrigueRating > 0 || book.horrorRating > 0) ? `
-      <div class="detail-section">
-        <h3>${icon('fire', 14)} Характеристики</h3>
-        <div class="extra-ratings-display">
-          ${book.pepperRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">🌶️ Горячесть</span><span class="extra-dots">${'🌶️'.repeat(book.pepperRating)}${'·'.repeat(5-book.pepperRating)}</span></div>` : ''}
-          ${book.tearRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">💧 Слёзы</span><span class="extra-dots">${'💧'.repeat(book.tearRating)}${'·'.repeat(5-book.tearRating)}</span></div>` : ''}
-          ${book.intrigueRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">❓ Интрига</span><span class="extra-dots">${'❓'.repeat(book.intrigueRating)}${'·'.repeat(5-book.intrigueRating)}</span></div>` : ''}
-          ${book.horrorRating > 0 ? `<div class="extra-rating-item"><span class="extra-label">🤦 Жуть</span><span class="extra-dots">${'🤦'.repeat(book.horrorRating)}${'·'.repeat(5-book.horrorRating)}</span></div>` : ''}
-        </div>
-      </div>` : ''}
+    ${extraDisplayHtml(book)}
     ${(book.characters || []).length > 0 ? `
       <div class="detail-section">
         <h3>${icon('users', 14)} Герои книги</h3>
@@ -2049,7 +2095,10 @@ function openBookDetail(bookId) {
   if (coverImg) coverImg.addEventListener('click', () => openCoverViewer(book));
   const coverPh = db.querySelector('#detail-cover-ph');
   if (coverPh) coverPh.addEventListener('click', () => openCoverViewer(book));
-  db.querySelector('.status-btn').addEventListener('click', (e) => { e.stopPropagation(); openStatusDropdown(e.currentTarget, book.id); });
+  db.querySelector('.status-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openStatusDropdown(e.currentTarget, book.id);
+  });
   db.querySelector('#detail-edit').addEventListener('click', () => { closeOverlay(DOM.detailOverlay); openBookForm(book); });
   db.querySelector('#detail-delete').addEventListener('click', async () => {
     const ok = await showConfirm('Удалить эту книгу?', { danger: true, okText: 'Удалить' });
@@ -2062,7 +2111,9 @@ function openBookDetail(bookId) {
   });
   db.querySelector('#detail-add-content').addEventListener('click', () => { closeOverlay(DOM.detailOverlay); openContentForm(null, book.id, S.settings); });
   db.querySelector('#detail-edit-review').addEventListener('click', () => { closeOverlay(DOM.detailOverlay); openReviewForm(book.id); });
-  db.querySelector('#detail-collections').addEventListener('click', () => { openBookCollectionsPicker(book.id, S.books, S.collections, refreshData); });
+  db.querySelector('#detail-collections').addEventListener('click', () => {
+    openBookCollectionsPicker(book.id, S.books, S.collections, refreshData);
+  });
   db.querySelectorAll('.tag-chip').forEach(chip => {
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2071,11 +2122,12 @@ function openBookDetail(bookId) {
       renderTab('books');
     });
   });
+  // 🆕 v3.8.5: контент → read-only карточка
   db.querySelectorAll('.content-clickable').forEach(el => {
     el.addEventListener('click', () => {
       const item = contentItems.find(c => c.id === el.dataset.contentId);
       closeOverlay(DOM.detailOverlay);
-      openContentForm(item, book.id, S.settings);
+      openContentDetail(item, book, { settings: S.settings });
     });
   });
 
@@ -2106,7 +2158,7 @@ function openBookDetail(bookId) {
 }
 
 // ═══════════════════════════════════════════════
-//  ПРОСМОТР ОБЛОЖКИ (🆕 кэш Object URL)
+//  ПРОСМОТР ОБЛОЖКИ
 // ═══════════════════════════════════════════════
 let _coverBookId = null;
 function openCoverViewer(book) {
@@ -2149,8 +2201,7 @@ async function handleCoverPhotoChange(e) {
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.88));
     if (!isValidCoverBlob(blob)) { hideLoading(); showToast('❌ Не удалось обработать изображение', 'error'); return; }
     await saveCover(_coverBookId, blob);
-    const url = URL.createObjectURL(blob);
-    cacheCoverUrl(_coverBookId, url); // 🆕
+    cacheCoverUrl(_coverBookId, URL.createObjectURL(blob));
     hideLoading();
     closeOverlay(DOM.coverOverlay);
     await refreshData();
@@ -2204,6 +2255,110 @@ async function handleDeleteReview(bookId) {
 }
 
 // ═══════════════════════════════════════════════
+//  🆕 v3.8.5: FAB-МЕНЮ «+»
+// ═══════════════════════════════════════════════
+function toggleFabMenu() {
+  if (document.querySelector('.fab-menu')) closeFabMenu();
+  else openFabMenu();
+}
+function closeFabMenu() {
+  document.querySelector('.fab-menu')?.remove();
+}
+function openFabMenu() {
+  closeFabMenu();
+  const menu = document.createElement('div');
+  menu.className = 'fab-menu';
+  menu.innerHTML = FAB_ITEMS.map(it => `
+    <button class="fab-menu-item" data-fab="${it.id}">
+      ${icon(it.icon, 16)} ${it.label}
+    </button>
+  `).join('');
+  document.body.appendChild(menu);
+
+  menu.querySelectorAll('[data-fab]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFabMenu();
+      fabAction(btn.dataset.fab);
+    });
+  });
+}
+function fabAction(id) {
+  switch (id) {
+    case 'book': openBookForm(); break;
+    case 'content': openContentForm(null, null, S.settings); break;
+    case 'review': openBookPicker(b => openReviewForm(b.id), 'Выберите книгу для отзыва'); break;
+    case 'challenge': openChallengeForm(null, S.books, async (data) => {
+      await createChallenge(data); await refreshData(); showToast('✅ Челлендж создан', 'success');
+    }); break;
+    case 'series': openBookPicker(b => {
+      openBookForm(b);
+      showToast('Укажите серию в форме', 'info');
+    }, 'Выберите книгу для серии'); break;
+    case 'collection': openCollectionForm(null, async (data) => {
+      data.order = await getNextCollectionOrder();
+      await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success');
+    }); break;
+  }
+}
+
+// 🆕 v3.8.5: выбор книги (для отзыва / серии)
+function openBookPicker(onPick, titleText = 'Выберите книгу') {
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="overlay-panel" style="max-height:80dvh">
+      <div class="overlay-header">
+        <h2>${icon('bookClosed', 16)} ${esc(titleText)}</h2>
+        <button class="icon-btn bp-close">${icon('close', 16)}</button>
+      </div>
+      <div class="overlay-body">
+        <div class="form-group">
+          <input type="text" id="bp-search" placeholder="Поиск по названию или автору..." autocomplete="off"/>
+        </div>
+        <div id="bp-list">
+          ${S.books.filter(b => b.id !== '__no_book__').map(b => `
+            <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}" data-bp-id="${b.id}" style="cursor:pointer">
+              ${b.coverUrl
+                ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
+              <span class="picker-name" style="flex:1">${esc(b.title)}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+  trackOverlay(overlay);
+
+  const close = () => {
+    overlay.remove();
+    untrackOverlay(overlay);
+    document.body.style.overflow = '';
+  };
+  overlay.querySelector('.bp-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const search = overlay.querySelector('#bp-search');
+  search.addEventListener('input', () => {
+    const q = search.value.toLowerCase().trim();
+    overlay.querySelectorAll('#bp-list .picker-row').forEach(row => {
+      row.style.display = row.dataset.search.includes(q) ? '' : 'none';
+    });
+  });
+
+  overlay.querySelectorAll('#bp-list .picker-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const book = S.books.find(b => b.id === row.dataset.bpId);
+      close();
+      if (book) onPick(book);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════
 //  СЕРИИ / ПОДБОРКИ / ЧЕЛЛЕНДЖИ
 // ═══════════════════════════════════════════════
 function renderSeriesScreen() {
@@ -2215,25 +2370,39 @@ function renderSeriesScreen() {
       onBack: () => { S.openSeries = null; renderSeriesScreen(); },
     });
   } else {
-    renderSeriesList(mc, S.books, { onOpenSeries: (name) => { S.openSeries = name; renderSeriesScreen(); } });
+    renderSeriesList(mc, S.books, {
+      onOpenSeries: (name) => { S.openSeries = name; renderSeriesScreen(); },
+    });
   }
 }
+
 function renderCollectionsScreen() {
   const mc = DOM.mainContent;
   const col = S.collections.find(c => c.id === S.openCollection);
   if (col) {
     renderCollectionDetail(mc, col, S.books, {
       onOpenBook: openBookDetail,
-      onRemoveBook: async (colId, bookId) => { await removeBookFromCol(colId, bookId); await refreshData(); showToast('Убрано из подборки', 'info'); },
+      onRemoveBook: async (colId, bookId) => {
+        await removeBookFromCol(colId, bookId);
+        await refreshData();
+        showToast('Убрано из подборки', 'info');
+      },
       onAddBook: (colId) => openAddBooksToCollection(colId, S.books, col, refreshData),
       onBack: () => { S.openCollection = null; renderCollectionsScreen(); },
-      onEdit: (c) => openCollectionForm(c, async (data) => { await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success'); }),
+      onEdit: (c) => openCollectionForm(c, async (data) => {
+        await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success');
+      }),
     });
   } else {
     renderCollectionsList(mc, S.books, S.collections, {
       onOpen: (id) => { S.openCollection = id; renderCollectionsScreen(); },
-      onAdd: () => openCollectionForm(null, async (data) => { data.order = await getNextCollectionOrder(); await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success'); }),
-      onEdit: (c) => openCollectionForm(c, async (data) => { await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success'); }),
+      onAdd: () => openCollectionForm(null, async (data) => {
+        data.order = await getNextCollectionOrder();
+        await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success');
+      }),
+      onEdit: (c) => openCollectionForm(c, async (data) => {
+        await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success');
+      }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить подборку?', { danger: true, okText: 'Удалить' });
         if (ok) { await deleteCollection(id); await refreshData(); showToast('🗑️ Подборка удалена', 'info'); }
@@ -2243,13 +2412,16 @@ function renderCollectionsScreen() {
     });
   }
 }
+
 function renderChallenges() {
   const mc = DOM.mainContent;
   const ch = S.challenges.find(c => c.id === S.openChallenge);
   if (ch) {
     renderChallengeDetail(mc, ch, S.books, {
       onBack: () => { S.openChallenge = null; renderChallenges(); },
-      onEdit: (c) => openChallengeForm(c, S.books, async (data) => { await updateChallenge(data); await refreshData(); showToast('✅ Сохранено', 'success'); }),
+      onEdit: (c) => openChallengeForm(c, S.books, async (data) => {
+        await updateChallenge(data); await refreshData(); showToast('✅ Сохранено', 'success');
+      }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить челлендж?', { danger: true, okText: 'Удалить' });
         if (ok) { await deleteChallengeById(id); S.openChallenge = null; await refreshData(); showToast('🗑️ Челлендж удалён', 'info'); }
@@ -2261,8 +2433,12 @@ function renderChallenges() {
         const c = challenges.find(x => x.id === chId);
         if (c) { c.status = status; await updateChallenge(c); }
         await refreshData();
-        if (status === 'completed' && S.settings.confetti) { fireConfetti(); showToast('🏆 Челлендж завершён! 🎉', 'success'); }
-        else showToast(`Статус: ${status === 'active' ? 'Активен' : 'Завершён'}`, 'success');
+        if (status === 'completed' && S.settings.confetti) {
+          fireConfetti();
+          showToast('🏆 Челлендж завершён! 🎉', 'success');
+        } else {
+          showToast(`Статус: ${status === 'active' ? 'Активен' : 'Завершён'}`, 'success');
+        }
       },
       onAddNote: async (chId, text) => { await addChallengeNote(chId, text); await refreshData(); },
       onDelNote: async (chId, idx) => { await removeChallengeNote(chId, idx); await refreshData(); },
@@ -2270,8 +2446,12 @@ function renderChallenges() {
   } else {
     renderChallengesList(mc, S.challenges, S.books, {
       onOpen: (id) => { S.openChallenge = id; renderChallenges(); },
-      onAdd: () => openChallengeForm(null, S.books, async (data) => { await createChallenge(data); await refreshData(); showToast('✅ Челлендж создан', 'success'); }),
-      onEdit: (c) => openChallengeForm(c, S.books, async (data) => { await updateChallenge(data); await refreshData(); }),
+      onAdd: () => openChallengeForm(null, S.books, async (data) => {
+        await createChallenge(data); await refreshData(); showToast('✅ Челлендж создан', 'success');
+      }),
+      onEdit: (c) => openChallengeForm(c, S.books, async (data) => {
+        await updateChallenge(data); await refreshData();
+      }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить челлендж?', { danger: true, okText: 'Удалить' });
         if (ok) { await deleteChallengeById(id); await refreshData(); showToast('🗑️ Удалён', 'info'); }
@@ -2281,7 +2461,7 @@ function renderChallenges() {
 }
 
 // ═══════════════════════════════════════════════
-//  КАЛЕНДАРЬ: день
+//  КАЛЕНДАРЬ: день (🆕 контент → read-only карточка)
 // ═══════════════════════════════════════════════
 function showDayContent(dateStr) {
   const dayContent = [];
@@ -2300,19 +2480,25 @@ function showDayContent(dateStr) {
   ov.innerHTML = `
     <div class="overlay-panel" style="max-width:420px">
       <div class="overlay-header">
-        <h2>${icon('calendar', 16)} ${esc(dateStr)}</h2>
-        <button class="icon-btn day-ov-close">${icon('close', 16)}</button>
+        <h2>${icon('calendar', 18)} ${esc(dateStr)}</h2>
+        <button class="icon-btn day-ov-close">${icon('close', 18)}</button>
       </div>
       <div class="overlay-body">
-        ${dayContent.map(c => `
-          <div class="content-list-item content-clickable" data-book-id="${c.bookId}" data-content-id="${c.id}" style="cursor:pointer;margin-bottom:8px">
-            <span class="content-list-icon">${icon(CONTENT_TYPE_ICONS[c.type] || 'film', 18)}</span>
+        ${dayContent.map(c => {
+          const t = CONTENT_TYPES[c.type] || { label: c.type };
+          const s = CONTENT_STATUSES[c.status] || { label: c.status, class: '' };
+          return `
+          <div class="content-list-item content-clickable"
+               data-book-id="${c.bookId}" data-content-id="${c.id}"
+               style="cursor:pointer;margin-bottom:8px">
+            <span class="content-list-icon">${icon(CONTENT_TYPE_ICONS[c.type] || 'film', 20)}</span>
             <div class="content-list-info">
-              <div class="content-list-title">${esc(c.title || CONTENT_LABELS[c.type] || c.type)}</div>
+              <div class="content-list-title">${esc(c.title || t.label)}</div>
               <div class="content-list-sub">${esc(c.bookTitle)}</div>
             </div>
-            <span class="content-list-status status-${c.status}">${CONTENT_STATUS_LABELS[c.status] || c.status}</span>
-          </div>`).join('')}
+            <span class="content-list-status ${s.class}">${icon(CONTENT_STATUS_ICONS[c.status] || 'film', 12)} ${s.label}</span>
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
   document.body.appendChild(ov);
@@ -2325,13 +2511,13 @@ function showDayContent(dateStr) {
       const bk = S.books.find(b => b.id === el.dataset.bookId);
       const item = (bk?.contentItems || []).find(c => c.id === el.dataset.contentId);
       closeDay();
-      if (item) openContentForm(item, el.dataset.bookId, S.settings);
+      if (item) openContentDetail(item, bk, { settings: S.settings });
     });
   });
 }
 
 // ═══════════════════════════════════════════════
-//  НАСТРОЙКИ (🆕 SVG-заголовки, без секрета, v3.8.4)
+//  НАСТРОЙКИ (🆕 площадка через attachCustomSelect)
 // ═══════════════════════════════════════════════
 function renderSettingsTab() {
   const s = S.settings;
@@ -2341,7 +2527,7 @@ function renderSettingsTab() {
       <h3>${icon('film', 15)} Режим бук-блогера</h3>
       <div class="toggle-row">
         <span class="toggle-label">Включить блогерские функции</span>
-        <div class="toggle ${s.bloggerMode ? 'active' : ''}" id="set-blogger"></div>
+        <div class="toggle ${s.bloggerMode ? 'active' : ''}" id="set-blogger" role="switch" aria-checked="${!!s.bloggerMode}" tabindex="0"></div>
       </div>
     </div>
     <div class="settings-section">
@@ -2352,9 +2538,9 @@ function renderSettingsTab() {
           ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${s.defaultCurrency === k ? 'selected' : ''}>${c.symbol} ${c.name}</option>`).join('')}
         </select>
       </div>
-      <div class="toggle-row"><span class="toggle-label">Показывать цену в карточках</span><div class="toggle ${s.showPriceInCards ? 'active' : ''}" id="set-price-cards"></div></div>
-      <div class="toggle-row"><span class="toggle-label">Показывать цену на странице книги</span><div class="toggle ${s.showPriceInDetail ? 'active' : ''}" id="set-price-detail"></div></div>
-      <div class="toggle-row"><span class="toggle-label">Показывать цену в статистике</span><div class="toggle ${s.showPriceInStats ? 'active' : ''}" id="set-price-stats"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену в карточках</span><div class="toggle ${s.showPriceInCards ? 'active' : ''}" id="set-price-cards" role="switch" tabindex="0"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену на странице книги</span><div class="toggle ${s.showPriceInDetail ? 'active' : ''}" id="set-price-detail" role="switch" tabindex="0"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену в статистике</span><div class="toggle ${s.showPriceInStats ? 'active' : ''}" id="set-price-stats" role="switch" tabindex="0"></div></div>
       <div class="hint mt-8">Курсы валют обновлены: ${s.ratesUpdated || 'никогда'} · 1 USD = ${s.exchangeRates.USD} ₽</div>
       <button id="set-rates-update" class="btn-secondary mt-8">${icon('refresh', 13)} Обновить курсы</button>
     </div>
@@ -2368,7 +2554,7 @@ function renderSettingsTab() {
       <div id="set-tags-list">
         ${S.tags.map(t => `
           <div class="flex items-center gap-8 mb-8">
-            <input type="color" data-tag-color="${esc(t.name)}" value="${t.color || '#e8a33d'}" style="width:44px;height:36px;padding:2px;border-radius:8px;cursor:pointer"/>
+            <input type="color" data-tag-color="${esc(t.name)}" value="${sanitizeColor(t.color, '#e8a33d').replace('var(--accent)','#e8a33d')}" style="width:44px;height:36px;padding:2px;border-radius:8px;cursor:pointer"/>
             <span class="flex-1 text-small">${esc(t.name)}</span>
             <button data-tag-del="${esc(t.name)}" class="icon-btn" style="width:30px;height:30px;font-size:.8rem" aria-label="Удалить тег">${icon('trash', 13)}</button>
           </div>
@@ -2388,7 +2574,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('bookClosed', 15)} ЛитРес API <span class="badge">опционально</span></h3>
-      <p class="hint">Улучшает поиск российских книг. Получите ключи:<br/>1. <a href="https://www.litres.ru/pages/reader_partner/" target="_blank" rel="noopener">litres.ru/pages/reader_partner</a><br/>2. Напишите на <a href="mailto:partners@litres.ru">partners@litres.ru</a></p>
+      <p class="hint">Улучшает поиск российских книг. Ключи задаются здесь и хранятся локально.</p>
       <details>
         <summary>Catalit API (поиск по ISBN и названию)</summary>
         <div class="form-group mt-8"><label>App ID</label><input type="text" id="set-lr-appid" value="${esc(s.lrAppId || '')}" placeholder="Ваш App ID"/></div>
@@ -2425,14 +2611,14 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('sparkles', 15)} Эффекты</h3>
-      <div class="toggle-row"><span class="toggle-label">Конфетти</span><div class="toggle ${s.confetti ? 'active' : ''}" id="set-confetti"></div></div>
-      <div class="toggle-row"><span class="toggle-label">Звуки</span><div class="toggle ${s.sound ? 'active' : ''}" id="set-sound"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Конфетти</span><div class="toggle ${s.confetti ? 'active' : ''}" id="set-confetti" role="switch" tabindex="0"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Звуки</span><div class="toggle ${s.sound ? 'active' : ''}" id="set-sound" role="switch" tabindex="0"></div></div>
     </div>
     <div class="settings-section">
       <h3>${icon('download', 15)} Данные</h3>
       <div class="btn-group">
         <button id="set-export" class="btn-secondary">Экспорт</button>
-        <button id="set-import" class="btn-secondary">Импорт</button>
+        <button id="set-import" class="btn-secondary">Импорт (синхронизация)</button>
       </div>
       <input type="file" id="set-import-file" accept=".json" class="hidden"/>
       <div class="btn-group"><button id="set-clear" class="btn-danger">Очистить всё</button></div>
@@ -2440,17 +2626,25 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.4 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.8.5 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
   const bind = (id, fn) => mc.querySelector(id)?.addEventListener('click', fn);
-  const bindToggle = (id, key) => mc.querySelector(id)?.addEventListener('click', function() {
-    this.classList.toggle('active');
-    S.settings[key] = this.classList.contains('active');
-    saveAppSettings();
-  });
-
+  const bindToggle = (id, key) => {
+    const el = mc.querySelector(id);
+    if (!el) return;
+    const fn = function() {
+      this.classList.toggle('active');
+      this.setAttribute('aria-checked', this.classList.contains('active'));
+      S.settings[key] = this.classList.contains('active');
+      saveAppSettings();
+    };
+    el.addEventListener('click', fn);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn.call(el); }
+    });
+  };
   bindToggle('#set-blogger', 'bloggerMode');
   bindToggle('#set-price-cards', 'showPriceInCards');
   bindToggle('#set-price-detail', 'showPriceInDetail');
@@ -2458,8 +2652,17 @@ function renderSettingsTab() {
   bindToggle('#set-confetti', 'confetti');
   bindToggle('#set-sound', 'sound');
 
-  mc.querySelector('#set-currency')?.addEventListener('change', function() { S.settings.defaultCurrency = this.value; saveAppSettings(); });
-  mc.querySelector('#set-platform')?.addEventListener('change', function() { S.settings.defaultPlatform = this.value; saveAppSettings(); });
+  mc.querySelector('#set-currency')?.addEventListener('change', function() {
+    S.settings.defaultCurrency = this.value; saveAppSettings();
+  });
+
+  // 🆕 v3.8.5: площадка через attachCustomSelect с brand-иконками
+  const platformSel = mc.querySelector('#set-platform');
+  const platformRenderer = (opt) => `<span style="display:flex;align-items:center;gap:8px">${platformIcon(opt.value, 14)} ${esc(opt.textContent)}</span>`;
+  attachCustomSelect(platformSel, { renderOption: platformRenderer, renderTrigger: platformRenderer });
+  platformSel?.addEventListener('change', function() {
+    S.settings.defaultPlatform = this.value; saveAppSettings();
+  });
 
   bind('#set-rates-update', async () => {
     const status = mc.querySelector('#set-rates-update');
@@ -2519,7 +2722,10 @@ function renderSettingsTab() {
     const r = await checkMicrolinkStatus(S.settings.microlinkApiKey);
     status.textContent = r.ok ? `✅ Работает · осталось ~${r.remaining} запросов` : `❌ ${r.error || 'Недоступен'}`;
   });
-  bind('#set-microlink-clear', async () => { await clearPreviewCache(); showToast('🗑️ Кеш превью очищен', 'info'); });
+  bind('#set-microlink-clear', async () => {
+    await clearPreviewCache();
+    showToast('🗑️ Кеш превью очищен', 'info');
+  });
 
   bind('#set-lr-test', async () => {
     const appId = mc.querySelector('#set-lr-appid').value.trim();
@@ -2551,13 +2757,18 @@ function renderSettingsTab() {
   });
   const importFile = mc.querySelector('#set-import-file');
   bind('#set-import', () => importFile.click());
+  // 🆕 v3.8.5: импорт = синхронизация (добавляет отсутствующее)
   importFile?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      await importAll(JSON.parse(await file.text()));
+      const result = await importAll(JSON.parse(await file.text()));
       await refreshData();
-      showToast('📥 Импортировано', 'success');
+      if (result && typeof result === 'object' && ('addedBooks' in result)) {
+        showToast(`📥 Добавлено: ${result.addedBooks} книг, ${result.addedCollections} подборок, ${result.addedChallenges} челленджей · пропущено дублей: ${result.skippedBooks}`, 'success');
+      } else {
+        showToast('📥 Импортировано', 'success');
+      }
     } catch { showToast('❌ Ошибка импорта', 'error'); }
   });
   bind('#set-clear', async () => {
@@ -2602,6 +2813,23 @@ export const PLATFORM_LABELS = {
 };
 
 // ═══════════════════════════════════════════════
+//  ЦЕНА
+// ═══════════════════════════════════════════════
+export function formatPrice(price) {
+  if (!price || !price.amount) return '';
+  const cur = CURRENCIES[price.currency] || CURRENCIES.RUB;
+  return `${price.amount.toLocaleString('ru')} ${cur.symbol}`;
+}
+export function convertToDefault(price, settings) {
+  if (!price || !price.amount) return null;
+  const rates = settings.exchangeRates || {};
+  const toRub = price.currency === 'RUB' ? price.amount : price.amount * (rates[price.currency] || 1);
+  const def = settings.defaultCurrency;
+  if (def === 'RUB') return { amount: Math.round(toRub), currency: 'RUB' };
+  return { amount: Math.round(toRub / (rates[def] || 1)), currency: def };
+}
+
+// ═══════════════════════════════════════════════
 //  УТИЛИТЫ UI
 // ═══════════════════════════════════════════════
 function toggleDrawer(open) {
@@ -2636,9 +2864,7 @@ function hideLoading() { if (loadingEl) { loadingEl.remove(); loadingEl = null; 
 // ═══════════════════════════════════════════════
 function fireConfetti() {
   if (!S.settings.confetti) return;
-  // 🆕 v3.8.4: уважаем системную настройку
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
   const canvas = DOM.confettiCanvas;
   const ctx = canvas.getContext('2d');
   canvas.width = window.innerWidth;
@@ -2647,14 +2873,11 @@ function fireConfetti() {
   const particles = [];
   for (let i = 0; i < 140; i++) {
     particles.push({
-      x: Math.random() * canvas.width,
-      y: -20 - Math.random() * 220,
+      x: Math.random() * canvas.width, y: -20 - Math.random() * 220,
       w: 6 + Math.random() * 6, h: 4 + Math.random() * 4,
       color: colors[Math.floor(Math.random() * colors.length)],
-      vx: (Math.random() - 0.5) * 4.5,
-      vy: 2 + Math.random() * 4.5,
-      rot: Math.random() * 360, vr: (Math.random() - 0.5) * 11,
-      life: 1,
+      vx: (Math.random() - 0.5) * 4.5, vy: 2 + Math.random() * 4.5,
+      rot: Math.random() * 360, vr: (Math.random() - 0.5) * 11, life: 1,
     });
   }
   let frame = 0;
@@ -2693,6 +2916,45 @@ function setupInstallPrompt() {
     S.deferredPrompt = null;
     showToast('✅ Приложение установлено!', 'success');
   });
+}
+
+// ═══════════════════════════════════════════════
+//  🆕 v3.8.5: СТИЛИ FAB-МЕНЮ (инжектируются один раз)
+// ═══════════════════════════════════════════════
+const FAB_STYLES = `
+.fab-menu {
+  position: fixed;
+  right: 16px;
+  bottom: calc(20px + env(safe-area-inset-bottom) + 132px);
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 95;
+  animation: fabIn .18s var(--ease-bounce);
+}
+.fab-menu-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 16px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  color:var(--text-primary);
+  font-size:.88rem; font-weight:600;
+  box-shadow:var(--shadow-sm);
+  cursor:pointer;
+  transition:all .15s var(--ease);
+}
+.fab-menu-item:hover { border-color:var(--accent); color:var(--accent); transform:translateX(-2px); }
+.fab-menu-item .ic { color:var(--accent); }
+@keyframes fabIn { from { opacity:0; transform:translateY(8px);} to { opacity:1; transform:translateY(0);} }
+@media (prefers-reduced-motion: reduce) {
+  .fab-menu { animation: none; }
+  .fab-menu-item { transition: none; }
+}
+`;
+if (!document.getElementById('fab-styles')) {
+  const style = document.createElement('style');
+  style.id = 'fab-styles';
+  style.textContent = FAB_STYLES;
+  document.head.appendChild(style);
 }
 
 // ═══════════════════════════════════════════════
