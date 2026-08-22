@@ -2813,23 +2813,6 @@ export const PLATFORM_LABELS = {
 };
 
 // ═══════════════════════════════════════════════
-//  ЦЕНА
-// ═══════════════════════════════════════════════
-export function formatPrice(price) {
-  if (!price || !price.amount) return '';
-  const cur = CURRENCIES[price.currency] || CURRENCIES.RUB;
-  return `${price.amount.toLocaleString('ru')} ${cur.symbol}`;
-}
-export function convertToDefault(price, settings) {
-  if (!price || !price.amount) return null;
-  const rates = settings.exchangeRates || {};
-  const toRub = price.currency === 'RUB' ? price.amount : price.amount * (rates[price.currency] || 1);
-  const def = settings.defaultCurrency;
-  if (def === 'RUB') return { amount: Math.round(toRub), currency: 'RUB' };
-  return { amount: Math.round(toRub / (rates[def] || 1)), currency: def };
-}
-
-// ═══════════════════════════════════════════════
 //  УТИЛИТЫ UI
 // ═══════════════════════════════════════════════
 function toggleDrawer(open) {
