@@ -62,7 +62,7 @@ import { registerSW, setupOnlineIndicator } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import {
-  esc, safeUrl, showToast, debounce, sanitizeColor,
+  esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
   consumePoppingState, popTopOverlay, hasOverlays, pushSentinel,
   formatPrice, convertToDefault
@@ -1284,7 +1284,7 @@ function openBookForm(book = null) {
         <button type="button" id="bf-cover-gallery-btn" class="btn-secondary" style="flex:1">${icon('image', 14)} Из галереи</button>
         <button type="button" id="bf-cover-camera-btn" class="btn-secondary" style="flex:1">${icon('camera', 14)} Камера</button>
       </div>
-      <input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://... или загрузите выше"/>
+      <input type="url" id="bf-cover" value="${escAttr(b.cover || b.coverUrl || '')}" placeholder="https://... или загрузите выше"/>
       <div id="bf-cover-preview" class="cover-preview hidden">
         <img id="bf-cover-preview-img" src="" alt="Предпросмотр обложки"/>
       </div>
@@ -1415,7 +1415,7 @@ function openBookForm(book = null) {
       </div>
       <div id="bf-joint-fields" class="${b.jointReading?.active ? '' : 'hidden'}">
         <div class="form-group"><label>Участники (через запятую)</label><input type="text" id="bf-joint-people" value="${esc((b.jointReading?.participants || []).join(', '))}" placeholder="Аня, Маша, Катя"/></div>
-        <div class="form-group"><label>Ссылка на чат</label><input type="url" id="bf-joint-chat" value="${esc(b.jointReading?.chatLink || '')}" placeholder="https://t.me/+..."/></div>
+        <div class="form-group"><label>Ссылка на чат</label><input type="url" id="bf-joint-chat" value="${escAttr(b.jointReading?.chatLink || '')}" placeholder="https://t.me/+..."/></div>
         <div class="form-group"><label>Заметки</label><input type="text" id="bf-joint-notes" value="${esc(b.jointReading?.notes || '')}" placeholder="Читаем по 3 главы в день"/></div>
       </div>
     </div>
@@ -1456,7 +1456,8 @@ function openBookForm(book = null) {
     const url = fb.querySelector('#bf-cover').value.trim();
     const box = fb.querySelector('#bf-cover-preview');
     const img = fb.querySelector('#bf-cover-preview-img');
-    if (url && /^https?:\/\//i.test(url)) { img.src = url; box.classList.remove('hidden'); }
+    const safe = safeUrl(url);
+    if (safe) { img.src = safe; box.classList.remove('hidden'); }
     else { box.classList.add('hidden'); img.src = ''; }
   }
   fb.querySelector('#bf-cover').addEventListener('input', debounce(updateCoverPreview, 400));
@@ -1662,7 +1663,7 @@ async function saveBookForm(selectedTags, selectedFormats) {
     jointReading: {
       active: isJoint,
       participants: isJoint ? f.querySelector('#bf-joint-people').value.split(',').map(p => p.trim()).filter(Boolean) : [],
-      chatLink: isJoint ? f.querySelector('#bf-joint-chat').value.trim() : '',
+      chatLink: isJoint ? safeLinkUrl(f.querySelector('#bf-joint-chat').value.trim()) : '',
       notes: isJoint ? f.querySelector('#bf-joint-notes').value.trim() : '',
       startDate: isJoint ? (S.books.find(b => b.id === S.editingBookId)?.jointReading?.startDate || now.slice(0, 10)) : '',
     },
@@ -1718,19 +1719,27 @@ async function saveBookForm(selectedTags, selectedFormats) {
         bookData.coverUrl = URL.createObjectURL(blob);
         cacheCoverUrl(bookData.id, bookData.coverUrl);
         bookData.cover = '';
+      } else {
+        bookData.cover = '';
       }
-    } catch (err) { console.warn('[Cover] dataURL save failed:', err); }
-  } else if (coverVal && coverVal.startsWith('http')) {
+    } catch (err) { console.warn('[Cover] dataURL save failed:', err); bookData.cover = ''; }
+  } else if (coverVal && /^https?:\/\//i.test(coverVal)) {
+    const safeCover = safeUrl(coverVal);
     try {
-      const blob = await (await fetch(coverVal)).blob();
+      const blob = await (await fetch(safeCover)).blob();
       if (isValidCoverBlob(blob)) {
         await saveCover(bookData.id, blob);
         bookData.coverUrl = URL.createObjectURL(blob);
         cacheCoverUrl(bookData.id, bookData.coverUrl);
+        bookData.cover = '';
       } else {
-        bookData.coverUrl = coverVal;
+        bookData.coverUrl = safeCover;
       }
-    } catch { bookData.coverUrl = coverVal; }
+    } catch { bookData.coverUrl = safeCover || coverVal; }
+  } else if (coverVal) {
+    // Не http(s)/data: — оставляем только безопасную схему обложки (blob/http/https) или ''.
+    // javascript:, custom:, file: и пр. в IndexedDB не попадают.
+    bookData.cover = safeUrl(coverVal);
   }
 
   await putBook(bookData);
@@ -2103,7 +2112,7 @@ function openBookDetail(bookId) {
       <div class="detail-section">
         <h3>${icon('users', 14)} Совместное чтение</h3>
         <div class="text-small">${icon('users', 12)} ${esc((jr.participants || []).join(', '))}</div>
-        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(safeUrl(jr.chatLink))}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
+        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(safeLinkUrl(jr.chatLink))}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
         ${jr.notes ? `<div class="text-small text-muted mt-8">${esc(jr.notes)}</div>` : ''}
       </div>` : ''}
     ${book.notes ? `<div class="detail-section"><h3>${icon('edit', 14)} Заметки</h3><div class="detail-description">${esc(book.notes)}</div></div>` : ''}
@@ -2192,7 +2201,7 @@ let _coverBookId = null;
 function openCoverViewer(book) {
   _coverBookId = book.id;
   if (book.coverUrl) {
-    DOM.coverViewerImg.src = book.coverUrl;
+    DOM.coverViewerImg.src = safeUrl(book.coverUrl);
     DOM.coverViewerImg.style.display = '';
     const existingPh = DOM.coverOverlay.querySelector('.cover-viewer-empty');
     if (existingPh) existingPh.style.display = 'none';

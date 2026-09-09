@@ -14,7 +14,7 @@
 //      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
 import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
-import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
+import { esc, safeUrl, safeLinkUrl, escAttr, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
@@ -190,7 +190,7 @@ function renderContentCard(item) {
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
   const dateStr = item.publishedDate || item.plannedDate || '';
-  const pubUrl = item.publishedUrl ? safeUrl(item.publishedUrl) : '';
+  const pubUrl = item.publishedUrl ? safeLinkUrl(item.publishedUrl) : '';
 
   const reportSent = item.reportSent || false;
   const reportBadge = reportSent
@@ -310,7 +310,7 @@ export function openContentDetail(item, book, opts = {}) {
   const idx = STATUS_ORDER.indexOf(item.status);
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
-  const pubUrl = item.publishedUrl ? safeUrl(item.publishedUrl) : '';
+  const pubUrl = item.publishedUrl ? safeLinkUrl(item.publishedUrl) : '';
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
@@ -500,7 +500,7 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
     </div>
     <div class="form-group">
       <label>${icon('link', 13)} Ссылка на публикацию</label>
-      <input type="url" id="cf-url" value="${esc(c.publishedUrl || '')}" placeholder="https://youtube.com/watch?v=..."/>
+      <input type="url" id="cf-url" value="${escAttr(c.publishedUrl || '')}" placeholder="https://youtube.com/watch?v=..."/>
       <div class="form-hint">Превью подтянется автоматически (Microlink)</div>
     </div>
     <div class="form-group">
@@ -584,7 +584,7 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       status: body.querySelector('#cf-status').value,
       plannedDate: body.querySelector('#cf-planned').value,
       publishedDate: body.querySelector('#cf-published').value,
-      publishedUrl: body.querySelector('#cf-url').value.trim(),
+      publishedUrl: safeLinkUrl(body.querySelector('#cf-url').value.trim()),
       notes: body.querySelector('#cf-notes').value.trim(),
       reportSent: isReportSent,
       reportDate: isReportSent ? body.querySelector('#cf-report-date').value : '',

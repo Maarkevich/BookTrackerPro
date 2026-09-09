@@ -27,6 +27,7 @@
 //      — Парсер JSON-LD / Open Graph / Microdata
 //      — checkMicrolinkStatus() для диагностики
 // ─────────────────────────────────────────────
+import { safeUrl } from './utils.js';
 import { openDB } from './db.js';
 
 // ═══════════════════════════════════════════════
@@ -286,10 +287,14 @@ export async function fetchLinkPreview(url, opts = {}) {
 function normalize(data, url) {
   return {
     url,
-    title: data.title || '', description: data.description || '',
-    image: data.image?.url || '', logo: data.logo?.url || '',
-    publisher: data.publisher || '', author: data.author || '',
-    date: data.date || '', lang: data.lang || '',
+    title: typeof data.title === 'string' ? data.title : '',
+    description: typeof data.description === 'string' ? data.description : '',
+    image: safeUrl(data.image?.url || ''),
+    logo: safeUrl(data.logo?.url || ''),
+    publisher: typeof data.publisher === 'string' ? data.publisher : '',
+    author: typeof data.author === 'string' ? data.author : '',
+    date: typeof data.date === 'string' ? data.date : '',
+    lang: typeof data.lang === 'string' ? data.lang : '',
     source: detectSource(url), cachedAt: Date.now(),
   };
 }

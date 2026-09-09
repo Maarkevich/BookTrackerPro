@@ -19,6 +19,7 @@
 //      — repairCovers() / isValidCoverBlob()
 //      — Миграции v1→v6 без потери данных
 // ─────────────────────────────────────────────
+import { safeUrl, safeLinkUrl } from './utils.js'; // 🆕 P1-2: валидация URL при записи
 
 const DB_NAME = 'book-tracker-pro';
 const DB_VER = 6;
@@ -550,6 +551,8 @@ export async function updateContentInBook(bookId, contentId, updates) {
       const item = (book.contentItems || []).find(c => c.id === contentId);
       if (!item) { resolve(false); return; }
       Object.assign(item, updates);
+      // 🆕 P1-2: санитизация URL при любом обновлении контента
+      if (typeof item.publishedUrl === 'string') item.publishedUrl = safeLinkUrl(item.publishedUrl);
       book.updatedAt = new Date().toISOString();
       store.put(book);
     };
@@ -745,7 +748,7 @@ export async function getDBSize() {
 // ═══════════════════════════════════════════════
 //  15. СЛУЖЕБНОЕ
 // ═══════════════════════════════════════════════
-function ensureBookFields(book) {
+export function ensureBookFields(book) {
   if (!book.id) book.id = `book_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!book.title) book.title = '';
   if (!book.author) book.author = '';
@@ -781,10 +784,25 @@ function ensureBookFields(book) {
   if (book.shelfMark === undefined) {
     book.shelfMark = { color: '', text: '' };
   }
+  // 🆕 P1-2: валидация URL ДО сохранения/после чтения.
+  // coverUrl — изображение (blob: допустим для локальных обложек),
+  // cover — изображение, chatLink/publishedUrl — внешние ссылки.
+  if (typeof book.cover === 'string') book.cover = safeUrl(book.cover);
+  if (typeof book.coverUrl === 'string') book.coverUrl = safeUrl(book.coverUrl);
+  if (book.jointReading && typeof book.jointReading.chatLink === 'string') {
+    book.jointReading.chatLink = safeLinkUrl(book.jointReading.chatLink);
+  }
+  if (Array.isArray(book.contentItems)) {
+    for (const item of book.contentItems) {
+      if (item && typeof item.publishedUrl === 'string') {
+        item.publishedUrl = safeLinkUrl(item.publishedUrl);
+      }
+    }
+  }
   return book;
 }
 
-function ensureContentItemFields(item) {
+export function ensureContentItemFields(item) {
   if (!item.id) item.id = `content_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   if (!item.type) item.type = 'unboxing';
   if (!item.title) item.title = '';
@@ -798,5 +816,7 @@ function ensureContentItemFields(item) {
   if (!item.updatedAt) item.updatedAt = item.createdAt;
   if (item.reportSent === undefined) item.reportSent = false;
   if (!item.reportDate) item.reportDate = '';
+  // 🆕 P1-2: внешняя ссылка публикации — только http/https
+  if (typeof item.publishedUrl === 'string') item.publishedUrl = safeLinkUrl(item.publishedUrl);
   return item;
 }

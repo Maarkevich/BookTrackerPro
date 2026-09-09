@@ -78,6 +78,42 @@ export function safeUrl(url) {
 }
 
 /**
+ * Валидирует пользовательскую ВНЕШНЮЮ ссылку для href и для
+ * сохранения в IndexedDB (publishedUrl, chatLink).
+ * Отличие от safeUrl(): blob: НЕ разрешён — обложки и внутренние
+ * объекты приложения не должны открываться как пользовательские ссылки.
+ * Разрешены только http: и https: (javascript:, data:, file:,
+ * vbscript:, custom: и blob: → '').
+ *
+ * @param {*} url — значение пользователя
+ * @returns {string} — безопасный http(s) URL или ''
+ */
+export function safeLinkUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href;
+    }
+  } catch { /* невалидный URL → '' */ }
+  return '';
+}
+
+/**
+ * Экранирует строку для вставки в ДВОЙНЫЕ КАВЫЧКИ атрибута
+ * value="..."/data-*="...". esc() не экранирует " → добавляем.
+ * Защищает prefill-поля форм (coverUrl, chatLink, publishedUrl).
+ *
+ * @param {*} s — любое значение
+ * @returns {string}
+ */
+export function escAttr(s) {
+  return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
  * Привязывает обработчики 'error' к обложкам с атрибутом
  * data-cover-fallback: скрывает сломанные картинки.
  * Заменяет inline onerror="this.style.display='none'"
