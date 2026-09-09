@@ -21,7 +21,7 @@
 //      — SVG-иконки, referrerpolicy no-referrer
 //      — Кликабельный контент в календаре → onOpenContent
 // ─────────────────────────────────────────────
-import { esc, formatPrice, convertToDefault } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
+import { esc, safeUrl, formatPrice, convertToDefault } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
 import { BOOK_STATUSES, CURRENCIES } from './db.js';
 import { CONTENT_TYPES, CONTENT_STATUSES, PLATFORMS, platformIcon } from './content.js';
 import { calcChallengeProgress } from './challenges.js';
@@ -383,7 +383,7 @@ function renderMoneyStats(container, books, settings) {
       <h3>${icon('trophy', 14)} Самая дорогая книга</h3>
       <div class="content-card" style="cursor:default">
         ${mostExpensive.book.coverUrl
-          ? `<img src="${mostExpensive.book.coverUrl}" referrerpolicy="no-referrer" style="width:44px;height:66px;border-radius:6px;object-fit:cover"/>`
+          ? `<img src="${esc(safeUrl(mostExpensive.book.coverUrl))}" referrerpolicy="no-referrer" style="width:44px;height:66px;border-radius:6px;object-fit:cover"/>`
           : `<div style="width:44px;height:66px;border-radius:6px;background:var(--bg-input);display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
         <div class="content-info">
           <div class="content-title">${esc(mostExpensive.book.title)}</div>

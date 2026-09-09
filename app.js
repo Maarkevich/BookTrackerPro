@@ -62,7 +62,7 @@ import { registerSW, setupOnlineIndicator } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import {
-  esc, showToast, debounce, sanitizeColor,
+  esc, safeUrl, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
   consumePoppingState, popTopOverlay, hasOverlays, pushSentinel,
   formatPrice, convertToDefault
@@ -644,7 +644,7 @@ function renderSearchResults(results, hasQuery) {
   if (results.books.length) {
     html += searchSection(icon('library', 13) + ' Книги', results.books.length, results.books.map(b => `
       <div class="sr-item" data-sr-book="${b.id}">
-        ${b.coverUrl ? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="sr-cover ph">${icon('bookClosed', 16)}</div>`}
+        ${b.coverUrl ? `<img class="sr-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="sr-cover ph">${icon('bookClosed', 16)}</div>`}
         <div class="sr-info">
           <div class="sr-title">${esc(b.title)}</div>
           <div class="sr-sub">${esc(b.author)}${b.series ? ' · ' + esc(b.series) : ''}</div>
@@ -1021,7 +1021,7 @@ function renderBookCard(book) {
   const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCount) * 100) : 0;
 
   const coverHtml = book.coverUrl
-    ? `<img class="book-cover" src="${book.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
+    ? `<img class="book-cover" src="${esc(safeUrl(book.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
     : `<div class="book-cover-placeholder">${icon('bookClosed', 32)}<span class="cover-ph-title">${esc(book.title)}</span></div>`;
 
   const priceHtml = (S.settings.showPriceInCards && book.price?.amount > 0)
@@ -1869,7 +1869,7 @@ async function handleWebSearch() {
     const src = sourceMeta[r.source] || { label: r.source, cls: 'badge-source', ic: 'globe' };
     return `
       <div class="web-result" data-idx="${i}">
-        ${r.cover ? `<img class="web-result-cover" src="${r.cover}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
+        ${r.cover ? `<img class="web-result-cover" src="${esc(safeUrl(r.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
         <div class="web-result-info">
           <div class="web-result-title">${esc(r.title)}</div>
           <div class="web-result-meta">${esc(r.author)}${r.publisher ? ' · ' + esc(r.publisher) : ''}${r.pageCount ? ' · ' + r.pageCount + ' стр.' : ''}</div>
@@ -2006,7 +2006,7 @@ function openBookDetail(bookId) {
   DOM.detailBody.innerHTML = `
     <div class="detail-hero">
       ${book.coverUrl
-        ? `<img class="detail-cover" id="detail-cover-img" src="${book.coverUrl}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
+        ? `<img class="detail-cover" id="detail-cover-img" src="${esc(safeUrl(book.coverUrl))}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
         : `<div class="detail-cover-placeholder" id="detail-cover-ph" style="cursor:pointer" title="Добавить обложку">${icon('bookClosed', 52)}<span class="cover-ph-title">${esc(book.title)}</span></div>`}
       <div style="flex:1;min-width:0">
         <div class="detail-title-row">
@@ -2103,7 +2103,7 @@ function openBookDetail(bookId) {
       <div class="detail-section">
         <h3>${icon('users', 14)} Совместное чтение</h3>
         <div class="text-small">${icon('users', 12)} ${esc((jr.participants || []).join(', '))}</div>
-        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(jr.chatLink)}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
+        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(safeUrl(jr.chatLink))}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
         ${jr.notes ? `<div class="text-small text-muted mt-8">${esc(jr.notes)}</div>` : ''}
       </div>` : ''}
     ${book.notes ? `<div class="detail-section"><h3>${icon('edit', 14)} Заметки</h3><div class="detail-description">${esc(book.notes)}</div></div>` : ''}
@@ -2348,7 +2348,7 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
           ${S.books.filter(b => b.id !== '__no_book__').map(b => `
             <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}" data-bp-id="${b.id}" style="cursor:pointer">
               ${b.coverUrl
-                ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                 : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
               <span class="picker-name" style="flex:1">${esc(b.title)}</span>
             </label>

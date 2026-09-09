@@ -33,7 +33,7 @@
 import { loadChallenges, putChallenge, delChallenge,
          addBookToChallenge, removeBookFromChallenge,
          BOOK_STATUSES } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: trackOverlay из utils
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: trackOverlay из utils
 import { attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, GOAL_ICONS } from './icons.js';
 
@@ -422,7 +422,7 @@ function renderChallengeBook(b) {
   return `
     <div class="content-list-item" data-chd-book="${b.id}" style="cursor:pointer">
       ${b.coverUrl
-        ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+        ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
         : `<span style="display:flex;align-items:center;justify-content:center;width:32px;height:48px">${icon('bookClosed', 18)}</span>`}
       <div class="content-list-info">
         <div class="content-list-title">${esc(b.title)}</div>
@@ -657,7 +657,7 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
                 <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
-                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                  ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                   : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
               </label>

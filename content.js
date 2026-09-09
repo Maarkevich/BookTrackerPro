@@ -14,7 +14,7 @@
 //      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
 import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
@@ -190,6 +190,7 @@ function renderContentCard(item) {
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
   const dateStr = item.publishedDate || item.plannedDate || '';
+  const pubUrl = item.publishedUrl ? safeUrl(item.publishedUrl) : '';
 
   const reportSent = item.reportSent || false;
   const reportBadge = reportSent
@@ -208,11 +209,11 @@ function renderContentCard(item) {
           ${dateStr ? `<span class="content-date">${icon('calendar', 11)} ${dateStr}</span>` : ''}
           ${reportBadge}
         </div>
-        ${item.publishedUrl ? `
-          <div class="content-published" data-preview-url="${esc(item.publishedUrl)}">
+        ${pubUrl ? `
+          <div class="content-published" data-preview-url="${esc(pubUrl)}">
             <div class="content-meta mt-8">
-              <a href="${esc(item.publishedUrl)}" target="_blank" rel="noopener" class="text-small">${icon('external', 12)} Открыть</a>
-              <button data-copy-url="${esc(item.publishedUrl)}"
+              <a href="${esc(pubUrl)}" target="_blank" rel="noopener" class="text-small">${icon('external', 12)} Открыть</a>
+              <button data-copy-url="${esc(pubUrl)}"
                 style="background:none;border:none;cursor:pointer;font-size:.78rem;color:var(--text-muted);display:inline-flex;align-items:center;gap:4px">
                 ${icon('copy', 11)} Копировать ссылку
               </button>
@@ -275,7 +276,7 @@ async function hydratePreview(el) {
   card.rel = 'noopener';
   card.innerHTML = `
     ${preview.image
-      ? `<img class="link-preview-img" src="${preview.image}" alt="" loading="lazy"/>`
+      ? `<img class="link-preview-img" src="${esc(safeUrl(preview.image))}" alt="" loading="lazy"/>`
       : `<div class="link-preview-img link-preview-img-empty">${platformIcon(preview.source, 18)}</div>`}
     <div class="link-preview-info">
       <div class="link-preview-title">${esc(preview.title || url)}</div>
@@ -309,6 +310,7 @@ export function openContentDetail(item, book, opts = {}) {
   const idx = STATUS_ORDER.indexOf(item.status);
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
+  const pubUrl = item.publishedUrl ? safeUrl(item.publishedUrl) : '';
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
@@ -325,7 +327,7 @@ export function openContentDetail(item, book, opts = {}) {
         ${book ? `
           <div class="cd-book">
             ${book.coverUrl
-              ? `<img src="${book.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:40px;height:60px;border-radius:5px;object-fit:cover"/>`
+              ? `<img src="${esc(safeUrl(book.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:40px;height:60px;border-radius:5px;object-fit:cover"/>`
               : `<span style="width:40px;height:60px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:5px">${icon('bookClosed', 20)}</span>`}
             <div>
               <div style="font-weight:700;font-size:.9rem">${esc(book.title)}</div>
@@ -357,11 +359,11 @@ export function openContentDetail(item, book, opts = {}) {
         ` : ''}
 
         <!-- Публикация -->
-        ${item.publishedUrl ? `
+        ${pubUrl ? `
           <div class="detail-section">
             <h3>${icon('link', 14)} Публикация</h3>
-            <div class="cd-published" data-preview-url="${esc(item.publishedUrl)}">
-              <a href="${esc(item.publishedUrl)}" target="_blank" rel="noopener" class="text-small">
+            <div class="cd-published" data-preview-url="${esc(pubUrl)}">
+              <a href="${esc(pubUrl)}" target="_blank" rel="noopener" class="text-small">
                 ${icon('external', 12)} Открыть ссылку
               </a>
             </div>

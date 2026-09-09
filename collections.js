@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────
 import { loadCollections, putCollection, delCollection,
          addBookToCollection, removeBookFromCollection } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: из utils
+import { esc, safeUrl, applyCoverFallback, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: из utils
 import { icon } from './icons.js';
 import { showConfirm } from './uikit.js';
 
@@ -174,9 +174,9 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
         ${colBooks.map(b => `
           <div class="book-card" data-book-id="${b.id}">
             ${b.coverUrl
-              ? `<img class="book-cover" src="${b.coverUrl}" alt="" loading="lazy"
+              ? `<img class="book-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy"
                       referrerpolicy="no-referrer"
-                      onerror="this.style.display='none'"/>`
+                      data-cover-fallback/>`
               : `<div class="book-cover-placeholder">${icon('bookClosed', 24)}</div>`}
             <div class="book-info">
               <div class="book-title">${esc(b.title)}</div>
@@ -193,6 +193,8 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
       ${icon('plus', 16)} Добавить книгу в подборку
     </button>
   `;
+
+  applyCoverFallback(container);
 
   // События
   container.querySelector('#col-back').addEventListener('click', () => callbacks.onBack());
@@ -398,7 +400,7 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
                 <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
-                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt=""
+                  ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt=""
                           style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                   : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>

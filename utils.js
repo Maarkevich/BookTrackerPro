@@ -46,6 +46,57 @@ export function esc(s) {
 }
 
 // ═══════════════════════════════════════════════
+//  1.1 БЕЗОПАСНЫЕ URL (🆕 P1-1)
+// ═══════════════════════════════════════════════
+
+/**
+ * Валидирует URL для вставки в src/href (рендер).
+ * Разрешены только http:, https: и blob: (блокируются
+ * javascript:, data:, vbscript:, file: и прочие схемы).
+ * Возвращает нормализованный URL (спецсимволы, включая кавычки
+ * и пробелы, percent-кодируются) или '' если URL небезопасен.
+ *
+ * SSRF-защита (private IP) сюда НЕ переносится: в контексте
+ * рендера запрос выполняет браузер пользователя, а не сервер.
+ * Для API-запросов остаётся sanitizeUrl() в microlink.js.
+ *
+ * @param {*} url — значение пользователя
+ * @returns {string} — безопасный URL или ''
+ */
+export function safeUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    const proto = parsed.protocol;
+    if (proto === 'http:' || proto === 'https:' || proto === 'blob:') {
+      return parsed.href;
+    }
+  } catch { /* невалидный URL → '' */ }
+  return '';
+}
+
+/**
+ * Привязывает обработчики 'error' к обложкам с атрибутом
+ * data-cover-fallback: скрывает сломанные картинки.
+ * Заменяет inline onerror="this.style.display='none'"
+ * (нужно для CSP без 'unsafe-inline').
+ *
+ * @param {HTMLElement} scope — контейнер после innerHTML
+ */
+export function applyCoverFallback(scope) {
+  if (!scope || typeof scope.querySelectorAll !== 'function') return;
+  scope.querySelectorAll('img[data-cover-fallback]').forEach(img => {
+    if (img.dataset.coverFallbackBound) return;
+    img.dataset.coverFallbackBound = '1';
+    img.addEventListener('error', () => {
+      img.style.display = 'none';
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════
 //  2. ВАЛИДАЦИЯ CSS-ЗНАЧЕНИЙ (🆕 v3.8.3)
 // ═══════════════════════════════════════════════
 

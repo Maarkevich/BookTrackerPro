@@ -23,7 +23,7 @@
 //      — SVG-иконки из icons.js
 //      — Безопасная подсветка <mark>
 // ─────────────────────────────────────────────
-import { esc } from './utils.js';
+import { esc, safeUrl } from './utils.js';
 import { icon, contentTypeIcon } from './icons.js';
 // ═══════════════════════════════════════════════
 //  КОНФИГУРАЦИЯ СКОУПОВ
@@ -303,7 +303,7 @@ if (results.books.length) {
 html += section('Книги', 'bookOpen', results.books.length, results.books.map(b => `
 <div class="sr-item" data-sr-book="${b.id}" tabindex="0">
 ${b.coverUrl
-? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML=window.__srCoverFallback(this,'${b.id}')"/>`
+? `<img class="sr-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
 : `<div class="sr-cover ph">${icon('bookClosed', 18)}</div>`}
 <div class="sr-info">
 <div class="sr-title">${esc(b.title)}</div>

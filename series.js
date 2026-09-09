@@ -23,7 +23,7 @@
 //      — Эмодзи серий подбираются по названию/жанру
 //      — Обложки: referrerpolicy no-referrer + onerror-фолбэк
 // ─────────────────────────────────────────────
-import { esc } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
+import { esc, safeUrl, applyCoverFallback } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
 import { BOOK_STATUSES } from './db.js';
 import { icon, statusIcon } from './icons.js';
 
@@ -239,6 +239,7 @@ export function renderSeriesDetail(container, seriesName, books, callbacks) {
   `;
 
   // События
+  applyCoverFallback(container);
   container.querySelector('#series-back').addEventListener('click', () => callbacks.onBack());
   container.querySelector('#series-add').addEventListener('click', () => {
     callbacks.onAddBook(seriesName, total);
@@ -317,8 +318,8 @@ function renderSeriesSlot(slot) {
   const isCurrent = b.status === 'reading';
 
   const coverHtml = b.coverUrl
-    ? `<img class="series-slot-cover" src="${b.coverUrl}" alt="" loading="lazy"
-            referrerpolicy="no-referrer" onerror="this.style.display='none'"/>`
+    ? `<img class="series-slot-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy"
+            referrerpolicy="no-referrer" data-cover-fallback/>`
     : `<div class="series-slot-cover placeholder">${icon('bookClosed', 22)}</div>`;
 
   return `
