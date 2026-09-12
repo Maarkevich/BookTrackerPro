@@ -8,6 +8,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^30.0.1",
     "vitest": "^3.0.0"
   }

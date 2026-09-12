@@ -1731,7 +1731,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
         await saveCover(bookData.id, blob);
         bookData.coverUrl = URL.createObjectURL(blob);
         cacheCoverUrl(bookData.id, bookData.coverUrl);
-        bookData.cover = '';
+        // 🆕 P1-3: сохраняем исходный http(s)-текст как фолбэк в бэкапе
+        // (сам coverUrl — сессионный blob:, мёртвый после reload).
+        // safeCover уже нормализован safeUrl() — только http/https.
+        bookData.cover = safeCover;
       } else {
         bookData.coverUrl = safeCover;
       }

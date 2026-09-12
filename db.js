@@ -656,6 +656,44 @@ export async function deletePendingSync(id) {
 // ═══════════════════════════════════════════════
 //  12. ЭКСПОРТ
 // ═══════════════════════════════════════════════
+/**
+ * Blob → base64 (для переноса локальных обложек в JSON-бэкап).
+ *
+ * @param {Blob} blob
+ * @returns {Promise<string>}
+ */
+async function blobToBase64(blob) {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * base64 → Blob (восстановление обложки при импорте).
+ *
+ * @param {string} b64
+ * @param {string} mime
+ * @returns {Blob}
+ */
+function base64ToBlob(b64, mime) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+/**
+ * Экспорт: книги, подборки, челленджи, теги, настройки
+ * и ЛОКАЛЬНЫЕ ОБЛОЖКИ (covers store → base64).
+ * Внешние https-URL книг не конвертируются в base64 — остаются текстом.
+ *
+ * @returns {Promise<object>}
+ */
 export async function exportAll() {
   const db = await openDB();
   const getAll = (storeName) => new Promise((resolve) => {
@@ -664,15 +702,27 @@ export async function exportAll() {
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
   });
-  const [books, collections, challenges, tags] = await Promise.all([
-    getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'),
+  const [books, collections, challenges, tags, rawCovers] = await Promise.all([
+    getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'), getAll('covers'),
   ]);
   const settings = await loadSettings();
+
+  // 🆕 P1-3: сериализуем только валидные локальные обложки
+  const covers = [];
+  for (const c of rawCovers) {
+    if (c && isValidCoverBlob(c.blob)) {
+      try {
+        const base64 = await blobToBase64(c.blob);
+        covers.push({ bookId: c.bookId, mime: c.blob.type, base64, savedAt: c.savedAt });
+      } catch { /* битый blob — пропускаем */ }
+    }
+  }
+
   return {
     app: 'BookTrackerPro',
     version: 1,
     exportedAt: new Date().toISOString(),
-    books, collections, challenges, tags, settings,
+    books, collections, challenges, tags, settings, covers,
   };
 }
 
@@ -703,7 +753,26 @@ export async function importAll(data) {
   const newBooks = (data.books || []).filter(b => b.id && !bookIds.has(b.id));
   summary.skippedBooks = (data.books || []).length - newBooks.length;
   summary.addedBooks = newBooks.length;
-  if (newBooks.length > 0) await putBooks(newBooks);
+  if (newBooks.length > 0) {
+    await putBooks(newBooks);
+
+    // 🆕 P1-3: восстанавливаем локальные обложки для новых книг.
+    // Обложки существующих книг (merge: skipped) не перезаписываем.
+    if (Array.isArray(data.covers)) {
+      const coversByBook = new Map();
+      for (const c of data.covers) {
+        if (c && c.bookId && typeof c.base64 === 'string') coversByBook.set(c.bookId, c);
+      }
+      for (const book of newBooks) {
+        const coverData = coversByBook.get(book.id);
+        if (!coverData) continue;
+        try {
+          const blob = base64ToBlob(coverData.base64, coverData.mime || 'image/jpeg');
+          if (isValidCoverBlob(blob)) await saveCover(book.id, blob);
+        } catch { /* повреждённый base64 — игнорируем */ }
+      }
+    }
+  }
 
   // ── Подборки: добавляем отсутствующие (по id) ──
   const existingCols = await loadCollections();
