@@ -688,8 +688,32 @@ function base64ToBlob(b64, mime) {
 }
 
 /**
+ * 🆕 P1-4: чистит настройки для экспорта по ЯВНОМУ allowlist.
+ * Возвращает НОВЫЙ объект только с безопасными ключами.
+ * Credentials (lrAppId/lrSecret/lrPartnerId/lrPartnerSecret/
+ * microlinkApiKey) и любые будущие неизвестные ключи
+ * в backup не попадают (denylist не используется).
+ *
+ * @param {object|null|undefined} settings — сырые настройки из IndexedDB
+ * @returns {object} — объект только из безопасных полей (никогда null)
+ */
+export function sanitizeSettingsForExport(settings) {
+  const SAFE_SETTINGS_KEYS = [
+    'confetti', 'sound', 'defaultPlatform', 'bloggerMode',
+    'defaultCurrency', 'showPriceInCards', 'showPriceInDetail', 'showPriceInStats',
+    'exchangeRates', 'ratesUpdated',
+  ];
+  if (!settings || typeof settings !== 'object') return {};
+  const out = {};
+  for (const key of SAFE_SETTINGS_KEYS) {
+    if (key in settings) out[key] = settings[key];
+  }
+  return out;
+}
+
+/**
  * Экспорт: книги, подборки, челленджи, теги, настройки
- * и ЛОКАЛЬНЫЕ ОБЛОЖКИ (covers store → base64).
+ * (БЕЗ credentials — P1-4) и ЛОКАЛЬНЫЕ ОБЛОЖКИ (covers store → base64).
  * Внешние https-URL книг не конвертируются в base64 — остаются текстом.
  *
  * @returns {Promise<object>}
@@ -705,7 +729,8 @@ export async function exportAll() {
   const [books, collections, challenges, tags, rawCovers] = await Promise.all([
     getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'), getAll('covers'),
   ]);
-  const settings = await loadSettings();
+  // 🆕 P1-4: в backup попадают только не-секретные настройки
+  const settings = sanitizeSettingsForExport(await loadSettings());
 
   // 🆕 P1-3: сериализуем только валидные локальные обложки
   const covers = [];
