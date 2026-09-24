@@ -74,13 +74,18 @@ function checkISBN10(s) {
 }
 
 function checkISBN13(s) {
+  // 🆕 P2-11: сначала корректная EAN-13 checksum, затем обязательный
+  // книжный префикс 978/979. Раньше любой валидный по checksum
+  // товарный штрихкод (например 4006381333931) принимался за ISBN —
+  // это запускало нерелевантный lookup. ISBN-10 не затронут.
   let sum = 0;
   for (let i = 0; i < 12; i++) {
     const d = parseInt(s[i], 10);
     if (isNaN(d)) return false;
     sum += d * (i % 2 === 0 ? 1 : 3);
   }
-  return (10 - (sum % 10)) % 10 === parseInt(s[12], 10);
+  if ((10 - (sum % 10)) % 10 !== parseInt(s[12], 10)) return false;
+  return s.startsWith('978') || s.startsWith('979');
 }
 
 /**

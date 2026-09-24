@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────
 import {
   openDB, loadBooks, putBook, deleteBookCascade, loadSettings, saveSettings,
-  saveCover, getCover, changeBookStatus,
+  saveCover, loadCovers, changeBookStatus, applyStatusTransition,
   BOOK_STATUSES, CURRENCIES,
   loadCollections, loadChallenges, loadTags, putTag, delTag,
   moveCollection, getNextCollectionOrder,
@@ -358,20 +358,71 @@ function bindDrawerAccordion() {
 
 // 🆕 v3.8.4: восстановление Object URL обложек из IndexedDB
 const _coverUrlCache = new Map();
-async function restoreCoverUrls(books) {
+// 🆕 P2-8: batch-загрузка обложек одной транзакцией вместо N вызовов
+// getCover() (N+1 старт). loadCovers заполняет Map<bookId, Blob> один раз.
+export async function restoreCoverUrls(books) {
+  if (!Array.isArray(books) || books.length === 0) return;
+  const pending = [];
   for (const book of books) {
-    if (_coverUrlCache.has(book.id)) { book.coverUrl = _coverUrlCache.get(book.id); continue; }
-    const blob = await getCover(book.id);
+    if (_coverUrlCache.has(book.id)) {
+      book.coverUrl = _coverUrlCache.get(book.id);
+    } else {
+      pending.push(book);
+    }
+  }
+  if (pending.length === 0) return;
+  const covers = await loadCovers(pending.map((b) => b.id));
+  for (const book of pending) {
+    const blob = covers.get(book.id);
     if (blob) {
       const url = URL.createObjectURL(blob);
-      _coverUrlCache.set(book.id, url);
+      cacheCoverUrl(book.id, url);
       book.coverUrl = url;
     } else if (book.coverUrl && book.coverUrl.startsWith('blob:')) {
       book.coverUrl = '';
     }
   }
 }
-function cacheCoverUrl(bookId, url) { if (bookId && url) _coverUrlCache.set(bookId, url); }
+// 🆕 P2-9: централизованный lifecycle object URL обложек/экспорта.
+function safeRevoke(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    try { URL.revokeObjectURL(url); } catch { /* noop */ }
+  }
+}
+// При замене обложки предыдущий URL книги отзывается, а не копится в кэше.
+export function cacheCoverUrl(bookId, url) {
+  if (!bookId || !url) return;
+  const prev = _coverUrlCache.get(bookId);
+  if (prev && prev !== url) safeRevoke(prev);
+  _coverUrlCache.set(bookId, url);
+}
+// Удаление книги: освобождаем её object URL из кэша.
+export function revokeCoverUrlForBook(bookId) {
+  const url = _coverUrlCache.get(bookId);
+  if (!url) return false;
+  safeRevoke(url);
+  _coverUrlCache.delete(bookId);
+  return true;
+}
+// Выгрузка всех закэшированных URL (unload/controlled refresh).
+export function revokeAllCoverUrls() {
+  const urls = Array.from(_coverUrlCache.values());
+  _coverUrlCache.clear();
+  for (const url of urls) safeRevoke(url);
+  return urls.length;
+}
+// 🆕 P2-9: экспорт JSON — object URL отзываем после click/download tick.
+export function triggerDownload(blob, filename) {
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => safeRevoke(url), 0);
+  return url;
+}
+// 🆕 P2-9: при выгрузке страницы не оставляем blob: URL висеть в памяти.
+window.addEventListener('pagehide', () => revokeAllCoverUrls());
 
 async function refreshData() {
   // 🆕 P1-5: ошибка чтения не маскируется пустым состоянием
@@ -1747,6 +1798,7 @@ function openBookForm(book = null) {
       // 🆕 P1-8: атомарный каскад — книга, обложка и ссылки в подборках/челленджах
       try {
         await deleteBookCascade(S.editingBookId);
+        revokeCoverUrlForBook(S.editingBookId); // 🆕 P2-9: освобождаем object URL удалённой книги
       } catch (err) {
         console.error('[DB] delete book error:', err);
         showToast('❌ Не удалось удалить книгу: ошибка базы данных', 'error');
@@ -1829,6 +1881,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
     updatedAt: now,
   };
 
+  // 🆕 P2-10: единый переход статуса вызывается и из формы, и из dropdown —
+  // side effects (даты, readingDays, confetti, rating prompt) больше не дублируются.
+  // Старые значения формы сохраняются, переход применяется только при реальной смене.
+  let statusFx = { confetti: false, askRating: false };
   if (S.editingBookId) {
     const ex = S.books.find(b => b.id === S.editingBookId);
     if (ex) {
@@ -1839,13 +1895,16 @@ async function saveBookForm(selectedTags, selectedFormats) {
       bookData.dateFinished = ex.dateFinished || '';
       bookData.readingDays = ex.readingDays;
       bookData.source = ex.source || 'manual';
-      if (bookData.status === 'reading' && !bookData.dateStarted) bookData.dateStarted = now.slice(0, 10);
-      if ((bookData.status === 'finished' || bookData.status === 'dropped') && ex.status !== bookData.status) bookData.dateFinished = now.slice(0, 10);
+      if (ex.status !== bookData.status) {
+        statusFx = applyStatusTransition(bookData, ex.status, bookData.status, now);
+      }
     }
   } else {
     bookData.contentItems = []; bookData.review = {}; bookData.readingForContent = {};
     bookData.source = 'manual';
-    if (bookData.status === 'reading') bookData.dateStarted = now.slice(0, 10);
+    // 🆕 P2-10: для новой книги тоже единый переход — даты/readingDays/confetti/rating
+    // не зависят от того, открыли книгу через форму или через dropdown.
+    statusFx = applyStatusTransition(bookData, '', bookData.status, now);
   }
 
   try {
@@ -1912,7 +1971,14 @@ async function saveBookForm(selectedTags, selectedFormats) {
   }
   closeOverlay(DOM.formOverlay);
   await refreshData();
-  if (bookData.status === 'finished' && S.settings.confetti) fireConfetti();
+  // 🆕 P2-10: confetti и rating prompt — только от реально случившегося
+  // перехода (единая семантика с dropdown), а не от повторного сохранения
+  // формы уже-finished книги.
+  if (statusFx.confetti && S.settings.confetti) fireConfetti();
+  if (statusFx.askRating) {
+    const saved = S.books.find(b => b.id === bookData.id);
+    openRatingModal(saved || bookData);
+  }
   showToast(S.editingBookId ? '✅ Книга обновлена' : '✅ Книга добавлена', 'success');
   S.editingBookId = null;
 }
@@ -2311,6 +2377,7 @@ function openBookDetail(bookId) {
       // 🆕 P1-8: атомарный каскад — книга, обложка и ссылки в подборках/челленджах
       try {
         await deleteBookCascade(book.id);
+        revokeCoverUrlForBook(book.id); // 🆕 P2-9: освобождаем object URL удалённой книги
       } catch (err) {
         console.error('[DB] detail delete book error:', err);
         showToast('❌ Не удалось удалить книгу: ошибка базы данных', 'error');
@@ -3069,10 +3136,9 @@ function renderSettingsTab() {
       // неполный backup не скачивается и не показывается «успех».
       const data = await exportAll();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `booktracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
+      // 🆕 P2-9: triggerDownload revoke'ит object URL после click/tick
+      const url = triggerDownload(blob, `booktracker-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      if (!url) { console.error('[export] no download url'); return; }
       showToast('📤 Экспортировано', 'success');
     } catch (e) {
       console.error('[export]', e);

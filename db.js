@@ -240,16 +240,19 @@ export async function getBook(id) {
   });
 }
 
-export async function changeBookStatus(bookId, newStatus) {
-  const book = await getBook(bookId);
-  if (!book) return null;
-  const oldStatus = book.status;
-  const now = new Date().toISOString();
-  const today = now.slice(0, 10);
-  book.status = newStatus;
-  book.updatedAt = now;
+// 🆕 P2-10: единая точка бизнес-правил перехода статуса.
+// Используется обоими путями: dropdown (changeBookStatus) и формой (saveBookForm) —
+// иначе одинаковые действия давали разные даты/readingDays/confetti/rating prompt.
+// Принимает книгу с текущими dateStarted/dateFinished/readingDays/review,
+// мутирует поля перехода и возвращает UI-флаги {confetti, askRating}.
+// Смена статуса (old === new) — no-op: обычное сохранение не плодит эффекты.
+export function applyStatusTransition(book, oldStatus, newStatus, nowIso = new Date().toISOString()) {
+  if (!book) return { confetti: false, askRating: false };
   let confetti = false;
   let askRating = false;
+  if (oldStatus === newStatus) return { confetti, askRating };
+  const today = nowIso.slice(0, 10);
+  book.status = newStatus;
   if (newStatus === 'reading' && !book.dateStarted) book.dateStarted = today;
   if (newStatus === 'finished') {
     if (!book.dateFinished) book.dateFinished = today;
@@ -269,6 +272,16 @@ export async function changeBookStatus(bookId, newStatus) {
     book.dateFinished = '';
     book.readingDays = undefined;
   }
+  return { confetti, askRating };
+}
+
+export async function changeBookStatus(bookId, newStatus) {
+  const book = await getBook(bookId);
+  if (!book) return null;
+  const oldStatus = book.status;
+  const now = new Date().toISOString();
+  book.updatedAt = now;
+  const { confetti, askRating } = applyStatusTransition(book, oldStatus, newStatus, now);
   await putBook(book);
   return { confetti, askRating, book };
 }
@@ -332,6 +345,32 @@ export async function getCover(bookId) {
     const tx = db.transaction('covers', 'readonly');
     const req = tx.objectStore('covers').get(bookId);
     req.onsuccess = () => resolve(req.result?.blob || null);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+  });
+}
+
+// 🆕 P2-8: batch-загрузка обложек ОДНОЙ readonly-транзакцией.
+// Стартовый путь app.js (restoreCoverUrls) раньше вызывал getCover() для
+// КАЖДОЙ книги — N отдельных транзакций; на большой библиотеке это
+// линейно тормозило старт до первого render. loadCovers() читает весь
+// store 'covers' один раз и возвращает Map<bookId, Blob>.
+// bookIds (необязательный массив) фильтрует результат; без него — все covers.
+export async function loadCovers(bookIds) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains('covers')) { resolve(new Map()); return; }
+    const tx = db.transaction('covers', 'readonly');
+    const req = tx.objectStore('covers').getAll();
+    req.onsuccess = () => {
+      const map = new Map();
+      const want = bookIds && bookIds.length ? new Set(bookIds) : null;
+      for (const row of (req.result || [])) {
+        if (row && row.bookId && (!want || want.has(row.bookId))) map.set(row.bookId, row.blob);
+      }
+      resolve(map);
+    };
     req.onerror = () => reject(req.error || new Error('read failed'));
     tx.onerror = () => reject(tx.error || new Error('read failed'));
     tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
