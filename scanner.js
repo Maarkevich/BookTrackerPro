@@ -5,12 +5,20 @@
 //    Стратегия распознавания (по приоритету):
 //      1. Нативный BarcodeDetector API
 //         (Chrome 83+, Edge, Samsung Internet, Android)
-//      2. Фолбэк: ZXing-wasm из CDN
+//      2. Фолбэк: ZXing-wasm (локальный, под /BookTrackerPro/zxing/)
 //         (Firefox, Safari, старые браузеры)
 //      3. Ручной ввод ISBN (всегда доступен)
 //
 //    Поддерживаемые форматы: EAN-13, EAN-8, Code 128
 //    Валидация: только валидные ISBN-10 / ISBN-13
+//
+//    🆕 P1-14: ZXing-wasm больше НЕ грузится с CDN (unpkg/jsDelivr).
+//    Причины: 1) CSP script-src 'self' блокирует динамический import()
+//    remote ES module (CDN были только в connect-src); 2) файла
+//    dist/reader/zxing_reader.js в пакете вообще нет — это ES-сборка
+//    dist/es/reader/index.js (+ core + wasm); 3) CDN не давал
+//    гарантии offline. Теперь фиксированная версия 1.2.12 лежит
+//    локально и precache-ируется sw.js.
 //
 //    Новое в 3.8.3:
 //      — Убрана дублирующая проверка ISBN (978/979 префикс
@@ -26,6 +34,16 @@
 //      — MAX_ERRORS = 30 (~7.5 сек ошибок → выход)
 // ─────────────────────────────────────────────
 import { validateISBN, cleanISBN } from './isbn.js';
+
+// 🆕 P1-14: базовый путь приложения (совместим с GitHub Pages).
+const BASE = '/BookTrackerPro';
+
+// Локальная точка входа ZXing-wasm (фиксированная версия 1.2.12).
+// Расположение соответствует структуре npm-пакета:
+//   zxing/dist/es/reader/index.js       — ES module (обёртка)
+//   zxing/dist/es/core-DnsuMG85.js      — ES module (ядро, chained import)
+//   zxing/dist/reader/zxing_reader.wasm — WASM-бинарник
+const ZXING_ENTRY = `${BASE}/zxing/dist/es/reader/index.js`;
 
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ МОДУЛЯ
@@ -46,7 +64,7 @@ let _zxingModule = null;    // кеш ZXing-wasm модуля
  *
  * Стратегия:
  *   1. Нативный BarcodeDetector (быстрый, без загрузок)
- *   2. ZXing-wasm из CDN (фолбэк для Safari/Firefox)
+ *   2. ZXing-wasm локальный (фолбэк для Safari/Firefox)
  *   3. null → UI показывает ручной ввод
  *
  * @param {HTMLVideoElement} videoEl — видеоэлемент для камеры
@@ -239,26 +257,36 @@ async function scanLoop_Native(videoEl, formats, signal) {
 // ═══════════════════════════════════════════════
 
 /**
- * Ленивая загрузка ZXing-wasm из CDN (с кешем модуля).
- * Пробует два CDN на случай недоступности одного.
+ * Ленивая загрузка ZXing-wasm (с кешем модуля).
+ *
+ * 🆕 P1-14: фиксированная версия 1.2.12 подключается с self
+ * (`/BookTrackerPro/zxing/dist/es/reader/index.js`), а не с CDN.
+ * 1) CSP script-src 'self' блокировал динамический import() remote
+ *    ES module (unpkg/jsDelivr числились только в connect-src);
+ * 2) в пакете не существует файла dist/reader/zxing_reader.js — модуль
+ *    собирается как dist/es/reader/index.js; 3) CDN не гарантировал
+ *    offline. WASM-путь переопределяется через setZXingModuleOverrides,
+ *    иначе ядро ZXing по умолчанию ищет wasm на внешнем CDN.
+ *
  * @returns {Promise<object|null>}
  */
 async function loadZXing() {
   if (_zxingModule) return _zxingModule;
 
-  const CDNS = [
-    'https://unpkg.com/zxing-wasm@1.2.12/dist/reader/zxing_reader.js',
-    'https://cdn.jsdelivr.net/npm/zxing-wasm@1.2.12/dist/reader/zxing_reader.js',
-  ];
-
-  for (const url of CDNS) {
-    try {
-      const module = await import(/* webpackIgnore: true */ url);
-      _zxingModule = module;
-      return module;
-    } catch (e) {
-      console.warn('[Scanner] ZXing load failed from', url, e.message);
+  try {
+    const module = await import(/* webpackIgnore: true */ ZXING_ENTRY);
+    // Локальный WASM вместо CDN-пути из default overrides ядра.
+    if (typeof module.setZXingModuleOverrides === 'function') {
+      module.setZXingModuleOverrides({
+        locateFile: (file, base) => file.endsWith('.wasm')
+          ? `${BASE}/zxing/dist/reader/${file}`
+          : base + file,
+      });
     }
+    _zxingModule = module;
+    return module;
+  } catch (e) {
+    console.warn('[Scanner] ZXing load failed from', ZXING_ENTRY, e.message);
   }
   return null;
 }

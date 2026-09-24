@@ -40,6 +40,11 @@ const SHELL_ASSETS = [
   `${BASE}/sw-register.js`,
   `${BASE}/icon-192.png`,
   `${BASE}/icon-512.png`,
+  // 🆕 P1-14: локальный ZXing-wasm fallback — критичен для оффлайн-сканера
+  // в Firefox/Safari (нет нативного BarcodeDetector). Часть app shell.
+  `${BASE}/zxing/dist/es/reader/index.js`,
+  `${BASE}/zxing/dist/es/core-DnsuMG85.js`,
+  `${BASE}/zxing/dist/reader/zxing_reader.wasm`,
 ];
 
 const OCR_PATTERNS = [
@@ -49,6 +54,27 @@ const OCR_PATTERNS = [
   'rus.traineddata.gz',
   'eng.traineddata.gz',
 ];
+
+// 🆕 P1-14: локальный ZXing-wasm fallback (фиксированная версия 1.2.12).
+// Раньше загружался с unpkg/jsDelivr, что блокировалось CSP
+// (script-src 'self') и не работало offline. Теперь файлы лежат под
+// /BookTrackerPro/zxing/ и precache-ируются вместе с app shell,
+// поэтому холодный оффлайн-сканер (Firefox/Safari) работает сразу.
+const ZXING_ASSETS = [
+  `${BASE}/zxing/dist/es/reader/index.js`,
+  `${BASE}/zxing/dist/es/core-DnsuMG85.js`,
+  `${BASE}/zxing/dist/reader/zxing_reader.wasm`,
+];
+
+// 🆕 P1-9: разделение app shell на ОБЯЗАТЕЛЬНЫЕ и ОПЦИОНАЛЬНЫЕ ресурсы.
+//   CRITICAL_SHELL_ASSETS — критический офлайн-скелет (html/css/js/manifest):
+//     без него приложение не запускается офлайн, поэтому при сбое хотя бы
+//     одного ресурса install ОТКЛОНЯЕТСЯ и новый worker не активируется
+//     (старый рабочий SW остаётся у руля).
+//   OPTIONAL_SHELL_ASSETS — иконки PWA: их отсутствие не ломает запуск,
+//     сбой логируется отдельно и НЕ блокирует установку.
+const CRITICAL_SHELL_ASSETS = SHELL_ASSETS.filter(url => !url.endsWith('.png'));
+const OPTIONAL_SHELL_ASSETS = SHELL_ASSETS.filter(url => url.endsWith('.png'));
 
 const CACHEABLE_ORIGINS = [
   'books.google.com',
@@ -80,24 +106,48 @@ function isOcrRequest(url) {
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => Promise.allSettled(
-        SHELL_ASSETS.map(url =>
-          cache.add(url).catch(err => console.warn(`[SW] Не закешировалось: ${url}`, err))
-        )
-      ))
-      .then(() => { console.log(`[SW] App shell закеширован`); return self.skipWaiting(); })
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    // 🆕 P1-9: обязательный app shell — fail-fast.
+    // Раньше individual errors поглощались `.catch()` + `allSettled`,
+    // и `skipWaiting()` вызывался даже при НЕПОЛНОМ кеше — новый worker
+    // захватывал управление без офлайн-скелета.
+    // Теперь: при сбое ЛЮБОГО обязательного ресурса install отклоняется,
+    // worker НЕ активируется, старый рабочий SW остаётся.
+    await cache.addAll(CRITICAL_SHELL_ASSETS);
+    // Опциональные (иконки): не блокируют install, ошибки логируются отдельно.
+    await Promise.allSettled(
+      OPTIONAL_SHELL_ASSETS.map(url =>
+        cache.add(url).catch(err => console.warn(`[SW] Не закешировалась иконка: ${url}`, err))
+      )
+    );
+    console.log(`[SW] App shell закеширован`);
+    // 🆕 P1-10: активация ТОЛЬКО по подтверждению пользователя.
+    // Раньше install-time `skipWaiting()` активировал worker сразу →
+    // мгновенный controllerchange → reload без согласия пользователя
+    // (потеря ввода в открытой форме). Теперь новый worker ждёт в
+    // состоянии "waiting", а `skipWaiting()` вызывается только по
+    // сообщению SKIP_WAITING из sw-register.js (кнопка «Обновить»).
+  })().catch((err) => {
+    console.error(`[SW] ❌ Критический app shell неполный — установка прервана:`, err);
+    throw err; // отклоняем install → worker не активируется
+  }));
 });
 
 self.addEventListener('activate', (event) => {
+  // 🆕 P1-11: удаляем только кеши BookTrackerPro (префикс btp-).
+  // Раньше фильтр был «не входит в allowlist» — на общем origin
+  // (GitHub Pages / custom domain) SW затирал кеши ДРУГИХ приложений:
+  // other-app-cache и пр. Теперь — namespace-ownership: чужие кеши
+  // без префикса btp- не трогаем; удаляем только устаревшие кеши
+  // приложения (не входящие в текущую карту CACHE_NAME/cover/OCR).
+  const APP_CACHE_PREFIX = 'btp-';
   const validCaches = [CACHE_NAME, COVER_CACHE_NAME, OCR_CACHE_NAME];
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(
-        keys.filter((key) => !validCaches.includes(key))
-            .map((key) => { console.log(`[SW] Удаляю старый кеш: ${key}`); return caches.delete(key); })
+        keys.filter((key) => key.startsWith(APP_CACHE_PREFIX) && !validCaches.includes(key))
+            .map((key) => { console.log(`[SW] Удаляю старый кеш приложения: ${key}`); return caches.delete(key); })
       ))
       .then(() => { console.log(`[SW] Активирован: ${CACHE_NAME}`); return self.clients.claim(); })
   );

@@ -105,7 +105,7 @@ describe('P1-4: exportAll() — секреты не попадают в backup (
 });
 
 describe('P1-4: importAll() — credentials из старого backup не попадают обратно (db.js)', () => {
-  it('F: старый backup с секретами в settings не записывает их в IndexedDB', async () => {
+  it('F: старый backup с секретами в settings не записывает их в IndexedDB (P1-4), но безопасные ключи применяются (P2-2)', async () => {
     const res = await importAll({
       app: 'BookTrackerPro', version: 1,
       books: [{ id: 'bk1', title: 'Книга', author: 'A' }],
@@ -115,8 +115,14 @@ describe('P1-4: importAll() — credentials из старого backup не по
       },
     });
     expect(res.addedBooks).toBe(1);
-    // importAll settings не импортирует — секреты в базу не попадают
+    // P1-4: секреты отфильтрованы allowlist'ом sanitizeSettingsForExport
     const stored = await loadSettings();
-    expect(stored).toBeNull();
+    expect(stored.lrAppId).toBeUndefined();
+    expect(stored.lrSecret).toBeUndefined();
+    expect(stored.lrPartnerId).toBeUndefined();
+    expect(stored.lrPartnerSecret).toBeUndefined();
+    expect(stored.microlinkApiKey).toBeUndefined();
+    // 🆕 P2-2: безопасный ключ из старого backup применяется (policy restore-merge)
+    expect(stored.defaultCurrency).toBe('RUB');
   });
 });

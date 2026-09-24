@@ -553,6 +553,12 @@ a:hover { text-decoration: underline; }
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 .btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
 
+/* 🆕 P2-7: «Показать ещё» — широкая кнопка под списком */
+.load-more-btn {
+  width: 100%;
+  margin-top: 14px;
+}
+
 .btn-danger {
   background: var(--red-dim); color: var(--red);
   border: 1px solid transparent;

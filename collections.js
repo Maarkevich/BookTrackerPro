@@ -278,7 +278,7 @@ export function openCollectionForm(collection, onSave) {
   overlay.querySelector('.col-form-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  overlay.querySelector('#col-f-save').addEventListener('click', () => {
+  overlay.querySelector('#col-f-save').addEventListener('click', async () => {
     const name = overlay.querySelector('#col-f-name').value.trim();
     if (!name) {
       showToast('⚠️ Введите название', 'error');
@@ -294,8 +294,16 @@ export function openCollectionForm(collection, onSave) {
       order: typeof c.order === 'number' ? c.order : undefined,
       createdAt: c.createdAt || new Date().toISOString(),
     };
-    onSave(data);
-    close();
+    // 🆕 P1-5: форма закрывается ТОЛЬКО после подтверждённой записи.
+    // onSave возвращает true при успехе; при ошибке — false/throw.
+    let ok = false;
+    try {
+      ok = await onSave(data);
+    } catch (err) {
+      console.error('[DB] collection form save error:', err);
+      showToast('❌ Ошибка сохранения подборки: база данных', 'error');
+    }
+    if (ok) close();
   });
 }
 
@@ -444,10 +452,19 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       const checked = overlay.querySelectorAll('#add-books-list input:checked');
-      for (const cb of checked) {
-        await addBookToCollection(collectionId, cb.dataset.bookId);
+      // 🆕 P1-5: считаем РЕАЛЬНО записанные книги; при ошибке БД — error toast
+      let added = 0;
+      try {
+        for (const cb of checked) {
+          const ok = await addBookToCollection(collectionId, cb.dataset.bookId);
+          if (ok) added++;
+        }
+      } catch (err) {
+        console.error('[DB] add books to collection error:', err);
+        showToast('❌ Не удалось добавить книги: база данных', 'error');
+        return;
       }
-      showToast(`✅ Добавлено: ${checked.length}`, 'success');
+      showToast(added > 0 ? `✅ Добавлено: ${added}` : '⚠️ Книги не добавлены', added > 0 ? 'success' : 'error');
       close();
       if (onDone) onDone();
     });

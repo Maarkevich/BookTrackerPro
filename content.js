@@ -13,7 +13,7 @@
 //      — Отчётность издательству, превью публикаций (Microlink)
 //      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
-import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
+import { addContentToBook, updateContentInBook, removeContentFromBook, moveContentItem, loadBooks } from './db.js';
 import { esc, safeUrl, safeLinkUrl, escAttr, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
@@ -60,6 +60,8 @@ const STATUS_ORDER = ['idea', 'planned', 'filming', 'editing', 'published'];
 // ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «КОНТЕНТ»
 // ═══════════════════════════════════════════════
+// 🆕 P2-7: окно рендера контента вместо полной пересборки всех items
+export const CONTENT_PAGE_SIZE = 100;
 export function renderContentTab(container, books, settings, callbacks) {
   const allContent = [];
   for (const book of books) {
@@ -95,7 +97,13 @@ export function renderContentTab(container, books, settings, callbacks) {
     ? allContent
     : allContent.filter(c => c.status === currentFilter);
 
-  const groups = groupByDate(filtered);
+  // 🆕 P2-7: окно — рендерим не более CONTENT_PAGE_SIZE карточек,
+  // остальные — через «Показать ещё»
+  if (!container._contentLimit) container._contentLimit = CONTENT_PAGE_SIZE;
+  const limit = container._contentLimit;
+  const visibleItems = filtered.slice(0, limit);
+  const hasMore = filtered.length > limit;
+  const groups = groupByDate(visibleItems);
 
   container.innerHTML = `
     <div class="filter-bar no-scrollbar">
@@ -105,7 +113,7 @@ export function renderContentTab(container, books, settings, callbacks) {
         </button>
       `).join('')}
     </div>
-    ${filtered.length === 0 ? `
+    ${visibleItems.length === 0 ? `
       <div class="empty-state">
         <div class="empty-icon">${icon('film', 56)}</div>
         <div class="empty-title">Нет контента</div>
@@ -127,15 +135,33 @@ export function renderContentTab(container, books, settings, callbacks) {
         </div>
       `).join('')}
     `}
+    ${hasMore ? `
+      <button id="content-load-more" class="btn-secondary load-more-btn" data-hidden="${filtered.length - limit}">
+        ${icon('chevronDown', 14)} Показать ещё (${filtered.length - limit})
+      </button>
+    ` : ''}
     <button id="content-add-btn" class="btn-primary mt-16">${icon('plus', 16)} Новый контент</button>
   `;
 
   container.querySelectorAll('[data-cfilter]').forEach(chip => {
     chip.addEventListener('click', () => {
       container._contentFilter = chip.dataset.cfilter;
+      container._contentLimit = CONTENT_PAGE_SIZE;
       renderContentTab(container, books, settings, callbacks);
     });
   });
+
+  const loadMoreBtn = container.querySelector('#content-load-more');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      const scrollY = (typeof window !== 'undefined' && window.scrollY) || 0;
+      container._contentLimit = limit + CONTENT_PAGE_SIZE;
+      renderContentTab(container, books, settings, callbacks);
+      if (scrollY > 0) {
+        try { window.scrollTo(0, scrollY); } catch (e) { /* скролл недоступен (jsdom) */ }
+      }
+    });
+  }
 
   const addBtn = container.querySelector('#content-add-btn');
   const emptyAdd = container.querySelector('#content-empty-add');
@@ -405,7 +431,15 @@ export function openContentDetail(item, book, opts = {}) {
   overlay.querySelector('#cd-delete').addEventListener('click', async () => {
     const ok = await showConfirm('Удалить этот контент?', { danger: true, okText: 'Удалить' });
     if (!ok) return;
-    await removeContentFromBook(book?.id, item.id);
+    // 🆕 P1-5: success toast только после подтверждённого удаления
+    try {
+      const deleted = await removeContentFromBook(book?.id, item.id);
+      if (!deleted) throw new Error('content item not found');
+    } catch (err) {
+      console.error('[DB] content delete error:', err);
+      showToast('❌ Не удалось удалить контент: база данных', 'error');
+      return;
+    }
     close();
     showToast('🗑️ Контент удалён', 'info');
     document.dispatchEvent(new CustomEvent('data-changed'));
@@ -413,7 +447,14 @@ export function openContentDetail(item, book, opts = {}) {
 
   const nextBtn = overlay.querySelector('#cd-next');
   if (nextBtn) nextBtn.addEventListener('click', async () => {
-    await updateContentStatus(book?.id, item.id, nextStatus);
+    // 🆕 P1-5: success toast только после успешной записи
+    try {
+      await updateContentStatus(book?.id, item.id, nextStatus);
+    } catch (err) {
+      console.error('[DB] content status error:', err);
+      showToast('❌ Не удалось обновить статус: база данных', 'error');
+      return;
+    }
     close();
     if (nextStatus === 'published') showToast('📤 Контент опубликован! 🎉', 'success');
     else showToast(`Статус: ${nextInfo.label}`, 'success');
@@ -438,6 +479,9 @@ export function openContentForm(item, bookId, settings = {}) {
 
   loadBooks().then(books => {
     renderContentFormBody(body, books, item, bookId, settings);
+  }).catch((err) => {
+    console.error('[DB] loadBooks for content form error:', err);
+    body.innerHTML = '<div class="empty-state">⚠️ Не удалось загрузить книги<br><span class="small text-muted">Ошибка базы данных</span></div>';
   });
 
   overlay.classList.remove('hidden');
@@ -592,25 +636,31 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       updatedAt: new Date().toISOString(),
       bookId: bookId || null,
     };
+    // 🆕 P1-5: проверяем результат каждой записи — если «not found» (false) или
+    // операция отклонена (rejection), показываем ошибку и НЕ закрываем форму.
     try {
       const finalBookId = bookId || '__no_book__';
       if (item) {
         const oldBookId = item.bookId || c.bookId || bookId;
         if (oldBookId && oldBookId !== finalBookId) {
-          await removeContentFromBook(oldBookId, contentData.id);
-          await addContentToBook(finalBookId, contentData);
+          // 🆕 P1-7: атомарный перенос — одна транзакция по books,
+          // при сбое элемент не может пропасть или продублироваться.
+          const moved = await moveContentItem(oldBookId, finalBookId, contentData.id, contentData);
+          if (!moved) throw new Error('перенос контента не применён');
         } else {
-          await updateContentInBook(finalBookId, contentData.id, contentData);
+          const saved = await updateContentInBook(finalBookId, contentData.id, contentData);
+          if (!saved) throw new Error('контент не найден');
         }
         showToast('✅ Контент обновлён', 'success');
       } else {
-        await addContentToBook(finalBookId, contentData);
+        const saved = await addContentToBook(finalBookId, contentData);
+        if (!saved) throw new Error('книга не найдена');
         showToast('✅ Контент добавлен', 'success');
       }
       closeContentForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
     } catch (e) {
-      showToast('❌ Ошибка сохранения', 'error');
+      showToast('❌ Ошибка сохранения: база данных', 'error');
       console.error('[Content] Save error:', e);
     }
   });
@@ -622,11 +672,12 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       if (!ok) return;
       try {
         const bookId = body.querySelector('#cf-book').value || c.bookId;
-        await removeContentFromBook(bookId, c.id);
+        const deleted = await removeContentFromBook(bookId, c.id);
+        if (!deleted) throw new Error('content item not found');
         showToast('🗑️ Контент удалён', 'info');
         closeContentForm();
         document.dispatchEvent(new CustomEvent('data-changed'));
-      } catch { showToast('❌ Ошибка удаления', 'error'); }
+      } catch { showToast('❌ Ошибка удаления: база данных', 'error'); }
     });
   }
 }

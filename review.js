@@ -175,6 +175,9 @@ export function openReviewForm(bookId) {
     renderReviewFormBody(body, book);
     overlay.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+  }).catch((err) => {
+    console.error('[DB] loadBooks for review form error:', err);
+    showToast('❌ Не удалось загрузить книгу: база данных', 'error');
   });
 }
 
@@ -414,12 +417,13 @@ function renderReviewFormBody(body, book) {
       updatedAt: new Date().toISOString(),
     };
     try {
-      await saveReviewForBook(book.id, review);
+      const saved = await saveReviewForBook(book.id, review);
+      if (!saved) throw new Error('book not found');
       showToast('✅ Отзыв сохранён', 'success');
       closeReviewForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
     } catch (e) {
-      showToast('❌ Ошибка сохранения', 'error');
+      showToast('❌ Ошибка сохранения: база данных', 'error');
       console.error('[Review] Save error:', e);
     }
   });
@@ -443,11 +447,12 @@ function renderReviewFormBody(body, book) {
     const ok = await showConfirm('Удалить отзыв?', { danger: true, okText: 'Удалить' });
     if (!ok) return;
     try {
-      await removeReviewFromBook(book.id);
+      const deleted = await removeReviewFromBook(book.id);
+      if (!deleted) throw new Error('book not found');
       showToast('🗑️ Отзыв удалён', 'info');
       closeReviewForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
-    } catch { showToast('❌ Ошибка удаления', 'error'); }
+    } catch { showToast('❌ Ошибка удаления: база данных', 'error'); }
   });
 }
 

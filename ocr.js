@@ -7,11 +7,11 @@
 //      worker.min.js
 //      tesseract-core-simd.wasm.js
 //      rus.traineddata.gz   (русский)
-//      eng.traineddata.gz   (английский, опционально)
+//      eng.traineddata.gz   (английский, НЕ поставляется — см. P1-12)
 //
 //    Флоу:
 //      📷 Фото страницы → предобработка (canvas)
-//      → Tesseract (rus+eng) → текст → правка → в цитату
+//      → Tesseract (rus) → текст → правка → в цитату
 //
 //    Точность для печатного текста: ~90-95%
 //
@@ -32,8 +32,12 @@ import { icon } from './icons.js';
 // Базовый путь к файлам Tesseract (в корне проекта)
 const BASE = '/BookTrackerPro';
 
-// Языки распознавания (rus — русский, eng — английский)
-const OCR_LANGS = 'rus+eng';
+// Языки распознавания.
+// 🆕 P1-12: только русский — `eng.traineddata.gz` НЕ поставляется в проекте
+// (проверенный `rus.traineddata.gz` = 8 634 337 bytes, eng отсутствует).
+// Раньше `rus+eng` заставлял Tesseract при каждом createWorker запрашивать
+// eng-модель → 404 → cold-start OCR падал даже для русского текста.
+const OCR_LANGS = 'rus';
 
 // Кеш воркера (не пересоздаём каждый раз)
 let _worker = null;
@@ -282,7 +286,7 @@ async function getWorker(onProgress) {
     const worker = await Tesseract.createWorker(OCR_LANGS, 1, {
       workerPath: `${BASE}/worker.min.js`,
       corePath: `${BASE}/tesseract-core-simd.wasm.js`,
-      langPath: BASE,              // ищет rus.traineddata.gz / eng.traineddata.gz
+      langPath: BASE,              // ищет rus.traineddata.gz (P1-12: только rus)
       cacheMethod: 'indexeddb',    // кеширует модель в IndexedDB
       gzip: true,                  // traineddata в формате .gz
       logger: (m) => {
@@ -315,6 +319,11 @@ async function getWorker(onProgress) {
  * Предварительная проверка доступности OCR.
  * Проверяет наличие критичных файлов через HEAD-запросы.
  *
+ * 🆕 P1-12: проверяет РОВНО те языки, которые фактически используются в
+ * runtime (OCR_LANGS). Раньше проверка была захардкожена на rus, хотя
+ * createWorker запрашивал rus+eng — «поддержка ок» могла быть, а
+ * распознавание падало из-за отсутствующего eng-файла.
+ *
  * @returns {Promise<{ok: boolean, error?: string}>}
  */
 export async function checkOcrSupport() {
@@ -322,11 +331,132 @@ export async function checkOcrSupport() {
     const r = await fetch(`${BASE}/tesseract.min.js`, { method: 'HEAD' });
     if (!r.ok) return { ok: false, error: 'tesseract.min.js не найден' };
 
-    const r2 = await fetch(`${BASE}/rus.traineddata.gz`, { method: 'HEAD' });
-    if (!r2.ok) return { ok: false, error: 'rus.traineddata.gz не найден' };
+    // Проверяем каждый язык из OCR_LANGS (согласовано с createWorker)
+    const langs = OCR_LANGS.split('+').map(s => s.trim()).filter(Boolean);
+    for (const lang of langs) {
+      const rl = await fetch(`${BASE}/${lang}.traineddata.gz`, { method: 'HEAD' });
+      if (!rl.ok) return { ok: false, error: `${lang}.traineddata.gz не найден` };
+    }
 
     return { ok: true };
   } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  2.1 ПОДГОТОВКА OCR ДЛЯ ПОЛНОГО OFFLINE (🆕 P1-13)
+// ═══════════════════════════════════════════════
+
+// Имя runtime-кеша OCR — должно совпадать с OCR_CACHE_NAME в sw.js.
+// P1-13: страница кладёт полный набор сюда, SW читает из того же кеша.
+const OCR_CACHE_NAME = 'btp-ocr-v1';
+
+// 🆕 P1-13: полный проверенный набор OCR-ресурсов для cold offline.
+// Соответствует ровно тем файлам, которые реально запрашивает Tesseract:
+//   — tesseract.min.js            (loadTesseractLib → <script src>)
+//   — worker.min.js               (workerPath в createWorker)
+//   — tesseract-core-simd.wasm.js (corePath в createWorker)
+//   — rus.traineddata.gz          (langPath; P1-12: только rus — eng не поставляется)
+const OCR_OFFLINE_ASSETS = [
+  `${BASE}/tesseract.min.js`,
+  `${BASE}/worker.min.js`,
+  `${BASE}/tesseract-core-simd.wasm.js`,
+  `${BASE}/rus.traineddata.gz`,
+];
+
+/**
+ * Проверяет, что весь набор OCR-ресурсов уже лежит в runtime-кеше
+ * (`btp-ocr-v1`). Используется для подтверждения готовности после
+ * подготовки. Чисто локальная проверка — сети не требует.
+ *
+ * @returns {Promise<{ok: boolean, missing: string[]}>}
+ */
+export async function isOcrReadyOffline() {
+  try {
+    const cache = await caches.open(OCR_CACHE_NAME);
+    const results = await Promise.all(
+      OCR_OFFLINE_ASSETS.map((url) => cache.match(url).then((r) => Boolean(r)))
+    );
+    const missing = OCR_OFFLINE_ASSETS.filter((_, i) => !results[i]);
+    return { ok: missing.length === 0, missing };
+  } catch (e) {
+    return { ok: false, missing: [...OCR_OFFLINE_ASSETS], error: e.message };
+  }
+}
+
+/**
+ * Подготавливает OCR для полного offline-использования: атомарно качает
+ * весь проверенный набор OCR-ресурсов во runtime-кеш `btp-ocr-v1`.
+ *
+ * 🆕 P1-13: раньше тяжёлые OCR-ресурсы попадали в кеш ТОЛЬКО после
+ * первого онлайн-OCR-запроса (runtime cache-first у SW). Пользователь,
+ * установивший PWA, но не запускавший OCR с сетью, получал сломанное
+ * распознавание при первом офлайн-запуске. Теперь по кнопке «Подготовить
+ * OCR офлайн» набор скачивается заранее, а готовность подтверждается
+ * проверкой кеша (isOcrReadyOffline).
+ *
+ * Атомарность: если хоть один запрос не ок (404/сеть) или упал
+ * cache.put (quota) — уже положенные в ЭТОМ запуске URL удаляются,
+ * подготовка возвращает {ok:false}.
+ *
+ * @param {object} [opts]
+ * @param {(p: {current: number, total: number, sizeBytes: number}) => void} [opts.onProgress]
+ * @returns {Promise<{ok: boolean, sizeBytes?: number, error?: string}>}
+ */
+export async function prepareOcrOffline({ onProgress } = {}) {
+  const added = [];
+  const rollback = async (cache) => {
+    await Promise.allSettled(added.map((url) => cache.delete(url).catch(() => false)));
+  };
+
+  try {
+    const cache = await caches.open(OCR_CACHE_NAME);
+    let sizeBytes = 0;
+
+    for (let i = 0; i < OCR_OFFLINE_ASSETS.length; i++) {
+      const url = OCR_OFFLINE_ASSETS[i];
+
+      // Уже лежит в кеше — пропускаем (повторная подготовка не перекачивает).
+      const cached = await cache.match(url).catch(() => null);
+      if (cached) {
+        if (onProgress) {
+          const cl = Number(cached.headers?.get?.('content-length')) || 0;
+          sizeBytes += cl;
+          onProgress({ current: i + 1, total: OCR_OFFLINE_ASSETS.length, sizeBytes });
+        }
+        continue;
+      }
+
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        await rollback(cache);
+        return { ok: false, error: `${url}: HTTP ${resp.status}` };
+      }
+      try {
+        await cache.put(url, resp.clone());
+      } catch (e) {
+        await rollback(cache);
+        return { ok: false, error: `Не удалось записать в кеш: ${e.message}` };
+      }
+      added.push(url);
+      sizeBytes += Number(resp.headers.get('content-length')) || 0;
+      if (onProgress) onProgress({ current: i + 1, total: OCR_OFFLINE_ASSETS.length, sizeBytes });
+    }
+
+    // Подтверждение готовности ТОЛЬКО после проверки кеша.
+    const verify = await isOcrReadyOffline();
+    if (!verify.ok) {
+      await rollback(cache);
+      return { ok: false, error: `Кеш неполный: ${verify.missing.join(', ')}` };
+    }
+
+    return { ok: true, sizeBytes };
+  } catch (e) {
+    try {
+      const cache = await caches.open(OCR_CACHE_NAME);
+      await rollback(cache);
+    } catch { /* кеш недоступен — best effort */ }
     return { ok: false, error: e.message };
   }
 }

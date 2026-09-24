@@ -52,10 +52,53 @@ export const CURRENCIES = {
 // ═══════════════════════════════════════════════
 //  1. ОТКРЫТИЕ / МИГРАЦИЯ
 // ═══════════════════════════════════════════════
+
+/**
+ * 🆕 P2-4: ошибка «база заблокирована другим открытым соединением»
+ * (другая вкладка держит старую версию БД и мешает upgrade).
+ * Выбрасывается из openDB() вместо бесконечного ожидания — иначе
+ * init() навсегда висел, #skeleton оставался, UI выглядел зависшим.
+ */
+export class DBBlockedError extends Error {
+  constructor() {
+    super('Инициализация базы данных заблокирована — закройте другие вкладки BookTrackerPro');
+    this.name = 'DBBlockedError';
+    this.code = 'DB_BLOCKED';
+  }
+}
+
 export function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VER);
+    let settled = false;
+    const settleReject = (e) => {
+      if (settled) return;
+      settled = true;
+      reject(e);
+    };
+    const settleResolve = (db) => {
+      if (settled) {
+        // 🆕 P2-4: запрос был заблокирован и отклонён, но после снятия
+        // блокировки (пользователь закрыл другую вкладку) IDB всё же
+        // завершил upgrade успешно. Это осиротевшее соединение нам не нужно:
+        // закрываем его, чтобы оно не «висело» и не блокировало будущие
+        // openDB/deleteDatabase (в этот момент versionchange-транзакция уже
+        // завершена, поэтому close() безопасен и не прерывает upgrade).
+        db.close();
+        return;
+      }
+      _db = db;
+      _db.onclose = () => { _db = null; };
+      _db.onversionchange = () => {
+        _db.close();
+        _db = null;
+        // reload только там, где есть окно (не в node-тестах)
+        if (typeof window !== 'undefined') window.location.reload();
+      };
+      settled = true;
+      resolve(_db);
+    };
 
     request.onupgradeneeded = (event) => {
       const db = request.result;
@@ -109,75 +152,91 @@ export function openDB() {
       }
     };
 
-    request.onsuccess = () => {
-      _db = request.result;
-      _db.onclose = () => { _db = null; };
-      _db.onversionchange = () => {
-        _db.close();
-        _db = null;
-        window.location.reload();
-      };
-      resolve(_db);
+    request.onsuccess = () => settleResolve(request.result);
+    request.onerror = () => settleReject(request.error || new Error('open failed'));
+    // 🆕 P2-4: вместо console.warn + вечного зависания отклоняем Promise
+    // специальной ошибкой. Убираем блокировку, регистрируем onblocked.
+    request.onblocked = () => {
+      console.warn('[DB] Blocked — закройте другие вкладки');
+      settleReject(new DBBlockedError());
     };
-    request.onerror = () => reject(request.error);
-    request.onblocked = () => console.warn('[DB] Blocked — закройте другие вкладки');
   });
 }
+
+// 🆕 P1-5: ошибки IndexedDB больше НЕ маскируются под «успех».
+// request.onerror / tx.onerror / tx.onabort отклоняют Promise,
+// а не превращают сбой в штатное пустое значение/`false`.
+// Используются закрытия req.error / tx.error — не зависит от того,
+// передаёт ли реализация IDB объект события в обработчик.
+// Исключения (намеренно остаются успешными «ненайденными»):
+//   — несуществующий key в get* / *store-missing на легаси-БД → null/false/[];
+//   — repairCovers() / exportAll() — best-effort ремонт и P2-1 export.
 
 // ═══════════════════════════════════════════════
 //  2. КНИГИ — CRUD
 // ═══════════════════════════════════════════════
 export async function loadBooks() {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('books', 'readonly').objectStore('books').getAll();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('books', 'readonly');
+    const req = tx.objectStore('books').getAll();
     req.onsuccess = () => {
       const books = (req.result || []).map(ensureBookFields);
       books.sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || ''));
       resolve(books);
     };
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    // 🆕 P1-5: abort/error транзакции чтения тоже отклоняет Promise —
+    // без этого искусственный abort (и некоторые реализации IDB) не вызывают req.onerror.
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function putBook(book) {
   const db = await openDB();
   const safe = ensureBookFields(book);
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     tx.objectStore('books').put(safe);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => { console.error('[DB] putBook error:', tx.error); resolve(false); };
+    tx.onerror = () => { console.error('[DB] putBook error:', tx.error); reject(tx.error || new Error('write failed')); };
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function putBooks(books) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     for (const book of books) store.put(ensureBookFields(book));
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function delBook(id) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     tx.objectStore('books').delete(id);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function getBook(id) {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('books', 'readonly').objectStore('books').get(id);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('books', 'readonly');
+    const req = tx.objectStore('books').get(id);
     req.onsuccess = () => resolve(req.result ? ensureBookFields(req.result) : null);
-    req.onerror = () => resolve(null);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -219,20 +278,24 @@ export async function changeBookStatus(bookId, newStatus) {
 // ═══════════════════════════════════════════════
 export async function loadSettings() {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('settings', 'readonly').objectStore('settings').get('app');
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('settings', 'readonly');
+    const req = tx.objectStore('settings').get('app');
     req.onsuccess = () => resolve(req.result?.value || null);
-    req.onerror = () => resolve(null);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function saveSettings(settings) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('settings', 'readwrite');
     tx.objectStore('settings').put({ id: 'app', value: settings });
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -242,11 +305,12 @@ export async function saveSettings(settings) {
 export async function saveCover(bookId, blob) {
   if (!isValidCoverBlob(blob)) return false;
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('covers', 'readwrite');
     tx.objectStore('covers').put({ bookId, blob, savedAt: Date.now() });
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -263,22 +327,123 @@ export async function saveCoverFromUrl(bookId, url) {
 
 export async function getCover(bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('covers')) { resolve(null); return; }
-    const req = db.transaction('covers', 'readonly').objectStore('covers').get(bookId);
+    const tx = db.transaction('covers', 'readonly');
+    const req = tx.objectStore('covers').get(bookId);
     req.onsuccess = () => resolve(req.result?.blob || null);
-    req.onerror = () => resolve(null);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function deleteCover(bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('covers')) { resolve(false); return; }
     const tx = db.transaction('covers', 'readwrite');
     tx.objectStore('covers').delete(bookId);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+  });
+}
+
+// 🆕 P1-8: каскадное удаление книги АТОМАРНО.
+// Одна readwrite-транзакция по books+covers+collections+challenges:
+//   1) удаляется сама книга;
+//   2) удаляется её обложка;
+//   3) bookIds фильтруется во ВСЕХ коллекциях и челленджах;
+//   4) при любой ошибке транзакция abort'ится → книга не может
+//      «исчезнуть, а ссылки остаться» / «книга удалена, cover остался».
+// Возврат: boolean (true — транзакция применена; false — нет такой книги).
+export async function deleteBookCascade(bookId) {
+  const db = await openDB();
+  const withStore = (name) => db.objectStoreNames.contains(name);
+  const storeNames = ['books', 'covers', 'collections', 'challenges'].filter(withStore);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeNames, 'readwrite');
+    const booksStore = tx.objectStore('books');
+
+    // ── подтверждаем, что книга существует (иначе no-op) ──
+    const checkReq = booksStore.get(bookId);
+    checkReq.onsuccess = () => {
+      if (!checkReq.result) { resolve(false); return; }
+
+      // 1) книга
+      booksStore.delete(bookId);
+      // 2) обложка
+      if (withStore('covers')) tx.objectStore('covers').delete(bookId);
+
+      // 3) фильтрация bookIds во всех подборках и челленджах
+      const filterRefs = (storeName) => {
+        const store = tx.objectStore(storeName);
+        const req = store.getAll();
+        req.onsuccess = () => {
+          for (const rec of req.result || []) {
+            if (Array.isArray(rec.bookIds) && rec.bookIds.includes(bookId)) {
+              rec.bookIds = rec.bookIds.filter(id => id !== bookId);
+              store.put(rec);
+            }
+          }
+        };
+        req.onerror = () => reject(req.error || new Error('read failed'));
+      };
+      if (withStore('collections')) filterRefs('collections');
+      if (withStore('challenges')) filterRefs('challenges');
+    };
+    checkReq.onerror = () => reject(checkReq.error || new Error('read failed'));
+
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+  });
+}
+
+// 🆕 P1-8: безопасная repair-процедура для УЖЕ СУЩЕСТВУЮЩИХ dangling refs.
+// Удаляет из bookIds коллекций/челленджей ссылки на несуществующие книги.
+// Возвращает количество исправленных коллекций+челленджей.
+export async function repairDanglingRefs() {
+  const db = await openDB();
+  if (!db.objectStoreNames.contains('collections') && !db.objectStoreNames.contains('challenges')) return 0;
+
+  const existingIds = new Set();
+  await new Promise((resolve) => {
+    const req = db.transaction('books', 'readonly').objectStore('books').getAll();
+    req.onsuccess = () => {
+      for (const b of req.result || []) existingIds.add(b.id);
+      resolve();
+    };
+    req.onerror = () => resolve(); // best-effort ремонт — сбой чтения не прерывает init
+  });
+  // Даже если книг нет вообще — любые ссылки dangling, ремонт их вычистит.
+
+  return new Promise((resolve, reject) => {
+    const storeNames = ['collections', 'challenges'].filter(n => db.objectStoreNames.contains(n));
+    const tx = db.transaction(storeNames, 'readwrite');
+    let fixed = 0;
+    const filterRefs = (storeName) => {
+      const store = tx.objectStore(storeName);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        for (const rec of req.result || []) {
+          if (Array.isArray(rec.bookIds)) {
+            const before = rec.bookIds.length;
+            rec.bookIds = rec.bookIds.filter(id => existingIds.has(id));
+            if (rec.bookIds.length !== before) {
+              store.put(rec);
+              fixed++;
+            }
+          }
+        }
+      };
+      req.onerror = () => reject(req.error || new Error('read failed'));
+    };
+    for (const name of storeNames) filterRefs(name);
+
+    tx.oncomplete = () => resolve(fixed);
+    tx.onerror = () => { /* best-effort: сбой readwrite не прерывает init */ };
   });
 }
 
@@ -300,13 +465,13 @@ export async function repairCovers() {
   const covers = await new Promise((resolve) => {
     const req = db.transaction('covers', 'readonly').objectStore('covers').getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => resolve([]); // best-effort ремонт — сбой чтения не прерывает init
   });
   let removed = 0;
   for (const cover of covers) {
     if (!isValidCoverBlob(cover.blob)) {
       try {
-        await new Promise((resolve) => {
+        await new Promise((resolve, reject) => {
           const tx = db.transaction('covers', 'readwrite');
           tx.objectStore('covers').delete(cover.bookId);
           tx.oncomplete = () => resolve();
@@ -324,36 +489,41 @@ export async function repairCovers() {
 // ═══════════════════════════════════════════════
 export async function loadCollections() {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('collections', 'readonly').objectStore('collections').getAll();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('collections', 'readonly');
+    const req = tx.objectStore('collections').getAll();
     req.onsuccess = () => resolve((req.result || []).sort((a, b) => (a.order || 0) - (b.order || 0)));
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function putCollection(collection) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('collections', 'readwrite');
     tx.objectStore('collections').put(collection);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function delCollection(id) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('collections', 'readwrite');
     tx.objectStore('collections').delete(id);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function addBookToCollection(collectionId, bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('collections', 'readwrite');
     const store = tx.objectStore('collections');
     const req = store.get(collectionId);
@@ -365,13 +535,14 @@ export async function addBookToCollection(collectionId, bookId) {
       store.put(col);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function removeBookFromCollection(collectionId, bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('collections', 'readwrite');
     const store = tx.objectStore('collections');
     const req = store.get(collectionId);
@@ -382,7 +553,8 @@ export async function removeBookFromCollection(collectionId, bookId) {
       store.put(col);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -396,13 +568,14 @@ export async function moveCollection(id, direction) {
   collections[idx].order = collections[swapIdx].order;
   collections[swapIdx].order = tempOrder;
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('collections', 'readwrite');
     const store = tx.objectStore('collections');
     store.put(collections[idx]);
     store.put(collections[swapIdx]);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -417,36 +590,41 @@ export async function getNextCollectionOrder() {
 // ═══════════════════════════════════════════════
 export async function loadChallenges() {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('challenges', 'readonly').objectStore('challenges').getAll();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('challenges', 'readonly');
+    const req = tx.objectStore('challenges').getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function putChallenge(challenge) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('challenges', 'readwrite');
     tx.objectStore('challenges').put(challenge);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function delChallenge(id) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('challenges', 'readwrite');
     tx.objectStore('challenges').delete(id);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function addBookToChallenge(challengeId, bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('challenges', 'readwrite');
     const store = tx.objectStore('challenges');
     const req = store.get(challengeId);
@@ -458,13 +636,14 @@ export async function addBookToChallenge(challengeId, bookId) {
       store.put(ch);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function removeBookFromChallenge(challengeId, bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('challenges', 'readwrite');
     const store = tx.objectStore('challenges');
     const req = store.get(challengeId);
@@ -475,7 +654,8 @@ export async function removeBookFromChallenge(challengeId, bookId) {
       store.put(ch);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -484,30 +664,35 @@ export async function removeBookFromChallenge(challengeId, bookId) {
 // ═══════════════════════════════════════════════
 export async function loadTags() {
   const db = await openDB();
-  return new Promise((resolve) => {
-    const req = db.transaction('tags', 'readonly').objectStore('tags').getAll();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('tags', 'readonly');
+    const req = tx.objectStore('tags').getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function putTag(tag) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('tags', 'readwrite');
     tx.objectStore('tags').put(tag);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function delTag(name) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('tags', 'readwrite');
     tx.objectStore('tags').delete(name);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -516,7 +701,7 @@ export async function delTag(name) {
 // ═══════════════════════════════════════════════
 export async function addContentToBook(bookId, contentItem) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     const req = store.get(bookId);
@@ -535,13 +720,14 @@ export async function addContentToBook(bookId, contentItem) {
       store.put(book);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function updateContentInBook(bookId, contentId, updates) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     const req = store.get(bookId);
@@ -557,13 +743,14 @@ export async function updateContentInBook(bookId, contentId, updates) {
       store.put(book);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function removeContentFromBook(bookId, contentId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     const req = store.get(bookId);
@@ -575,7 +762,81 @@ export async function removeContentFromBook(bookId, contentId) {
       store.put(book);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+  });
+}
+
+/**
+ * 🆕 P1-7: атомарный перенос content item между книгами.
+ * Одна readwrite-транзакция по store 'books':
+ *   — читает обе книги (source и target);
+ *   — удаляет элемент из source;
+ *   — добавляет в target (с replace по contentId — конфликт ID не дублирует элемент);
+ *   — при любой ошибке транзакция abort'ится → элемент НЕ может оказаться
+ *     одновременно в двух книгах или ни в одной.
+ *
+ * Результат (контракт P1-5):
+ *   — true — перенос применён;
+ *   — false — штатное «не найдено / no-op» (одинаковые книги, нет source,
+ *     нет элемента в source, нет target; НИЧЕГО не записано, без abort);
+ *   — reject — реальный сбой IndexedDB (ошибка/abort транзакции).
+ *
+ * @param {string} sourceBookId — книга, из которой переносится элемент
+ * @param {string} targetBookId — книга, куда переносится элемент
+ * @param {string} contentId — id переносимого content item
+ * @param {object} [contentData] — новые данные элемента (если элемент редактировался);
+ *                                 иначе переносится существующий элемент как есть
+ */
+export async function moveContentItem(sourceBookId, targetBookId, contentId, contentData) {
+  if (!sourceBookId || !targetBookId || !contentId || sourceBookId === targetBookId) return false;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+
+    const srcReq = store.get(sourceBookId);
+    srcReq.onsuccess = () => {
+      const srcBook = srcReq.result;
+      if (!srcBook) { resolve(false); return; }
+      const existingItem = (srcBook.contentItems || []).find(c => c.id === contentId);
+      if (!existingItem) { resolve(false); return; }
+
+      const dstReq = store.get(targetBookId);
+      dstReq.onsuccess = () => {
+        let dstBook = dstReq.result;
+        if (!dstBook && targetBookId === '__no_book__') {
+          dstBook = ensureBookFields({
+            id: '__no_book__', title: 'Без книги', author: '',
+            status: 'added', contentItems: [],
+          });
+        }
+        if (!dstBook) { resolve(false); return; }
+
+        // ── обе книги подтверждены — теперь модификации в одной транзакции ──
+        const itemToMove = contentData
+          ? ensureContentItemFields(contentData)
+          : existingItem;
+
+        // удаляем из source
+        srcBook.contentItems = (srcBook.contentItems || []).filter(c => c.id !== contentId);
+        srcBook.updatedAt = new Date().toISOString();
+        store.put(srcBook);
+
+        // добавляем в target (замена по id — исключает дубликат при конфликте)
+        if (!dstBook.contentItems) dstBook.contentItems = [];
+        dstBook.contentItems = dstBook.contentItems.filter(c => c.id !== contentId);
+        dstBook.contentItems.push(itemToMove);
+        dstBook.updatedAt = new Date().toISOString();
+        store.put(dstBook);
+      };
+      dstReq.onerror = () => reject(dstReq.error || new Error('read failed'));
+    };
+    srcReq.onerror = () => reject(srcReq.error || new Error('read failed'));
+
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -584,7 +845,7 @@ export async function removeContentFromBook(bookId, contentId) {
 // ═══════════════════════════════════════════════
 export async function saveReviewForBook(bookId, review) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     const req = store.get(bookId);
@@ -596,13 +857,14 @@ export async function saveReviewForBook(bookId, review) {
       store.put(book);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function removeReviewFromBook(bookId) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction('books', 'readwrite');
     const store = tx.objectStore('books');
     const req = store.get(bookId);
@@ -614,7 +876,8 @@ export async function removeReviewFromBook(bookId) {
       store.put(book);
     };
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -623,33 +886,38 @@ export async function removeReviewFromBook(bookId) {
 // ═══════════════════════════════════════════════
 export async function putPendingSync(item) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('pending-sync')) { resolve(false); return; }
     const tx = db.transaction('pending-sync', 'readwrite');
     tx.objectStore('pending-sync').put(item);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function getPendingSync() {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('pending-sync')) { resolve([]); return; }
-    const req = db.transaction('pending-sync', 'readonly').objectStore('pending-sync').getAll();
+    const tx = db.transaction('pending-sync', 'readonly');
+    const req = tx.objectStore('pending-sync').getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error('read failed'));
+    tx.onerror = () => reject(tx.error || new Error('read failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
 export async function deletePendingSync(id) {
   const db = await openDB();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('pending-sync')) { resolve(false); return; }
     const tx = db.transaction('pending-sync', 'readwrite');
     tx.objectStore('pending-sync').delete(id);
     tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    tx.onerror = () => reject(tx.error || new Error('write failed'));
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
   });
 }
 
@@ -716,20 +984,34 @@ export function sanitizeSettingsForExport(settings) {
  * (БЕЗ credentials — P1-4) и ЛОКАЛЬНЫЕ ОБЛОЖКИ (covers store → base64).
  * Внешние https-URL книг не конвертируются в base64 — остаются текстом.
  *
+ * 🆕 P2-1: при сбое чтения ЛЮБОГО обязательного store экспорт
+ * ОТКЛОНЯЕТСЯ (throw). Раньше req.onerror = resolve([]) превращал ошибку
+ * чтения в «пустой массив» и создавался якобы успешный backup с
+ * потерянными данными. Теперь неполный файл не скачивается.
+ *
  * @returns {Promise<object>}
+ * @throws {Error} — при ошибке чтения store / закрытии БД / quota
  */
 export async function exportAll() {
   const db = await openDB();
-  const getAll = (storeName) => new Promise((resolve) => {
+
+  // 🆕 P2-1: fail-fast при ошибке чтения store.
+  // Легитимный «отсутствующий store» (старая схема) по-прежнему → [].
+  const getAll = (storeName) => new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains(storeName)) { resolve([]); return; }
-    const req = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).getAll();
     req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(req.error || new Error(`read failed: ${storeName}`));
+    tx.onerror = () => reject(tx.error || new Error(`read failed: ${storeName}`));
+    tx.onabort = () => reject(tx.error || new Error(`transaction aborted: ${storeName}`));
   });
+
   const [books, collections, challenges, tags, rawCovers] = await Promise.all([
     getAll('books'), getAll('collections'), getAll('challenges'), getAll('tags'), getAll('covers'),
   ]);
   // 🆕 P1-4: в backup попадают только не-секретные настройки
+  // loadSettings() отклоняется при сбое чтения (P1-5) → экспорт fail-fast
   const settings = sanitizeSettingsForExport(await loadSettings());
 
   // 🆕 P1-3: сериализуем только валидные локальные обложки
@@ -754,76 +1036,251 @@ export async function exportAll() {
 // ═══════════════════════════════════════════════
 //  🆕 13. ИМПОРТ = СИНХРОНИЗАЦИЯ (v3.8.5)
 // ═══════════════════════════════════════════════
+//  🆕 P1-6: импорт АТОМАРЕН и полностью валидируется ДО записи.
+//    — schema/type/size/ID/URL/reference валидация (throw при сбое);
+//    — все новые записи (books, collections, challenges, tags, covers)
+//      пишутся ОДНОЙ readwrite-транзакцией;
+//    — added* попадают в результат только после tx.oncomplete;
+//    — при любой ошибке транзакция abort'ится → частичный импорт невозможен.
+const MAX_IMPORT_ENTITY_COUNT = 5000;   // DoS-защита: записей на сущность
+const MAX_IMPORT_STRING_LEN = 100000;   // DoS-защита: длина строкового поля
+
 /**
  * Импорт в режиме СИНХРОНИЗАЦИИ (merge).
  * Добавляет только отсутствующие записи; существующие
  * (совпадающие по id / name) пропускает — данные НЕ затираются.
+ * Обложки существующих книг не перезаписываются (P1-3).
+ *
+ * 🆕 P2-2 policy импорта settings (restore-merge, БЕЗ credentials P1-4):
+ *   — из backup берутся ТОЛЬКО ключи из SAFE_SETTINGS_KEYS (sanitize);
+ *   — каждый такой ключ ЗАМЕНЯЕТ локальное значение;
+ *   — локальные ключи, которых нет в backup, сохраняются;
+ *   — при отсутствии/пустом settings в backup — настройки не трогаются;
+ *   — применяется в ТОЙ ЖЕ атомарной транзакции, что и остальной импорт.
+ * Версия backup защищена: version !== 1 → отказ ДО записи.
  *
  * @param {object} data — результат exportAll()
- * @returns {object} сводка { addedBooks, skippedBooks, ... }
+ * @returns {Promise<object>} сводка { addedBooks, skippedBooks, ... }
+ * @throws {Error} при невалидном формате/версии/типах/размере/дубликатах
  */
 export async function importAll(data) {
-  if (!data || !Array.isArray(data.books)) throw new Error('Неверный формат бэкапа');
+  // ── 1. ВАЛИДАЦИЯ ВСЕГО JSON ДО ТРАНЗАКЦИИ ──
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Неверный формат бэкапа');
+  if (!Array.isArray(data.books)) throw new Error('Неверный формат бэкапа');
+  if (data.version !== undefined && data.version !== 1) throw new Error('Неизвестная версия бэкапа');
+
+  const rawCols = data.collections === undefined ? [] : data.collections;
+  const rawChallenges = data.challenges === undefined ? [] : data.challenges;
+  const rawTags = data.tags === undefined ? [] : data.tags;
+  const rawCovers = data.covers === undefined ? [] : data.covers;
+  if (!Array.isArray(rawCols) || !Array.isArray(rawChallenges) || !Array.isArray(rawTags) || !Array.isArray(rawCovers)) {
+    throw new Error('Неверный формат бэкапа');
+  }
+  if (data.books.length > MAX_IMPORT_ENTITY_COUNT || rawCols.length > MAX_IMPORT_ENTITY_COUNT ||
+      rawChallenges.length > MAX_IMPORT_ENTITY_COUNT || rawTags.length > MAX_IMPORT_ENTITY_COUNT) {
+    throw new Error('Бэкап слишком большой');
+  }
+
+  validateImportBooks(data.books);
+  validateImportCollections(rawCols);
+  validateImportChallenges(rawChallenges);
+  validateImportTags(rawTags);
+
+  // ── 2. MERGE: только отсутствующие записи ──
+  const [existingBooks, existingCols, existingChallenges, existingTags, existingSettings] = await Promise.all([
+    loadBooks(), loadCollections(), loadChallenges(), loadTags(),
+    // 🆕 P2-2: текущие настройки для restore-merge (reject при сбое чтения — P1-5)
+    loadSettings(),
+  ]);
+  const bookIds = new Set(existingBooks.map(b => b.id));
+  const colIds = new Set(existingCols.map(c => c.id));
+  const challengeIds = new Set(existingChallenges.map(c => c.id));
+  const tagNames = new Set(existingTags.map(t => t.name));
+
+  const newBooks = data.books.filter(b => !bookIds.has(b.id));
+  const newCols = rawCols.filter(c => !colIds.has(c.id));
+  const newChallenges = rawChallenges.filter(c => !challengeIds.has(c.id));
+  const newTags = rawTags.filter(t => !tagNames.has(t.name));
+
+  // 🆕 P2-2: только несекретные ключи backup (sanitizeSettingsForExport = allowlist P1-4).
+  // `settings` — объект из backup (может отсутствовать в старых backup).
+  const importedSettings = typeof data.settings === 'object' && data.settings !== null && !Array.isArray(data.settings)
+    ? sanitizeSettingsForExport(data.settings)
+    : {};
+  // restore-merge: импортированные ключи заменяют локальные; локальные, которых
+  // нет в backup, сохраняются.
+  const mergedSettings = { ...(existingSettings || {}), ...importedSettings };
+  const settingsChanged = Object.keys(importedSettings).length > 0
+    && JSON.stringify(mergedSettings) !== JSON.stringify(existingSettings || {});
+
+  // Ссылки: bookIds подборок/челленджей ограничиваем известными книгами
+  // (существующие + новые из этого backup) — dangling references не создаются.
+  const knownBookIds = new Set([...bookIds, ...newBooks.map(b => b.id)]);
+  const sanitizeRefs = (arr) => (Array.isArray(arr) ? arr.filter(id => typeof id === 'string' && knownBookIds.has(id)) : []);
+  for (const c of newCols) c.bookIds = sanitizeRefs(c.bookIds);
+  for (const c of newChallenges) c.bookIds = sanitizeRefs(c.bookIds);
+
+  // Подготавливаем записи ДО транзакции (makeValid обязателен для новых книг)
+  const booksToPut = newBooks.map(b => makeValidBook(b));
+  const colsToPut = newCols.map(c => ({ ...c }));
+  const challengesToPut = newChallenges.map(c => ({ ...c }));
+  const tagsToPut = newTags.map(t => ({ ...t }));
 
   const summary = {
-    addedBooks: 0, skippedBooks: 0,
-    addedCollections: 0, skippedCollections: 0,
-    addedChallenges: 0, skippedChallenges: 0,
-    addedTags: 0, skippedTags: 0,
+    addedBooks: booksToPut.length, skippedBooks: data.books.length - booksToPut.length,
+    addedCollections: colsToPut.length, skippedCollections: rawCols.length - colsToPut.length,
+    addedChallenges: challengesToPut.length, skippedChallenges: rawChallenges.length - challengesToPut.length,
+    addedTags: tagsToPut.length, skippedTags: rawTags.length - tagsToPut.length,
+    // 🆕 P2-2: число ПРИМЕНЁННЫХ несекретных настроек из backup
+    appliedSettings: settingsChanged ? Object.keys(importedSettings).length : 0,
   };
 
-  // ── Книги: добавляем отсутствующие (по id) ──
-  const existingBooks = await loadBooks();
-  const bookIds = new Set(existingBooks.map(b => b.id));
-  const newBooks = (data.books || []).filter(b => b.id && !bookIds.has(b.id));
-  summary.skippedBooks = (data.books || []).length - newBooks.length;
-  summary.addedBooks = newBooks.length;
-  if (newBooks.length > 0) {
-    await putBooks(newBooks);
+  // ── 3. ОДНА readwrite-ТРАНЗАКЦИЯ по всем stores ──
+  const db = await openDB();
+  const storeNames = ['books', 'covers', 'collections', 'challenges', 'tags', 'settings']
+    .filter(name => db.objectStoreNames.contains(name));
 
-    // 🆕 P1-3: восстанавливаем локальные обложки для новых книг.
-    // Обложки существующих книг (merge: skipped) не перезаписываем.
-    if (Array.isArray(data.covers)) {
-      const coversByBook = new Map();
-      for (const c of data.covers) {
-        if (c && c.bookId && typeof c.base64 === 'string') coversByBook.set(c.bookId, c);
+  // obложки новых книг (P1-3): base64 → Blob, повреждённый base64 молча пропускаем
+  const coversToPut = [];
+  if (storeNames.includes('covers')) {
+    const coversByBook = new Map();
+    for (const c of rawCovers) {
+      if (c && typeof c.bookId === 'string' && typeof c.base64 === 'string' && !coversByBook.has(c.bookId)) {
+        coversByBook.set(c.bookId, c);
       }
-      for (const book of newBooks) {
-        const coverData = coversByBook.get(book.id);
-        if (!coverData) continue;
-        try {
-          const blob = base64ToBlob(coverData.base64, coverData.mime || 'image/jpeg');
-          if (isValidCoverBlob(blob)) await saveCover(book.id, blob);
-        } catch { /* повреждённый base64 — игнорируем */ }
-      }
+    }
+    for (const book of booksToPut) {
+      const coverData = coversByBook.get(book.id);
+      if (!coverData) continue;
+      try {
+        const blob = base64ToBlob(coverData.base64, coverData.mime || 'image/jpeg');
+        if (isValidCoverBlob(blob)) coversToPut.push({ bookId: book.id, blob, savedAt: coverData.savedAt || Date.now() });
+      } catch { /* повреждённый base64 — обложку пропускаем */ }
     }
   }
 
-  // ── Подборки: добавляем отсутствующие (по id) ──
-  const existingCols = await loadCollections();
-  const colIds = new Set(existingCols.map(c => c.id));
-  const newCols = (data.collections || []).filter(c => c.id && !colIds.has(c.id));
-  summary.skippedCollections = (data.collections || []).length - newCols.length;
-  summary.addedCollections = newCols.length;
-  for (const c of newCols) await putCollection(c);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeNames, 'readwrite');
+    try {
+      const putAll = (storeName, records) => {
+        const store = tx.objectStore(storeName);
+        for (const rec of records) store.put(rec);
+      };
+      putAll('books', booksToPut);
+      putAll('collections', colsToPut);
+      putAll('challenges', challengesToPut);
+      putAll('tags', tagsToPut);
+      putAll('covers', coversToPut);
+      // 🆕 P2-2: настройки пишутся в ТУ ЖЕ атомарную транзакцию.
+      if (settingsChanged && storeNames.includes('settings')) {
+        tx.objectStore('settings').put({ id: 'app', value: mergedSettings });
+      }
+    } catch (e) {
+      try { tx.abort(); } catch { /* */ }
+      reject(e);
+      return;
+    }
+    tx.oncomplete = () => resolve(summary); // added* только после успешного commit
+    tx.onerror = () => { try { tx.abort(); } catch { /* */ } reject(tx.error || new Error('import failed')); };
+    tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+  });
+}
 
-  // ── Челленджи: добавляем отсутствующие (по id) ──
-  const existingCh = await loadChallenges();
-  const chIds = new Set(existingCh.map(c => c.id));
-  const newCh = (data.challenges || []).filter(c => c.id && !chIds.has(c.id));
-  summary.skippedChallenges = (data.challenges || []).length - newCh.length;
-  summary.addedChallenges = newCh.length;
-  for (const c of newCh) await putChallenge(c);
+/** Валидация книг: id/типы строковых полей/структурные типы/размер. */
+function validateImportBooks(books) {
+  const seen = new Set();
+  for (const b of books) {
+    if (!b || typeof b !== 'object' || Array.isArray(b)) throw new Error('Неверный формат книги в бэкапе');
+    if (typeof b.id !== 'string' || !b.id || b.id.length > MAX_IMPORT_STRING_LEN) throw new Error('Неверный id книги');
+    if (seen.has(b.id)) throw new Error('Дубликат id книги в бэкапе');
+    seen.add(b.id);
+    requireStrings(b, ['title', 'author', 'description', 'genre', 'publisher', 'isbn', 'series', 'notes']);
+    requireArrays(b, ['contentItems', 'tags', 'tropes', 'formats', 'characters']);
+    requireNumbers(b, ['rating', 'currentPage', 'pageCount', 'pepperRating', 'tearRating', 'intrigueRating', 'horrorRating']);
+    if (b.isPR !== undefined && typeof b.isPR !== 'boolean') throw new Error('Неверный тип isPR');
+    if (b.price !== undefined) {
+      if (!b.price || typeof b.price !== 'object' || Array.isArray(b.price)) throw new Error('Неверный тип price');
+      if (b.price.amount !== undefined && typeof b.price.amount !== 'number') throw new Error('Неверный тип price.amount');
+      if (b.price.currency !== undefined && typeof b.price.currency !== 'string') throw new Error('Неверный тип price.currency');
+    }
+    if (b.review !== undefined && !isPlainObject(b.review)) throw new Error('Неверный тип review');
+    if (b.jointReading !== undefined && !isPlainObject(b.jointReading)) throw new Error('Неверный тип jointReading');
+    if (b.shelfMark !== undefined && !isPlainObject(b.shelfMark)) throw new Error('Неверный тип shelfMark');
+  }
+}
 
-  // ── Теги: добавляем отсутствующие (по name) ──
-  const existingTags = await loadTags();
-  const tagNames = new Set(existingTags.map(t => t.name));
-  const newTags = (data.tags || []).filter(t => t.name && !tagNames.has(t.name));
-  summary.skippedTags = (data.tags || []).length - newTags.length;
-  summary.addedTags = newTags.length;
-  for (const t of newTags) await putTag(t);
+/** Валидация подборок: id/name/массив bookIds. */
+function validateImportCollections(cols) {
+  const seen = new Set();
+  for (const c of cols) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('Неверный формат подборки в бэкапе');
+    if (typeof c.id !== 'string' || !c.id || c.id.length > MAX_IMPORT_STRING_LEN) throw new Error('Неверный id подборки');
+    if (seen.has(c.id)) throw new Error('Дубликат id подборки в бэкапе');
+    seen.add(c.id);
+    if (c.name !== undefined && (typeof c.name !== 'string' || c.name.length > MAX_IMPORT_STRING_LEN)) throw new Error('Неверный тип name подборки');
+    validateBookIdRefs(c.bookIds, 'подборки');
+  }
+}
 
-  return summary;
+/** Валидация челленджей: id/name/массив bookIds. */
+function validateImportChallenges(chs) {
+  const seen = new Set();
+  for (const c of chs) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) throw new Error('Неверный формат челленджа в бэкапе');
+    if (typeof c.id !== 'string' || !c.id || c.id.length > MAX_IMPORT_STRING_LEN) throw new Error('Неверный id челленджа');
+    if (seen.has(c.id)) throw new Error('Дубликат id челленджа в бэкапе');
+    seen.add(c.id);
+    if (c.name !== undefined && (typeof c.name !== 'string' || c.name.length > MAX_IMPORT_STRING_LEN)) throw new Error('Неверный тип name челленджа');
+    validateBookIdRefs(c.bookIds, 'челленджа');
+  }
+}
+
+/** Валидация тегов: уникальность и тип name. */
+function validateImportTags(tags) {
+  const seen = new Set();
+  for (const t of tags) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) throw new Error('Неверный формат тега в бэкапе');
+    if (typeof t.name !== 'string' || !t.name || t.name.length > MAX_IMPORT_STRING_LEN) throw new Error('Неверный name тега');
+    if (seen.has(t.name)) throw new Error('Дубликат тега в бэкапе');
+    seen.add(t.name);
+  }
+}
+
+function validateBookIdRefs(bookIds, what) {
+  if (bookIds === undefined) return;
+  if (!Array.isArray(bookIds)) throw new Error(`Неверный тип bookIds ${what}`);
+  // сами элементы могут содержать мусор из легаси-backup —
+  // «битые» ссылки отфильтровывает sanitizeRefs() при импорте (нет dangling refs)
+}
+
+function requireStrings(obj, keys) {
+  for (const k of keys) {
+    if (obj[k] !== undefined && (typeof obj[k] !== 'string' || obj[k].length > MAX_IMPORT_STRING_LEN)) {
+      throw new Error(`Неверный тип поля ${k}`);
+    }
+  }
+}
+
+function requireArrays(obj, keys) {
+  for (const k of keys) {
+    if (obj[k] !== undefined && !Array.isArray(obj[k])) throw new Error(`Неверный тип поля ${k}`);
+  }
+}
+
+function requireNumbers(obj, keys) {
+  for (const k of keys) {
+    if (obj[k] !== undefined && typeof obj[k] !== 'number') throw new Error(`Неверный тип поля ${k}`);
+  }
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** Клонирует книгу и прогоняет ensureBookFields (дефолты + санитизация URL). */
+function makeValidBook(b) {
+  const clone = JSON.parse(JSON.stringify(b));
+  return ensureBookFields(clone);
 }
 
 // ═══════════════════════════════════════════════

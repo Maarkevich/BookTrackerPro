@@ -597,7 +597,7 @@ export function openChallengeForm(challenge, books, onSave) {
   });
 
   // Сохранение
-  overlay.querySelector('#ch-f-save').addEventListener('click', () => {
+  overlay.querySelector('#ch-f-save').addEventListener('click', async () => {
     const name = overlay.querySelector('#ch-f-name').value.trim();
     if (!name) {
       showToast('⚠️ Введите название', 'error');
@@ -619,8 +619,16 @@ export function openChallengeForm(challenge, books, onSave) {
       notes: c.notes || [],
       createdAt: c.createdAt || new Date().toISOString(),
     };
-    onSave(data);
-    close();
+    // 🆕 P1-5: форма закрывается ТОЛЬКО после подтверждённой записи.
+    // onSave возвращает true при успехе; при ошибке — false/throw.
+    let ok = false;
+    try {
+      ok = await onSave(data);
+    } catch (err) {
+      console.error('[DB] challenge form save error:', err);
+      showToast('❌ Ошибка сохранения челленджа: база данных', 'error');
+    }
+    if (ok) close();
   });
 }
 
@@ -698,10 +706,19 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       const checked = overlay.querySelectorAll('#ch-books-list input:checked');
-      for (const cb of checked) {
-        await addBookToChallenge(challengeId, cb.dataset.bookId);
+      // 🆕 P1-5: считаем РЕАЛЬНО записанные книги; при ошибке БД — error toast
+      let added = 0;
+      try {
+        for (const cb of checked) {
+          const ok = await addBookToChallenge(challengeId, cb.dataset.bookId);
+          if (ok) added++;
+        }
+      } catch (err) {
+        console.error('[DB] add books to challenge error:', err);
+        showToast('❌ Не удалось добавить книги: база данных', 'error');
+        return;
       }
-      showToast(`✅ Добавлено: ${checked.length}`, 'success');
+      showToast(added > 0 ? `✅ Добавлено: ${added}` : '⚠️ Книги не добавлены', added > 0 ? 'success' : 'error');
       close();
       if (onDone) onDone();
     });
