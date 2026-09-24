@@ -53,6 +53,22 @@ let _scanTimer = null;      // setTimeout текущего цикла
 let _abortCtrl = null;      // AbortController
 let _active = false;        // активен ли сканер
 let _zxingModule = null;    // кеш ZXing-wasm модуля
+let _session = 0;           // 🆕 P2-14: монотонно растущий token сессии
+
+// 🆕 P2-14: останавливает все tracks потока (не трогая глобальный _stream).
+function stopStream(stream) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+}
+
+/**
+ * 🆕 P2-14: актуальна ли сессия. После КАЖДОГО await следует проверять
+ * session === _session && _active && !signal.aborted — иначе позднее
+ * завершение (getUserMedia/play/import/detect) продолжит старую сессию
+ * или затрёт камеру новой.
+ */
+function isCurrentSession(session, signal) {
+  return session === _session && _active && !(signal && signal.aborted);
+}
 
 // ═══════════════════════════════════════════════
 //  1. ПУБЛИЧНЫЙ API
@@ -75,29 +91,40 @@ let _zxingModule = null;    // кеш ZXing-wasm модуля
 export function startScanner(videoEl, onStatus = () => {}) {
   return new Promise(async (resolve) => {
     cleanup();
+    const session = ++_session; // 🆕 P2-14: token этой сессии
     _abortCtrl = new AbortController();
     _active = true;
     const signal = _abortCtrl.signal;
+
+    // 🆕 P2-14: единая точка выхода — cleanup выполняется только
+    // если сессия всё ещё актуальна (не затрёт камеру новой сессии).
+    const done = (value) => {
+      if (session === _session) cleanup();
+      resolve(value);
+    };
 
     // ── 1. Нативный BarcodeDetector ──
     if ('BarcodeDetector' in window) {
       try {
         const formats = await BarcodeDetector.getSupportedFormats();
+        if (!isCurrentSession(session, signal)) { done(null); return; }
         const needed = ['ean_13', 'ean_8', 'code_128'];
         const supported = needed.filter(f => formats.includes(f));
 
         if (supported.length > 0) {
           onStatus('scanning', '📷 Наведите камеру на штрихкод книги...');
-          const cameraOk = await startCamera(videoEl);
+          const cameraOk = await startCamera(videoEl, session, signal);
+          if (!isCurrentSession(session, signal)) { done(null); return; }
           if (!cameraOk) {
             onStatus('error', '❌ Нет доступа к камере');
-            cleanup(); resolve(null); return;
+            done(null); return;
           }
-          const result = await scanLoop_Native(videoEl, supported, signal);
-          cleanup(); resolve(result); return;
+          const result = await scanLoop_Native(videoEl, supported, signal, session);
+          done(result); return;
         }
       } catch (e) {
         console.warn('[Scanner] BarcodeDetector failed:', e.message);
+        if (!isCurrentSession(session, signal)) { done(null); return; } // 🆕 P2-14
       }
     }
 
@@ -105,23 +132,26 @@ export function startScanner(videoEl, onStatus = () => {}) {
     try {
       onStatus('loading', '⏳ Загружаю библиотеку сканирования...');
       const zxing = await loadZXing();
+      if (!isCurrentSession(session, signal)) { done(null); return; }
       if (zxing) {
         onStatus('scanning', '📷 Наведите камеру на штрихкод книги...');
-        const cameraOk = await startCamera(videoEl);
+        const cameraOk = await startCamera(videoEl, session, signal);
+        if (!isCurrentSession(session, signal)) { done(null); return; }
         if (!cameraOk) {
           onStatus('error', '❌ Нет доступа к камере');
-          cleanup(); resolve(null); return;
+          done(null); return;
         }
-        const result = await scanLoop_ZXing(videoEl, zxing, signal);
-        cleanup(); resolve(result); return;
+        const result = await scanLoop_ZXing(videoEl, zxing, signal, session);
+        done(result); return;
       }
     } catch (e) {
       console.warn('[Scanner] ZXing fallback failed:', e.message);
+      if (!isCurrentSession(session, signal)) { done(null); return; } // 🆕 P2-14
     }
 
     // ── 3. Ручной ввод ──
     onStatus('fallback', '⌨️ Автосканирование недоступно — введите ISBN вручную');
-    cleanup(); resolve(null);
+    done(null);
   });
 }
 
@@ -130,6 +160,8 @@ export function startScanner(videoEl, onStatus = () => {}) {
  */
 export function stopScanner() {
   _abortCtrl?.abort();
+  _session++; // 🆕 P2-14: инвалидируем сессию ДО cleanup, чтобы pending
+              // getUserMedia/play/import старой сессии не смогли продолжить.
   cleanup();
 }
 
@@ -149,12 +181,19 @@ export function isScannerActive() {
  * Запрашивает доступ к камере и запускает видеопоток.
  * Сначала пробует заднюю камеру, затем любую доступную.
  *
+ * 🆕 P2-14: получает локальный stream из getUserMedia, проверяет
+ * актуальность сессии ПОСЛЕ await и немедленно останавливает поздний
+ * stream (никогда не присваивает его глобальному _stream, если сессия
+ * уже отменена/перезапущена).
+ *
  * @param {HTMLVideoElement} videoEl
+ * @param {number} session — token сессии
+ * @param {AbortSignal} signal
  * @returns {Promise<boolean>} — true если камера запущена
  */
-async function startCamera(videoEl) {
+async function startCamera(videoEl, session, signal) {
   try {
-    _stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: 'environment' },
         width: { ideal: 1280 },
@@ -162,17 +201,26 @@ async function startCamera(videoEl) {
       },
       audio: false,
     });
-    return await attachStream(videoEl);
+    if (!isCurrentSession(session, signal)) {
+      stopStream(stream); // 🆕 P2-14: позднее разрешение — сразу стоп
+      return false;
+    }
+    return await attachStream(videoEl, stream, session, signal);
   } catch (e) {
     console.warn('[Scanner] Camera error (env):', e.message);
+    if (!isCurrentSession(session, signal)) return false; // 🆕 P2-14: отмена во время первого запроса — без retry
     // Повторная попытка без ограничений facingMode
     // (некоторые камеры не поддерживают ideal)
     try {
-      _stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: false,
       });
-      return await attachStream(videoEl);
+      if (!isCurrentSession(session, signal)) {
+        stopStream(stream); // 🆕 P2-14
+        return false;
+      }
+      return await attachStream(videoEl, stream, session, signal);
     } catch (e2) {
       console.warn('[Scanner] Camera error (any):', e2.message);
       return false;
@@ -182,19 +230,35 @@ async function startCamera(videoEl) {
 
 /**
  * Привязывает MediaStream к видеоэлементу.
+ *
+ * 🆕 P2-14: принимает локальный stream (не глобальный _stream) и
+ * присваивает его в _stream ТОЛЬКО для актуальной сессии; при отмене
+ * или ошибке play немедленно останавливает tracks.
+ *
  * @param {HTMLVideoElement} videoEl
+ * @param {MediaStream} stream
+ * @param {number} session
+ * @param {AbortSignal} signal
  * @returns {Promise<boolean>}
  */
-async function attachStream(videoEl) {
-  if (!_stream) return false;
-  videoEl.srcObject = _stream;
+async function attachStream(videoEl, stream, session, signal) {
+  if (!stream) return false;
+  videoEl.srcObject = stream;
   videoEl.muted = true;
   videoEl.playsInline = true;
   try {
     await videoEl.play();
+    if (!isCurrentSession(session, signal)) {
+      videoEl.srcObject = null; // 🆕 P2-14: не оставляем мёртвый поток привязанным
+      stopStream(stream); // 🆕 P2-14: отмена во время play
+      return false;
+    }
+    _stream = stream; // только для актуальной сессии
     return true;
   } catch (e) {
     console.warn('[Scanner] Video play failed:', e.message);
+    videoEl.srcObject = null; // 🆕 P2-14: не оставляем непривязанный поток
+    stopStream(stream); // 🆕 P2-14: не оставляем непривязанный поток жить
     return false;
   }
 }
@@ -208,9 +272,10 @@ async function attachStream(videoEl) {
  * @param {HTMLVideoElement} videoEl
  * @param {string[]} formats — поддерживаемые форматы
  * @param {AbortSignal} signal
+ * @param {number} session — token сессии (P2-14)
  * @returns {Promise<string|null>}
  */
-async function scanLoop_Native(videoEl, formats, signal) {
+async function scanLoop_Native(videoEl, formats, signal, session) {
   const detector = new BarcodeDetector({ formats });
 
   return new Promise((resolve) => {
@@ -218,7 +283,7 @@ async function scanLoop_Native(videoEl, formats, signal) {
     const MAX_ERRORS = 30; // ~7.5 секунд непрерывных ошибок → выход
 
     const scan = async () => {
-      if (signal.aborted || !_active) { resolve(null); return; }
+      if (!isCurrentSession(session, signal)) { resolve(null); return; }
 
       try {
         // Ждём пока видео готово
@@ -228,6 +293,9 @@ async function scanLoop_Native(videoEl, formats, signal) {
         }
 
         const codes = await detector.detect(videoEl);
+        // 🆕 P2-14: отмена могла произойти во время detect — поздний
+        // результат не должен резолвить старую сессию
+        if (!isCurrentSession(session, signal)) { resolve(null); return; }
         for (const code of codes) {
           const raw = code.rawValue?.replace(/[\s\-]/g, '');
           if (!raw) continue;
@@ -242,6 +310,9 @@ async function scanLoop_Native(videoEl, formats, signal) {
         }
         errors = 0; // успешный кадр без результата — сброс счётчика
       } catch (e) {
+        // 🆕 P2-14: stop во время детекта может вызвать ошибку — это
+        // штатная отмена, а не накопление ошибок
+        if (!isCurrentSession(session, signal)) { resolve(null); return; }
         errors++;
         if (errors > MAX_ERRORS) { resolve(null); return; }
       }
@@ -298,9 +369,10 @@ async function loadZXing() {
  * @param {HTMLVideoElement} videoEl
  * @param {object} zxing — модуль ZXing-wasm
  * @param {AbortSignal} signal
+ * @param {number} session — token сессии (P2-14)
  * @returns {Promise<string|null>}
  */
-async function scanLoop_ZXing(videoEl, zxing, signal) {
+async function scanLoop_ZXing(videoEl, zxing, signal, session) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
@@ -309,7 +381,7 @@ async function scanLoop_ZXing(videoEl, zxing, signal) {
     const MAX_ERRORS = 30;
 
     const scan = async () => {
-      if (signal.aborted || !_active) { resolve(null); return; }
+      if (!isCurrentSession(session, signal)) { resolve(null); return; }
 
       try {
         if (videoEl.readyState < 2) {
@@ -335,6 +407,8 @@ async function scanLoop_ZXing(videoEl, zxing, signal) {
           tryHarder: true,
           formats: ['EAN-13', 'EAN-8', 'Code128'],
         });
+        // 🆕 P2-14: отмена могла произойти во время распознавания
+        if (!isCurrentSession(session, signal)) { resolve(null); return; }
 
         for (const result of (results || [])) {
           const raw = result.text?.replace(/[\s\-]/g, '');
@@ -349,6 +423,8 @@ async function scanLoop_ZXing(videoEl, zxing, signal) {
         }
         errors = 0;
       } catch (e) {
+        // 🆕 P2-14: stop во время распознавания — штатная отмена
+        if (!isCurrentSession(session, signal)) { resolve(null); return; }
         errors++;
         if (errors > MAX_ERRORS) { resolve(null); return; }
       }

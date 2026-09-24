@@ -55,7 +55,7 @@ import {
   getSeriesList, renderSeriesList, renderSeriesDetail,
   attachSeriesAutocomplete, getSeriesTotal
 } from './series.js';
-import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffline } from './ocr.js';
+import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffline, isOcrActive } from './ocr.js';
 import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
@@ -2147,20 +2147,28 @@ function fillFormFromResult(r) {
 async function handleIsbnLookup(isbnInput) {
   const isbn = cleanISBN(isbnInput);
   if (!validateISBN(isbn)) { showToast('❌ Неверный формат ISBN', 'error'); return; }
-  showLoading('🔍 Ищу книгу...');
+  // 🆕 P2-13: единый AbortController для всего каскада.
+  // Кнопка «Отменить» на loading-overlay прерывает lookup;
+  // после разблокировки checked сигнал — поздний результат не применяется.
+  const lookupCtrl = new AbortController();
+  showLoading('🔍 Ищу книгу...', () => lookupCtrl.abort());
   if (isRussianISBN(isbn)) updateLoading('Российский ISBN — ищу в базах...');
   const litresKeys = S.settings.lrAppId && S.settings.lrSecret
     ? { appId: S.settings.lrAppId, secretKey: S.settings.lrSecret } : null;
-  const book = await fetchBookByIsbn(isbn, litresKeys);
-  hideLoading();
-  closeScanner();
-  const sourceLabels = { google: 'Google Books', openlibrary: 'Open Library', litres: 'ЛитРес', cover: 'Только обложка', microlink: 'Microlink' };
-  if (book) {
-    showToast(`Найдено: ${sourceLabels[book.source] || book.source}`, 'success');
-    openBookForm({ ...book, isbn: book.isbn || isbn, status: 'wishlist' });
-  } else {
-    showToast('Не найдено — заполните вручную', 'info');
-    openBookForm({ isbn, title: '', author: '', status: 'wishlist' });
+  try {
+    const book = await fetchBookByIsbn(isbn, litresKeys, { signal: lookupCtrl.signal });
+    if (lookupCtrl.signal.aborted) return; // отменено/expired — UI не трогаем
+    const sourceLabels = { google: 'Google Books', openlibrary: 'Open Library', litres: 'ЛитРес', cover: 'Только обложка', microlink: 'Microlink' };
+    if (book) {
+      showToast(`Найдено: ${sourceLabels[book.source] || book.source}`, 'success');
+      openBookForm({ ...book, isbn: book.isbn || isbn, status: 'wishlist' });
+    } else {
+      showToast('Не найдено — заполните вручную', 'info');
+      openBookForm({ isbn, title: '', author: '', status: 'wishlist' });
+    }
+  } finally {
+    hideLoading();
+    closeScanner();
   }
 }
 
@@ -2503,6 +2511,9 @@ async function handleCoverPhotoChange(e) {
 //  СКАНЕР
 // ═══════════════════════════════════════════════
 async function openScanner() {
+  // 🆕 P2-15: запрет одновременного camera flow — если OCR-оверлей уже
+  // захватил камеру, сканер не запускаем (пользователь вернётся к OCR).
+  if (isOcrActive()) return;
   DOM.scannerOverlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   DOM.scannerManualInput.value = '';
@@ -3241,11 +3252,20 @@ function closeOverlay(el) {
 }
 
 let loadingEl = null;
-function showLoading(text = 'Загрузка...') {
+function showLoading(text = 'Загрузка...', onCancel = null) {
   hideLoading();
   loadingEl = document.createElement('div');
   loadingEl.className = 'loading-overlay';
   loadingEl.innerHTML = `<div class="spinner"></div><div class="loading-text">${text}</div>`;
+  // 🆕 P2-13: кнопка «Отменить» для длительных операций (ISBN lookup).
+  if (typeof onCancel === 'function') {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'loading-cancel';
+    cancelBtn.textContent = 'Отменить';
+    cancelBtn.addEventListener('click', onCancel);
+    loadingEl.appendChild(cancelBtn);
+  }
   document.body.appendChild(loadingEl);
 }
 function updateLoading(text) { if (loadingEl) loadingEl.querySelector('.loading-text').textContent = text; }

@@ -190,24 +190,35 @@ export function sleep(ms) {
  * @param {object} opts — параметры fetch
  * @param {number} timeout — таймаут одного запроса (мс)
  * @param {number} retries — количество повторных попыток
+ * @param {AbortSignal|null} signal — 🆕 P2-13 внешний сигнал отмены:
+ *   пробрасывается во все попытки; прерывает backoff-ожидание;
+ *   при abort бросается ошибка с name === 'AbortError'.
  * @returns {Promise<Response>}
  * @throws {Error} последняя ошибка после всех попыток
  */
-export async function fetchT(url, opts = {}, timeout = 15000, retries = 2) {
+export async function fetchT(url, opts = {}, timeout = 15000, retries = 2, signal = null) {
+  const abortErr = () => { const e = new Error('aborted'); e.name = 'AbortError'; return e; };
+  if (signal?.aborted) throw abortErr();
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
+    const onExtAbort = () => ctrl.abort();
+    if (signal) signal.addEventListener('abort', onExtAbort, { once: true });
     const timer = setTimeout(() => ctrl.abort(), timeout);
     try {
       const res = await fetch(url, { ...opts, signal: ctrl.signal });
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onExtAbort);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res;
     } catch (e) {
       clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onExtAbort);
+      if (signal?.aborted) throw abortErr();
       lastErr = e;
       if (attempt < retries) {
         await sleep(400 * Math.pow(2, attempt));
+        if (signal?.aborted) throw abortErr();
       }
     }
   }

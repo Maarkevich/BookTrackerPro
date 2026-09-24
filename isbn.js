@@ -134,29 +134,59 @@ export function formatISBN(isbn) {
  * Каскадный поиск книги по ISBN:
  * Google Books → Open Library → ЛитРес → Обложка.
  *
+ * 🆕 P2-13: принимает общий `AbortSignal` и общий deadline всего каскада.
+ * Без отмены sequential sources + прямой/proxy fallback + retries могли
+ * суммарно висеть больше минуты. Теперь:
+ *   — внешний signal (кнопка «Отменить» в UI) прерывает текущий запрос,
+ *     backoff и останавливает каскад в начале следующего шага;
+ *   — deadlineMs по умолчанию 45с — общий timeout на ВЕСЬ каскад;
+ *   — при abort возвращается null (каскад не бросает наружу).
+ * Контракт сохранён: без opts работает как раньше.
+ *
  * @param {string} isbn — ISBN-10 или ISBN-13
  * @param {object|null} litres — ключи ЛитРес { appId, secretKey }
+ * @param {object} [opts] — { signal, deadlineMs }
  * @returns {Promise<object|null>} — объект книги или null
  */
-export async function fetchBookByIsbn(isbn, litres = null) {
+export async function fetchBookByIsbn(isbn, litres = null, opts = {}) {
   const s = cleanISBN(isbn);
   const isbn13 = s.length === 10 ? isbn10to13(s) : s;
   if (!isbn13) return null;
 
-  const gb = await tryGoogleBooks(isbn13);
-  if (gb) return gb;
+  const { signal = null, deadlineMs = 45000 } = opts;
 
-  const ol = await tryOpenLibrary(isbn13);
-  if (ol) return ol;
+  // Общий контроллер каскада: внешний signal + deadline таймер.
+  const ctrl = new AbortController();
+  const onExtAbort = () => ctrl.abort();
+  const deadlineTimer = setTimeout(() => ctrl.abort(), deadlineMs);
+  if (signal) {
+    if (signal.aborted) { clearTimeout(deadlineTimer); return null; }
+    signal.addEventListener('abort', onExtAbort, { once: true });
+  }
 
-  const lrKeys = litres || getAnonymousLitresKeys();
-  const lr = await tryLitresSearch(isbn13, lrKeys);
-  if (lr) return lr;
+  try {
+    const gb = await tryGoogleBooks(isbn13, ctrl.signal);
+    if (gb) return gb;
+    if (ctrl.signal.aborted) return null;
 
-  const cover = await tryCoverOnly(isbn13);
-  if (cover) return cover;
+    const ol = await tryOpenLibrary(isbn13, ctrl.signal);
+    if (ol) return ol;
+    if (ctrl.signal.aborted) return null;
 
-  return null;
+    const lrKeys = litres || getAnonymousLitresKeys();
+    const lr = await tryLitresSearch(isbn13, lrKeys, ctrl.signal);
+    if (lr) return lr;
+    if (ctrl.signal.aborted) return null;
+
+    const cover = await tryCoverOnly(isbn13, ctrl.signal);
+    if (cover) return cover;
+    if (ctrl.signal.aborted) return null;
+
+    return null;
+  } finally {
+    clearTimeout(deadlineTimer);
+    if (signal) signal.removeEventListener('abort', onExtAbort);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -268,17 +298,42 @@ export async function searchBooks(query, litres = null) {
 //  5. GOOGLE BOOKS
 // ═══════════════════════════════════════════════
 
-async function tryGoogleBooks(isbn) {
+/**
+ * 🆕 P2-12: сверяет ISBN из ответа API с запрошенным.
+ * Принимает ISBN-10 или ISBN-13 и нормализует оба к ISBN-13 —
+ * эквивалентные пары (978… vs 10-значный) считаются совпадением.
+ * @param {string} requested — запрошенный ISBN (10 или 13 цифр)
+ * @param {string} candidate — ISBN из ответа API
+ * @returns {boolean}
+ */
+function isbnMatches(requested, candidate) {
+  const a = cleanISBN(requested);
+  const b = cleanISBN(candidate);
+  if (!a || !b) return false;
+  const a13 = a.length === 10 ? isbn10to13(a) : a;
+  const b13 = b.length === 10 ? isbn10to13(b) : b;
+  return a13 === b13;
+}
+
+async function tryGoogleBooks(isbn, signal = null) {
   try {
+    if (signal?.aborted) return null;
     const r = await fetchT(
-      `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`,
-      {}, 8000
+      `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=10`,
+      {}, 8000, 2, signal
     );
     if (!r.ok) return null;
     const data = await r.json();
-    const v = data.items?.[0]?.volumeInfo;
-    if (!v?.title) return null;
-    return normalizeGoogle(v);
+    // 🆕 P2-12: не доверяем data.items[0] — Google может вернуть первой
+    // другую книгу. Принимаем только элемент, чей identifiers содержит
+    // ISBN, эквивалентный запрошенному (ISBN-13 или ISBN-10).
+    for (const item of (data.items || [])) {
+      const v = item?.volumeInfo;
+      if (!v?.title) continue;
+      const ids = (v.industryIdentifiers || []).map(i => i.identifier);
+      if (ids.some(id => isbnMatches(isbn, id))) return normalizeGoogle(v);
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -307,11 +362,12 @@ function normalizeGoogle(v) {
 //  6. OPEN LIBRARY
 // ═══════════════════════════════════════════════
 
-async function tryOpenLibrary(isbn) {
+async function tryOpenLibrary(isbn, signal = null) {
   try {
+    if (signal?.aborted) return null;
     const r = await fetchT(
       `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`,
-      {}, 8000
+      {}, 8000, 2, signal
     );
     if (!r.ok) return null;
     const data = await r.json();
@@ -334,10 +390,11 @@ async function tryOpenLibrary(isbn) {
   } catch { return null; }
 }
 
-async function tryCoverOnly(isbn) {
+async function tryCoverOnly(isbn, signal = null) {
   try {
+    if (signal?.aborted) return null;
     const url = `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`;
-    const r = await fetch(url, { method: 'HEAD' });
+    const r = await fetch(url, { method: 'HEAD', ...(signal ? { signal } : {}) });
     const len = r.headers.get('content-length');
     if (r.ok && len && Number(len) > 800) {
       return {
@@ -390,9 +447,10 @@ function litresTime() {
  * поэтому прокси — рабочий фолбэк без собственного сервера.
  *
  * @param {object} bodyData — объект jdata
+ * @param {AbortSignal|null} signal — 🆕 P2-13 внешний сигнал отмены
  * @returns {Promise<object|null>} — распарсенный JSON или null
  */
-async function postCatalit(bodyData) {
+async function postCatalit(bodyData, signal = null) {
   const body = new URLSearchParams({ jdata: JSON.stringify(bodyData) }).toString();
   const opts = {
     method: 'POST',
@@ -402,20 +460,22 @@ async function postCatalit(bodyData) {
 
   // 1. Напрямую (вдруг CORS разрешат)
   try {
-    const r = await fetchT(CATALIT_URL, opts, 8000);
+    if (signal?.aborted) return null;
+    const r = await fetchT(CATALIT_URL, opts, 8000, 2, signal);
     if (r.ok) return await r.json();
   } catch { /* CORS blocked */ }
 
   // 2. Через CORS-прокси (поддерживает POST)
   try {
-    const r = await fetchT(CATALIT_PROXY(CATALIT_URL), opts, 10000);
+    if (signal?.aborted) return null;
+    const r = await fetchT(CATALIT_PROXY(CATALIT_URL), opts, 10000, 2, signal);
     if (r.ok) return await r.json();
   } catch { /* ignore */ }
 
   return null;
 }
 
-async function getLitresSid(keys) {
+async function getLitresSid(keys, signal = null) {
   const keysKey = JSON.stringify(keys);
   if (_sid && Date.now() < _sidExpires && _sidKeys === keysKey) return _sid;
 
@@ -434,7 +494,7 @@ async function getLitresSid(keys) {
       };
     }
 
-    const data = await postCatalit(bodyData);
+    const data = await postCatalit(bodyData, signal);
     const sid = data?.auth?.sid;
     if (sid) {
       _sid = sid;
@@ -445,30 +505,34 @@ async function getLitresSid(keys) {
   } catch { return null; }
 }
 
-async function tryLitresSearch(isbn, keys) {
+async function tryLitresSearch(isbn, keys, signal = null) {
   try {
-    const sid = await getLitresSid(keys);
+    if (signal?.aborted) return null;
+    const sid = await getLitresSid(keys, signal);
     if (!sid) return null;
     const result = await litresRequest(sid, keys, 'r_search_arts', {
       q: isbn, strict: 'exact', limit: ['0', '3'], anno: '1'
-    });
+    }, signal);
     const arts = result?.arts || [];
-    const match = arts.find(a => a.isbn && cleanISBN(a.isbn) === cleanISBN(isbn)) || arts[0];
+    // 🆕 P2-12: только точное совпадение ISBN. Раньше при отсутствии
+    // exact match брался arts[0] — чужой книги. Теперь сверяем
+    // ISBN (с учётом ISBN-10/13 эквивалентности) и иначе не берём.
+    const match = arts.find(a => a.isbn && isbnMatches(isbn, a.isbn));
     if (!match?.title) return null;
     return normalizeLitres(match);
   } catch { return null; }
 }
 
-async function litresSearch(keys, query, limit = 5) {
-  const sid = await getLitresSid(keys);
+async function litresSearch(keys, query, limit = 5, signal = null) {
+  const sid = await getLitresSid(keys, signal);
   if (!sid) return [];
   const result = await litresRequest(sid, keys, 'r_search_arts', {
     q: query, strict: 'no', limit: ['0', String(limit)], anno: '1'
-  });
+  }, signal);
   return (result?.arts || []).filter(a => a.title).map(normalizeLitres);
 }
 
-async function litresRequest(sid, keys, func, param) {
+async function litresRequest(sid, keys, func, param, signal = null) {
   let bodyData;
   if (keys.anonymous || (!keys.appId && !keys.secretKey)) {
     bodyData = { sid, requests: [{ func, id: 'req', param }] };
@@ -478,7 +542,7 @@ async function litresRequest(sid, keys, func, param) {
     bodyData = { app: keys.appId, time, sha, sid, requests: [{ func, id: 'req', param }] };
   }
 
-  const data = await postCatalit(bodyData);
+  const data = await postCatalit(bodyData, signal);
   if (!data?.success && data?.error_code) {
     _sid = null; _sidExpires = 0; _sidKeys = null;
     return null;

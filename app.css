@@ -1636,6 +1636,18 @@ details summary:hover { color: var(--accent); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { font-size: .9rem; color: var(--text-secondary); }
+.loading-cancel {
+  margin-top: 4px;
+  padding: 8px 20px;
+  font-size: .9rem;
+  color: var(--text);
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.loading-cancel:active { opacity: .7; }
 
 /* ═══════════════════════════════════════════════
    КОНФЕТТИ
