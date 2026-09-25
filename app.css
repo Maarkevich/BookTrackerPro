@@ -1765,6 +1765,10 @@ details summary:hover { color: var(--accent); }
   .fab-group { bottom: calc(20px + env(safe-area-inset-bottom)); }
   .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .pwa-banner { bottom: calc(16px + env(safe-area-inset-bottom)); }
+  /* 🆕 P2-17: нижние оверлеи не прячут контент под home-indicator /
+     виртуальной клавиатурой на iPhone/iPad */
+  .overlay-panel,
+  .cover-viewer-panel { padding-bottom: env(safe-area-inset-bottom); }
 }
 
 /* ═══════════════════════════════════════════════

@@ -368,18 +368,115 @@ export function convertToDefault(price, settings) {
 //
 //  app.js использует consumePoppingState / popTopOverlay
 //  в setupBackGesture() вместо прямого доступа к _backStack.
+//
+//  🆕 P2-17: единый lifecycle оверлеев поверх back-стека:
+//    — scroll-lock через refcount (_scrollLocks), а не ручной overflow;
+//    — focus capture/restore (prevFocus в метаданных элемента);
+//    — focus trap (Tab/Shift+Tab не выходит за пределы верхнего оверлея);
+//    — closeTopOverlay() — программное закрытие верхнего (Escape/backdrop);
+//    — releaseOverlay(el) — снятие без history.back() (pagehide и т.п.).
 
-let _backStack = [];
+let _backStack = [];            // открытые оверлеи (HTMLElement[])
+let _overlayMeta = new Map();   // el → { onClose, prevFocus }
 let _poppingState = false;
+let _scrollLocks = 0;           // refcount блокировки скролла body
+let _trapBound = false;
+let _suppressBack = false;      // 🆕 P2-17: «жест назад» уже выполняется браузером
+                                // (popstate), поэтому onClose не должен звать
+                                // history.back() повторно (иначе двойная навигация).
+
+// ── scroll-lock с refcount: корректно для вложенных оверлеев ──
+function lockBodyScroll() {
+  _scrollLocks++;
+  document.body.style.overflow = 'hidden';
+}
+function unlockBodyScroll() {
+  _scrollLocks = Math.max(0, _scrollLocks - 1);
+  if (_scrollLocks === 0) document.body.style.overflow = '';
+}
+
+// ── focus capture/restore ──
+function captureFocus(el) {
+  const prev = document.activeElement;
+  if (!_overlayMeta.has(el)) _overlayMeta.set(el, { onClose: null, prevFocus: null });
+  _overlayMeta.get(el).prevFocus = (prev && prev !== document.body) ? prev : null;
+}
+function restoreFocus(el) {
+  const meta = _overlayMeta.get(el);
+  if (!meta) return;
+  const prev = meta.prevFocus;
+  if (prev && typeof prev.focus === 'function' && document.contains(prev)) {
+    try { prev.focus(); } catch (e) {}
+  }
+}
+
+// ── focus trap (Tab / Shift+Tab) ──
+function getFocusables(root) {
+  const sel = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  return [...root.querySelectorAll(sel)].filter(el => {
+    if (el.disabled) return false;
+    if (el.getAttribute('aria-hidden') === 'true') return false;
+    if (el.closest('.hidden')) return false;
+    return true;
+  });
+}
+function onOverlayKeydown(e) {
+  if (_backStack.length === 0) return;
+  const top = _backStack[_backStack.length - 1];
+  const focusable = getFocusables(top);
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const inside = top.contains(document.activeElement);
+  if (e.shiftKey) {
+    if (!inside || document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    }
+  } else if (!inside || document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+function bindTrap() {
+  if (_trapBound) return;
+  document.addEventListener('keydown', onOverlayKeydown);
+  _trapBound = true;
+}
+function unbindTrap() {
+  if (!_trapBound) return;
+  document.removeEventListener('keydown', onOverlayKeydown);
+  _trapBound = false;
+}
 
 /**
- * Регистрирует открытый оверлей в back-стеке
- * и пушит состояние в History API.
+ * Регистрирует открытый оверлей в back-стеке, блокирует скролл
+ * (refcount), захватывает фокус и пушит состояние в History API.
  * @param {HTMLElement} el
+ * @param {object} [opts] — { onClose }
  */
-export function trackOverlay(el) {
+export function trackOverlay(el, opts = {}) {
   _backStack.push(el);
+  if (!_overlayMeta.has(el)) {
+    _overlayMeta.set(el, { onClose: opts.onClose || null, prevFocus: null });
+  } else {
+    _overlayMeta.get(el).onClose = opts.onClose || _overlayMeta.get(el).onClose;
+  }
+  captureFocus(el);
+  lockBodyScroll();
+  bindTrap();
   try { history.pushState({ btpOverlay: true }, ''); } catch (e) {}
+}
+
+/** Внутренний cleanup: метаданные, фокус, refcount, trap. */
+function releaseOverlayInternal(el) {
+  const meta = _overlayMeta.get(el);
+  if (meta) {
+    restoreFocus(el);
+    _overlayMeta.delete(el);
+  }
+  unlockBodyScroll();
+  if (_backStack.length === 0) unbindTrap();
 }
 
 /**
@@ -390,8 +487,68 @@ export function untrackOverlay(el) {
   const idx = _backStack.lastIndexOf(el);
   if (idx < 0) return;
   _backStack.splice(idx, 1);
+  releaseOverlayInternal(el);
+  // 🆕 P2-17: если «жест назад» уже обрабатывается браузером (popstate от
+  // системной кнопки), не дублируем навигацию — иначе двойной back.
+  if (_suppressBack) return;
   _poppingState = true;
   try { history.back(); } catch (e) {}
+}
+
+/**
+ * Полный release оверлея БЕЗ history.back().
+ * Используется, когда навигацию делает сам браузер (pagehide и т.п.).
+ * @param {HTMLElement} el
+ */
+export function releaseOverlay(el) {
+  const idx = _backStack.lastIndexOf(el);
+  if (idx < 0) return;
+  _backStack.splice(idx, 1);
+  releaseOverlayInternal(el);
+}
+
+/**
+ * Закрывает верхний оверлей С ПОДАВЛЕННЫМ history.back():
+ * навигацию для жеста «назад» уже выполнил браузер (попstate),
+ * поэтому onClose не должен звать history.back() повторно.
+ * Используется в обработчике popstate (setupBackGesture в app.js).
+ * @returns {HTMLElement|null}
+ */
+export function closeTopOverlayForBack() {
+  _suppressBack = true;
+  try {
+    return closeTopOverlay();
+  } finally {
+    _suppressBack = false;
+  }
+}
+
+/**
+ * Программно закрывает верхний оверлей:
+ * вызывает его onClose (если задан), иначе — fallback.
+ * Если onClose не снял элемент из стека (не вызвал untrackOverlay),
+ * — страховка снимает его без history.back().
+ * Возвращает закрытый элемент или null.
+ */
+export function closeTopOverlay() {
+  const top = _backStack[_backStack.length - 1];
+  if (!top) return null;
+  const meta = _overlayMeta.get(top);
+  if (meta && typeof meta.onClose === 'function') {
+    meta.onClose();
+    // 🆕 P2-17: страховка — если onClose не сделал untrackOverlay,
+    // убираем верхний из стека штатно (без history.back(): вызов уже
+    // обработан и повторная навигация не нужна).
+    const idx = _backStack.lastIndexOf(top);
+    if (idx >= 0) {
+      _backStack.splice(idx, 1);
+      releaseOverlayInternal(top);
+    }
+  } else {
+    top.classList.add('hidden');
+    untrackOverlay(top);
+  }
+  return top;
 }
 
 /**
@@ -408,11 +565,15 @@ export function consumePoppingState() {
 }
 
 /**
- * Извлекает верхний оверлей из стека.
+ * Извлекает верхний оверлей из стека (жест «назад»).
+ * Снимает scroll-lock и восстанавливает фокус.
  * @returns {HTMLElement|null}
  */
 export function popTopOverlay() {
-  return _backStack.length > 0 ? _backStack.pop() : null;
+  if (_backStack.length === 0) return null;
+  const el = _backStack.pop();
+  releaseOverlayInternal(el);
+  return el;
 }
 
 /**

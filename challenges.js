@@ -548,15 +548,13 @@ export function openChallengeForm(challenge, books, onSave) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   let goalType = c.goalType || 'books';
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.ch-form-close').addEventListener('click', close);
@@ -680,13 +678,11 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.ch-books-close').addEventListener('click', close);

@@ -411,13 +411,11 @@ export function openContentDetail(item, book, opts = {}) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.cd-close').addEventListener('click', close);
@@ -485,7 +483,7 @@ export function openContentForm(item, bookId, settings = {}) {
   });
 
   overlay.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+  trackOverlay(overlay, { onClose: () => closeContentForm() });
 }
 
 function renderContentFormBody(body, books, item, preselectedBookId, settings = {}) {
@@ -686,7 +684,7 @@ function closeContentForm() {
   const overlay = document.getElementById('content-overlay');
   if (overlay) {
     overlay.classList.add('hidden');
-    document.body.style.overflow = '';
+    untrackOverlay(overlay);
   }
 }
 

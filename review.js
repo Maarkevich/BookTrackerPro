@@ -25,7 +25,7 @@
 //      — Копирование отзыва для описания видео
 // ─────────────────────────────────────────────
 import { saveReviewForBook, removeReviewFromBook, loadBooks } from './db.js';
-import { esc, safeUrl, showToast } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев
 import { captureQuoteByPhoto } from './ocr.js';
 import { icon } from './icons.js';
 import { attachCustomSelect, showConfirm } from './uikit.js'; // 🆕 showConfirm
@@ -174,7 +174,9 @@ export function openReviewForm(bookId) {
     title.innerHTML = `${icon('pen', 18)} Отзыв: ${esc(book.title)}`;
     renderReviewFormBody(body, book);
     overlay.classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
+    // 🆕 P2-17: review-форма в back-стеке (Android back / Escape закрывают её),
+    // scroll-lock и фокус — единый lifecycle из utils.js.
+    trackOverlay(overlay, { onClose: () => closeReviewForm() });
   }).catch((err) => {
     console.error('[DB] loadBooks for review form error:', err);
     showToast('❌ Не удалось загрузить книгу: база данных', 'error');
@@ -555,6 +557,6 @@ function closeReviewForm() {
   const overlay = document.getElementById('review-overlay');
   if (overlay) {
     overlay.classList.add('hidden');
-    document.body.style.overflow = '';
+    untrackOverlay(overlay);
   }
 }

@@ -65,7 +65,7 @@ import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_I
 import {
   esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
-  consumePoppingState, popTopOverlay, hasOverlays, pushSentinel,
+  consumePoppingState, hasOverlays, pushSentinel, closeTopOverlay, closeTopOverlayForBack,
   formatPrice, convertToDefault
 } from './utils.js';
 
@@ -188,14 +188,6 @@ function cacheDom() {
 let _exitArmed = false;
 let _exitTimer = null;
 
-function hideOverlayEl(el) {
-  if (!el) return;
-  el.classList.add('hidden');
-  if (el === DOM.scannerOverlay) stopScanner();
-  const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-  if (!anyOpen) document.body.style.overflow = '';
-}
-
 function setupBackGesture() {
   try {
     history.replaceState({ btpBase: true }, '');
@@ -203,7 +195,10 @@ function setupBackGesture() {
   } catch (e) {}
   window.addEventListener('popstate', () => {
     if (consumePoppingState()) return;
-    if (hasOverlays()) { hideOverlayEl(popTopOverlay()); return; }
+    // 🆕 P2-17: жест «назад» при открытом оверлее закрывает ВЕРХНИЙ
+    // через его onClose (DOM-очистка, фокус/скролл) — но БЕЗ повторного
+    // history.back(), чтобы не сделать двойную навигацию.
+    if (hasOverlays()) { closeTopOverlayForBack(); return; }
     if (S.currentTab === 'stats') {
       const mc = DOM.mainContent;
       const prev = getPrevStatsSub(mc._statsSub || 'books');
@@ -535,16 +530,15 @@ function bindEvents() {
   $('#install-dismiss')?.addEventListener('click', () => DOM.installBanner.classList.add('hidden'));
 
   // Escape (🆕 v3.8.5: сначала закрываем FAB-меню)
+  // 🆕 P2-17: единый lifecycle — все оверлеи (статические и динамические)
+  // закрываются через верхний элемент back-стека (closeTopOverlay),
+  // а не по chain из захардкоженных ID (это чинило «закрытие не того слоя»
+  // при вложенных оверлеях).
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (document.querySelector('.fab-menu')) { closeFabMenu(); return; }
-    if (!DOM.scannerOverlay.classList.contains('hidden')) closeScanner();
-    else if (!DOM.coverOverlay.classList.contains('hidden')) closeOverlay(DOM.coverOverlay);
-    else if (!DOM.formOverlay.classList.contains('hidden')) closeOverlay(DOM.formOverlay);
-    else if (!DOM.detailOverlay.classList.contains('hidden')) closeOverlay(DOM.detailOverlay);
-    else if (!DOM.contentOverlay.classList.contains('hidden')) closeOverlay(DOM.contentOverlay);
-    else if (!DOM.reviewOverlay.classList.contains('hidden')) closeOverlay(DOM.reviewOverlay);
-    else if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
+    if (hasOverlays()) { closeTopOverlay(); return; }
+    if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
     else if (DOM.drawer.classList.contains('open')) toggleDrawer(false);
     closeStatusDropdown();
   });
@@ -2037,8 +2031,7 @@ function openMicrolinkPreview(result, fb) {
     </div>
   `;
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   overlay.querySelectorAll('.ml-target').forEach(sel => {
     sel.addEventListener('change', () => { mapping[sel.dataset.fieldId] = sel.value; });
@@ -2047,8 +2040,6 @@ function openMicrolinkPreview(result, fb) {
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-    if (!anyOpen) document.body.style.overflow = '';
   };
   overlay.querySelector('.ml-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -2515,7 +2506,7 @@ async function openScanner() {
   // захватил камеру, сканер не запускаем (пользователь вернётся к OCR).
   if (isOcrActive()) return;
   DOM.scannerOverlay.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+  trackOverlay(DOM.scannerOverlay, { onClose: () => closeScanner() });
   DOM.scannerManualInput.value = '';
   const result = await startScanner(DOM.scannerVideo, (status, msg) => {
     DOM.scannerStatus.textContent = msg;
@@ -2523,7 +2514,11 @@ async function openScanner() {
   });
   if (result) handleIsbnLookup(result);
 }
-function closeScanner() { stopScanner(); DOM.scannerOverlay.classList.add('hidden'); document.body.style.overflow = ''; }
+function closeScanner() {
+  stopScanner();
+  DOM.scannerOverlay.classList.add('hidden');
+  untrackOverlay(DOM.scannerOverlay);
+}
 
 // ═══════════════════════════════════════════════
 //  КОНТЕНТ / ОТЗЫВЫ
@@ -2654,13 +2649,11 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
     </div>
   `;
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
   overlay.querySelector('.bp-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -2849,7 +2842,7 @@ function showDayContent(dateStr) {
       </div>
     </div>`;
   document.body.appendChild(ov);
-  trackOverlay(ov);
+  trackOverlay(ov, { onClose: () => closeDay() });
   const closeDay = () => { untrackOverlay(ov); ov.remove(); };
   ov.querySelector('.day-ov-close').addEventListener('click', closeDay);
   ov.addEventListener('click', (e) => { if (e.target === ov) closeDay(); });
@@ -3241,14 +3234,11 @@ function toggleDrawer(open) {
 }
 function openOverlay(el) {
   el.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-  trackOverlay(el);
+  trackOverlay(el, { onClose: () => closeOverlay(el) });
 }
 function closeOverlay(el) {
   el.classList.add('hidden');
   untrackOverlay(el);
-  const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-  if (!anyOpen) document.body.style.overflow = '';
 }
 
 let loadingEl = null;

@@ -45,6 +45,27 @@ const BASE = '/BookTrackerPro';
 //   zxing/dist/reader/zxing_reader.wasm — WASM-бинарник
 const ZXING_ENTRY = `${BASE}/zxing/dist/es/reader/index.js`;
 
+// 🆕 P2-16: зона интереса (ROI) — центральная область кадра, где обычно
+// находится штрихкод при наведении. Доли от размеров видео.
+// Внешние углы почти никогда не содержат искомый код, а их пиксели
+// только зря копируются в canvas и декодируются.
+const ZXING_ROI = { x: 0.15, y: 0.2, w: 0.7, h: 0.6 };
+
+// 🆕 P2-16: максимальная сторона изображения, передаваемого в ZXing.
+// EAN-13 = 95 модулей; при 640 px ширины это ~6.7 px на модуль —
+// более чем достаточно для надёжного распознавания (ZXing.tryHarder).
+// Кадр 1280×720 → 640×~308: в ~4.7 раза меньше пикселей на отрисовку,
+// getImageData и decode — главный выигрыш по CPU/батарее.
+const ZXING_MAX_SCAN_DIM = 640;
+
+// 🆕 P2-16: адаптивная частота сканирования. Базовый интервал 400 мс.
+// Если decode занимает заметную часть интервала — пауза растёт до
+// ZXING_DELAY_MAX (медленное устройство не грузит CPU вхолостую);
+// если decode мгновенный — пауза сокращается до ZXING_DELAY_MIN.
+const ZXING_DELAY_BASE = 400;
+const ZXING_DELAY_MIN = 200;
+const ZXING_DELAY_MAX = 900;
+
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ МОДУЛЯ
 // ═══════════════════════════════════════════════
@@ -171,6 +192,16 @@ export function stopScanner() {
  */
 export function isScannerActive() {
   return _active;
+}
+
+/**
+ * Текущий token сессии (для юнит-тестов P2-16 и диагностики).
+ * Сессия создаётся вызовом startScanner() и инвалидируется
+ * stopScanner() / повторным startScanner().
+ * @returns {number}
+ */
+export function getScannerSession() {
+  return _session;
 }
 
 // ═══════════════════════════════════════════════
@@ -363,8 +394,83 @@ async function loadZXing() {
 }
 
 /**
+ * 🆕 P2-16: адаптивный интервал сканирования.
+ *
+ * Медленный decode (decodeMs близок к интервалу) → пауза растёт,
+ * не давая ставить decode в очередь на main thread
+ * (медленный телефон не лагает, а просто сканирует реже).
+ * Быстрый decode → пауза сокращается до ZXING_DELAY_MIN
+ * (быстрые устройства не теряют отзывчивость).
+ *
+ * Чистая функция — экспортируется как @internal для юнит-тестов P2-16.
+ *
+ * @param {number} delay — текущий интервал, мс
+ * @param {number} decodeMs — сколько занял последний decode, мс
+ * @returns {number} новый интервал, мс
+ */
+export function nextScanDelay(delay, decodeMs) {
+  if (decodeMs > delay * 0.75) {
+    // Медленный decode: разгружаем main thread
+    return Math.min(ZXING_DELAY_MAX, Math.round(Math.max(delay, decodeMs * 2)));
+  }
+  if (decodeMs < delay * 0.25 && delay > ZXING_DELAY_MIN) {
+    // Быстрый decode: можно сканировать чаще, но не быстрее порога
+    return Math.max(ZXING_DELAY_MIN, delay - 100);
+  }
+  return delay;
+}
+
+/**
+ * 🆕 P2-16: извлекает из видео только зону интереса (ROI) и сразу
+ * масштабирует её до разумного размера для распознавания.
+ *
+ * Экспортируется как @internal для юнит-тестов P2-16.
+ *
+ * Зачем: раньше весь кадр 1280×720 (или фактическое разрешение) целиком
+ * копировался через drawImage + getImageData на main thread, а EAN-13
+ * занимает на экране лишь центральную часть. Копирование и декодирование
+ * внешних углов — бессмысленные расходы CPU/батареи, особенно на
+ * слабых Android/iPhone.
+ *
+ * Возвращает ImageData размером ≤ ZXING_MAX_SCAN_DIM по большей стороне.
+ *
+ * @param {HTMLCanvasRenderingContext2D} ctx
+ * @param {HTMLVideoElement} videoEl
+ * @param {HTMLCanvasElement} canvas
+ * @returns {ImageData|null}
+ */
+export function captureScanFrame(ctx, videoEl, canvas) {
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  if (vw === 0 || vh === 0) return null;
+
+  // Зона интереса в пикселях источника (центральная область штрихкода)
+  const sx = Math.round(vw * ZXING_ROI.x);
+  const sy = Math.round(vh * ZXING_ROI.y);
+  const sw = Math.round(vw * ZXING_ROI.w);
+  const sh = Math.round(vh * ZXING_ROI.h);
+
+  // Downscale с сохранением пропорций до ZXING_MAX_SCAN_DIM
+  const scale = Math.min(1, ZXING_MAX_SCAN_DIM / Math.max(sw, sh));
+  const dw = Math.max(1, Math.round(sw * scale));
+  const dh = Math.max(1, Math.round(sh * scale));
+
+  // Рисуем ТОЛЬКО ROI (не весь кадр) и сразу в уменьшенный размер —
+  // drawImage сам выполняет downscale без отдельного прохода.
+  canvas.width = dw;
+  canvas.height = dh;
+  ctx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, dw, dh);
+  return ctx.getImageData(0, 0, dw, dh);
+}
+
+/**
  * Цикл распознавания через ZXing-wasm.
  * Рендерит кадр видео в canvas и передаёт ImageData в ZXing.
+ *
+ * 🆕 P2-16: на main thread обрабатывается только центральный ROI,
+ * уменьшенный до ≤ ZXING_MAX_SCAN_DIM, а интервал сканирования
+ * адаптируется к скорости decode (медленное устройство → реже,
+ * быстрое → чаще, но не быстрее нижнего порога).
  *
  * @param {HTMLVideoElement} videoEl
  * @param {object} zxing — модуль ZXing-wasm
@@ -372,13 +478,14 @@ async function loadZXing() {
  * @param {number} session — token сессии (P2-14)
  * @returns {Promise<string|null>}
  */
-async function scanLoop_ZXing(videoEl, zxing, signal, session) {
+export async function scanLoop_ZXing(videoEl, zxing, signal, session) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
   return new Promise((resolve) => {
     let errors = 0;
     const MAX_ERRORS = 30;
+    let delay = ZXING_DELAY_BASE; // 🆕 P2-16: стартовый интервал
 
     const scan = async () => {
       if (!isCurrentSession(session, signal)) { resolve(null); return; }
@@ -389,18 +496,15 @@ async function scanLoop_ZXing(videoEl, zxing, signal, session) {
           return;
         }
 
-        const w = videoEl.videoWidth;
-        const h = videoEl.videoHeight;
-        if (w === 0 || h === 0) {
+        // 🆕 P2-16: только ROI + downscale вместо всего кадра
+        const imageData = captureScanFrame(ctx, videoEl, canvas);
+        if (!imageData) {
           _scanTimer = setTimeout(scan, 200);
           return;
         }
 
-        // Рендерим кадр в canvas
-        canvas.width = w;
-        canvas.height = h;
-        ctx.drawImage(videoEl, 0, 0, w, h);
-        const imageData = ctx.getImageData(0, 0, w, h);
+        // Замер длительности decode для адаптивной частоты
+        const t0 = performance.now();
 
         // Распознаём
         const results = await zxing.readBarcodesFromImageData(imageData, {
@@ -409,6 +513,12 @@ async function scanLoop_ZXing(videoEl, zxing, signal, session) {
         });
         // 🆕 P2-14: отмена могла произойти во время распознавания
         if (!isCurrentSession(session, signal)) { resolve(null); return; }
+
+        const decodeMs = performance.now() - t0; // 🆕 P2-16
+
+        // 🆕 P2-16: адаптивная частота — интервал подстраивается под
+        // производительность устройства.
+        delay = nextScanDelay(delay, decodeMs);
 
         for (const result of (results || [])) {
           const raw = result.text?.replace(/[\s\-]/g, '');
@@ -429,8 +539,7 @@ async function scanLoop_ZXing(videoEl, zxing, signal, session) {
         if (errors > MAX_ERRORS) { resolve(null); return; }
       }
 
-      // ZXing медленнее нативного — интервал больше
-      _scanTimer = setTimeout(scan, 400);
+      _scanTimer = setTimeout(scan, delay); // 🆕 P2-16: адаптивная пауза
     };
     scan();
   });

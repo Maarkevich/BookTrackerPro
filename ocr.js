@@ -26,7 +26,7 @@
 //      — showToast импортируется из utils.js (разрыв цикла)
 //      — SVG-иконки из icons.js в хроме оверлея
 // ─────────────────────────────────────────────
-import { showToast } from './utils.js';
+import { showToast, trackOverlay, untrackOverlay, releaseOverlay } from './utils.js';
 import { icon } from './icons.js';
 // 🆕 P2-15: конкуренция камер OCR↔scanner централизуется здесь —
 // при старте камеры OCR останавливаем активный ISBN-сканер
@@ -81,7 +81,9 @@ export function captureQuoteByPhoto() {
   return new Promise((resolve) => {
     const overlay = buildOverlay();
     document.body.appendChild(overlay);
-    document.body.style.overflow = 'hidden';
+    // 🆕 P2-17: OCR-оверлей в back-стеке (Android back закрывает его),
+    // scroll-lock с refcount, фокус/trap — единый lifecycle из utils.js.
+    trackOverlay(overlay, { onClose: () => close(null) });
 
     const video = overlay.querySelector('#ocr-video');
     const canvas = overlay.querySelector('#ocr-canvas');
@@ -164,7 +166,9 @@ export function captureQuoteByPhoto() {
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('visibilitychange', onVisHidden);
       overlay.remove();
-      document.body.style.overflow = '';
+      // 🆕 P2-17: единый lifecycle — снимаем оверлей из back-стека и
+      // разблокируем скролл/фокус (при жесте «назад» history.back() подавляется).
+      untrackOverlay(overlay);
       _ocrOpen = false;
       resolve(result);
     }
@@ -172,7 +176,18 @@ export function captureQuoteByPhoto() {
     // 🆕 P2-15: централизованный lifecycle при навигации/видимости страницы.
     // pagehide — страница уходит (навигация/закрытие): закрываем оверлей,
     // камера и воркер освобождаются (SW продолжает жить, но JS-страница — нет).
-    const onPageHide = () => close(null);
+    const onPageHide = () => {
+      if (cancelled) return;
+      cancelled = true;
+      stopCamera();
+      revokePreview();
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('visibilitychange', onVisHidden);
+      overlay.remove();
+      releaseOverlay(overlay); // без history.back(): навигацию делает браузер
+      _ocrOpen = false;
+      resolve(null);
+    };
     // visibilitychange — уход в фон (переключение приложения/вкладки):
     // освобождаем камеру и воркер, но оверлей держим открытым — пользователь
     // вернётся и нажмёт «Заново», либо выберет фото из галереи.

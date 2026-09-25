@@ -266,13 +266,11 @@ export function openCollectionForm(collection, onSave) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // 🆕 v3.8.4: жест «назад»
+  trackOverlay(overlay, { onClose: () => close() }); // 🆕 v3.8.4: жест «назад»
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.col-form-close').addEventListener('click', close);
@@ -347,13 +345,11 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.picker-close').addEventListener('click', close);
@@ -424,13 +420,11 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.add-books-close').addEventListener('click', close);
