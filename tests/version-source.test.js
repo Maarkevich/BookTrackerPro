@@ -65,4 +65,29 @@ describe('P3-4: version.js удалён, version.json — источник ис�
       expect(src, `${f} не должен ссылаться на version.js`).not.toMatch(/version\.js(?!on)/);
     }
   });
+
+  it('контракт релиза: version.json.cache === CACHE_NAME в sw.js (механизм verifyCacheFreshness)', () => {
+    const meta = JSON.parse(read('version.json'));
+    const swCache = (read('sw.js').match(/const\s+CACHE_NAME\s*=\s*'([^']+)'/) || [])[1];
+    expect(swCache).toBe(meta.cache);
+    expect(meta.cache).toMatch(/^btp-v3\.\d+\.\d+$/);
+  });
+
+  it('контракт релиза: version.json синхронизирован с package.json и UI «О приложении»', () => {
+    const meta = JSON.parse(read('version.json'));
+    const pkg = JSON.parse(read('package.json'));
+    expect(meta.version).toBe(pkg.version);
+    const app = read('app.js');
+    expect(app).toContain(`Book Tracker Pro v${meta.version}`);
+    const html = read('index.html');
+    expect(html).toContain(`v=${meta.version}`);
+  });
+
+  it('version.json валиден: build/date форматы и непустой changelog', () => {
+    const meta = JSON.parse(read('version.json'));
+    expect(meta.build).toMatch(/^\d{8}$/);
+    expect(meta.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Array.isArray(meta.changes)).toBe(true);
+    expect(meta.changes.length).toBeGreaterThan(0);
+  });
 });

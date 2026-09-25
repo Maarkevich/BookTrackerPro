@@ -1,20 +1,24 @@
 // 📦 BookTrackerPro — sw.js
-// 🔖 v3.8.5 | 2026-08-17
+// 🔖 v3.8.6 | 2026-09-25
 // 📝 Service Worker: оффлайн-кеш, стратегии, обновления
 //
-//    ⚠️ НОВОЕ в 3.8.5: только бумп CACHE_NAME → btp-v3.8.5
-//    Сохранено из 3.8.4: OCR runtime-cache, нормализация URL,
-//    Background Sync, Periodic Sync, Push-заготовка
+//    ⚠️ НОВОЕ в 3.8.6: бумп CACHE_NAME → btp-v3.8.6
+//    Сохранено из 3.8.5: OCR runtime-cache, нормализация URL,
+//    Background Sync (syncBookMetadata удаляет элемент очереди
+//    только при response.ok), Periodic Sync, Push-заготовка
 // ─────────────────────────────────────────────
 
 const BASE = '/BookTrackerPro';
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
 // Должно совпадать с полем "cache" в version.json
-const CACHE_NAME = 'btp-v3.8.5';
+const CACHE_NAME = 'btp-v3.8.6';
 
 const COVER_CACHE_NAME = 'btp-covers-v1';
-const OCR_CACHE_NAME = 'btp-ocr-v1';
+// 🔖 3.8.6: btp-ocr-v1 → btp-ocr-v2 — в v1 на устройствах могли
+// остаться обрезанные (битые) Tesseract-файлы; новый номер кеша
+// заставляет перекачать полный комплект (tesseract.js 5.1.1).
+const OCR_CACHE_NAME = 'btp-ocr-v2';
 
 const SHELL_ASSETS = [
   `${BASE}/`,
@@ -30,6 +34,7 @@ const SHELL_ASSETS = [
   `${BASE}/isbn.js`,
   `${BASE}/scanner.js`,
   `${BASE}/microlink.js`,
+  `${BASE}/ai.js`,
   `${BASE}/ocr.js`,
   `${BASE}/content.js`,
   `${BASE}/review.js`,

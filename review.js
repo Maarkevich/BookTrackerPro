@@ -24,7 +24,9 @@
 //      — Кнопка «Цитата по фото» (OCR, полный оффлайн)
 //      — Копирование отзыва для описания видео
 // ─────────────────────────────────────────────
-import { saveReviewForBook, removeReviewFromBook, loadBooks } from './db.js';
+import { saveReviewForBook, removeReviewFromBook, loadBooks, loadSettings } from './db.js';
+// 🔖 3.8.6: AI-исправление текста отзыва (клиент xKiro — ai.js)
+import { chatXkiro, isAiConfigured, AiApiError } from './ai.js';
 import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев; 🆕 P2-18: keyboard карточек
 import { captureQuoteByPhoto } from './ocr.js';
 import { icon } from './icons.js';
@@ -224,6 +226,11 @@ function renderReviewFormBody(body, book) {
     <div class="form-group">
       <label>${icon('edit', 13)} Текст отзыва</label>
       <textarea id="rf-text" rows="5" placeholder="Развёрнутый отзыв для видео или поста...">${esc(r.text || '')}</textarea>
+      <div class="flex gap-8 mt-8" style="flex-wrap:wrap">
+        <button type="button" id="rf-ai-fix" class="btn-secondary" style="width:auto">${icon('sparkles', 13)} ✨ Исправить текст (AI)</button>
+        <span id="rf-ai-status" class="status-text"></span>
+      </div>
+      <div class="form-hint">AI исправит ошибки, пунктуацию и формулировки — текст заменится в поле, вы сможете его отредактировать.</div>
     </div>
 
     <!-- Цитаты -->
@@ -405,6 +412,48 @@ function renderReviewFormBody(body, book) {
       return `<span style="display:flex;align-items:center;gap:8px">${icon(ic, 14)} ${esc(opt.textContent)}</span>`;
     },
   });
+
+  // ── ✨ AI: исправление текста отзыва (🔖 3.8.6) ──
+  const aiFixBtn = body.querySelector('#rf-ai-fix');
+  const aiStatusEl = body.querySelector('#rf-ai-status');
+  if (aiFixBtn && aiStatusEl) {
+    aiFixBtn.addEventListener('click', async () => {
+      const textEl = body.querySelector('#rf-text');
+      const text = (textEl.value || '').trim();
+      if (!text) { showToast('⚠️ Сначала напишите текст отзыва', 'error'); return; }
+      let settings;
+      try {
+        settings = await loadSettings();
+      } catch {
+        settings = null;
+      }
+      if (!isAiConfigured(settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+      if (!settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+
+      aiFixBtn.disabled = true;
+      aiStatusEl.textContent = '⏳ Исправляю текст...';
+      try {
+        const content = await chatXkiro({
+          apiKey: settings.xkiroApiKey,
+          model: settings.xkiroModel,
+          messages: [
+            { role: 'system', content: 'Ты — редактор книжных отзывов. Исправь в тексте ошибки, пунктуацию и неудачные формулировки. Сохрани смысл, стиль и примерную длину. Не добавляй от себя ничего. Верни ТОЛЬКО исправленный текст без пояснений.' },
+            { role: 'user', content: text },
+          ],
+          temperature: 0.3,
+        });
+        const finalText = content.trim();
+        textEl.value = finalText;
+        aiStatusEl.textContent = '✅ Текст исправлен — проверьте и сохраните';
+        showToast('✨ Текст отзыва исправлен', 'success');
+      } catch (e) {
+        aiStatusEl.textContent = '';
+        showToast(`❌ ${e instanceof AiApiError ? e.message : 'Ошибка при обращении к AI'}`, 'error');
+      } finally {
+        aiFixBtn.disabled = false;
+      }
+    });
+  }
 
   // ── Сохранение ──
   body.querySelector('#rf-save').addEventListener('click', async () => {

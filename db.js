@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.5 | 2026-08-17
+// 🔖 v3.8.6 | 2026-09-25
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 6
@@ -7,12 +7,11 @@
 //            collections, challenges, tags, previews,
 //            pending-sync
 //
-//    Новое в 3.8.5:
+//    Новое в 3.8.6: без функциональных изменений.
+//    Сохранено из 3.8.5:
 //      — importAll = СИНХРОНИЗАЦИЯ (merge):
 //        добавляет только отсутствующие записи (по id/name),
 //        дубли пропускает, возвращает сводку { added*, skipped* }
-//
-//    Сохранено из 3.8.4:
 //      — shelfMark { color, text } в ensureBookFields
 //      — putBooks (batch) — одна транзакция для N книг
 //      — Store 'pending-sync' для Background Sync API

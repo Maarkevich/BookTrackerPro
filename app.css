@@ -433,6 +433,9 @@ a:hover { text-decoration: underline; }
 .badge-format-ebook { background: var(--cyan-dim); color: var(--cyan); }
 .badge-format-audio { background: var(--purple-dim); color: var(--purple); }
 .badge-source    { background: var(--bg-input); color: var(--text-muted); }
+/* 🔖 3.8.6: бейдж «Заполнить через AI» на карточке книги */
+.badge-ai        { background: var(--purple-dim); color: var(--purple); border: none; cursor: pointer; transition: all .15s var(--ease); }
+.badge-ai:hover  { filter: brightness(1.18); }
 
 .status-btn { border: none; cursor: pointer; transition: all .15s var(--ease); }
 .status-btn:hover { filter: brightness(1.15); }
@@ -998,6 +1001,44 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 6px; paddi
   font-size: .85rem; color: var(--text-secondary);
   margin-bottom: 16px;
 }
+
+/* ═══════════════════════════════════════════════
+   🔖 3.8.6: AI-ДИАЛОГИ (подсказка для AI-заполнения, рекомендации)
+   ═══════════════════════════════════════════════ */
+.ai-prompt-modal {
+  position: fixed; inset: 0;
+  z-index: 700;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  animation: fadeIn .2s var(--ease);
+}
+.ai-prompt-panel {
+  width: min(94vw, 440px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 18px;
+  animation: popIn .3s var(--ease-bounce);
+  box-shadow: var(--shadow);
+}
+.ai-prompt-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 1.05rem; font-weight: 800; margin-bottom: 8px;
+  color: var(--purple);
+}
+.ai-prompt-text { font-size: .88rem; color: var(--text-secondary); margin-bottom: 10px; }
+.ai-prompt-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: .92rem;
+}
+.ai-prompt-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
 /* Star rating */
 .star-rating {

@@ -1,26 +1,23 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.5 | 2026-08-17
+// 🔖 v3.8.6 | 2026-09-25
 // 📝 Точка входа: навигация, рендеринг, события
 //
-//    Новое в 3.8.5:
-//      — Контент: клик по контенту (книга/контент-план/календарь/поиск)
-//        открывает READ-ONLY карточку openContentDetail, не редактор
-//      — FAB «+» → меню: книга / контент / отзыв / челлендж / серия / подборка
-//      — Убрана кнопка «+ Новая подборка» из drawer
-//      — «Контент-план» переименован в «Контент»
-//      — Настройки: площадка через attachCustomSelect с brand-иконками
-//      — Форма книги: attachDatePicker для даты получения PR
-//      — Доп.оценки: SVG (pepper/droplet/mystery/facePalm),
-//        имена «Горячесть/Слезливость/Интрига/Жуткость», выбор иконками
-//      — Импорт = синхронизация (добавляет отсутствующее, дубли.skip)
+//    Новое в 3.8.6:
+//      — Офлайн: добавление книги при отсутствии сети ставится
+//        в очередь фоновой синхронизации (maybeEnqueueOfflineSync)
+//      — «Удалить всё» (clearAllData) очищает и store pending-sync
+//      — Установка: синхронные install-слушатели на уровне модуля +
+//        подсказка «На экран Домой» для iPhone/iPad (iosInstallDecision)
+//      — A11y: клавиатурная доступность карточек/модалок
 //
-//    Сохранено из 3.8.4:
+//    Сохранено из 3.8.5:
 //      — restoreCoverUrls, shelfMark, SVG-иконки, аккордеон drawer,
 //        янтарные заголовки, разрыв циклов через utils.js
 // ─────────────────────────────────────────────
 import {
   openDB, loadBooks, putBook, deleteBookCascade, loadSettings, saveSettings,
   saveCover, loadCovers, changeBookStatus, applyStatusTransition,
+  saveCoverFromUrl, getCover,
   BOOK_STATUSES, CURRENCIES,
   loadCollections, loadChallenges, loadTags, putTag, delTag,
   moveCollection, getNextCollectionOrder,
@@ -60,6 +57,11 @@ import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffl
 import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
+// 🔖 3.8.6: AI-функциональность через API xKiro
+// (ключ/модель хранятся в IndexedDB-настройках, сетевой клиент — ai.js).
+import {
+  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError
+} from './ai.js';
 import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
@@ -87,6 +89,7 @@ const S = {
   settings: {
     lrAppId: '', lrSecret: '', lrPartnerId: '', lrPartnerSecret: '',
     microlinkApiKey: '',
+    xkiroApiKey: '', xkiroModel: '',
     confetti: true, sound: true,
     defaultPlatform: 'youtube',
     bloggerMode: true,
@@ -1072,10 +1075,19 @@ export function renderBookList(container, books, limit, handlers = {}) {
       if (e.target.closest('.status-btn')) return;
       if (e.target.closest('.tag-chip')) return;
       if (e.target.closest('.tag-more-btn')) return;
+      if (e.target.closest('.btn-ai-card')) return;
       (handlers.onOpenBook || openBookDetail)(card.dataset.id);
     });
     // 🆕 P2-18: keyboard-доступность карточки (Enter/Space)
     makeCardKeyboardAccessible(card);
+  });
+
+  // 🔖 3.8.6: кнопка «Заполнить через AI» на карточке
+  container.querySelectorAll('.btn-ai-card').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      (handlers.onAiFill || fillBookViaAi)(btn.dataset.aiBookId);
+    });
   });
 
   container.querySelectorAll('.status-btn').forEach(btn => {
@@ -1163,8 +1175,18 @@ function renderBooksTab() {
         <button class="filter-chip ${S.bookFilter === f.id && !S.activeFilter ? 'active' : ''}"
                 data-filter="${f.id}">${f.ic ? icon(f.ic, 13) + ' ' : ''}${f.label}</button>
       `).join('')}
+      ${isAiConfigured(S.settings) ? `
+        <button class="filter-chip" id="ai-recs-btn" title="Подобрать книги с помощью AI">
+          ${icon('sparkles', 13)} Рекомендации${S.activeFilter ? '⋯' : ''}
+        </button>` : ''}
     </div>
   `;
+
+  // 🔖 3.8.6: AI-рекомендации на основе библиотеки / текущего фильтра
+  const aiRecsBtn = mc.querySelector('#ai-recs-btn');
+  if (aiRecsBtn) {
+    aiRecsBtn.addEventListener('click', () => openAiRecommendations());
+  }
 
   const listHost = document.createElement('div');
   mc.appendChild(listHost);
@@ -1195,6 +1217,112 @@ function renderEmptyBooks() {
       </div>
     </div>
   `;
+}
+
+// ═══════════════════════════════════════════════
+//  🔖 3.8.6: AI-РЕКОМЕНДАЦИИ (xKiro)
+// ═══════════════════════════════════════════════
+function openAiRecommendations() {
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  const lib = S.books.filter(b => b.id !== '__no_book__');
+  if (lib.length === 0) { showToast('⚠️ Сначала добавьте книги в библиотеку', 'error'); return; }
+
+  // Контекст = текущий фильтр (жанр/тег/подборка/серия/автор/статус) или вся библиотека.
+  let scopeLabel = 'вся библиотека';
+  let pool = lib;
+  if (S.activeFilter) {
+    const { type, value } = S.activeFilter;
+    if (type === 'tag') { pool = lib.filter(b => (b.tags || []).includes(value)); scopeLabel = `тег «${value}»`; }
+    else if (type === 'genre') { pool = lib.filter(b => b.genre === value); scopeLabel = `жанр «${value}»`; }
+    else if (type === 'author') { pool = lib.filter(b => b.author === value); scopeLabel = `автор «${value}»`; }
+    else if (type === 'publisher') { pool = lib.filter(b => b.publisher === value); scopeLabel = `издательство «${value}»`; }
+    else if (type === 'series') { pool = lib.filter(b => b.series === value); scopeLabel = `серия «${value}»`; }
+    else if (type === 'collection') {
+      const col = S.collections.find(c => c.id === value);
+      pool = col ? lib.filter(b => col.bookIds.includes(b.id)) : [];
+      scopeLabel = `подборка «${col?.name || value}»`;
+    }
+  } else if (S.bookFilter !== 'all') {
+    pool = lib.filter(b => b.status === S.bookFilter);
+    scopeLabel = `статус «${S.bookFilter}»`;
+  }
+  if (pool.length === 0) { showToast('⚠️ Нет книг по текущему фильтру', 'error'); return; }
+
+  const samples = [...pool].sort(() => Math.random() - 0.5).slice(0, 40);
+  const listText = samples.map(b =>
+    `- «${b.title}» автор: ${b.author || '—'} жанр: ${b.genre || '—'}${(b.tags || []).length ? ' теги: ' + b.tags.join(', ') : ''}${b.review?.rating ? ' оценка: ' + b.review.rating + '/5' : ''}${b.status ? ' статус: ' + b.status : ''}`
+  ).join('\n');
+
+  const modal = document.createElement('div');
+  modal.className = 'ai-prompt-modal';
+  modal.innerHTML = `
+    <div class="ai-prompt-panel" style="width:min(94vw,560px);max-height:86vh;overflow:auto">
+      <div class="ai-prompt-title">${icon('sparkles', 20)} AI-рекомендации</div>
+      <div class="ai-prompt-text">Подбираю книги на основе: <b>${esc(scopeLabel)}</b> — в выборке ${pool.length} кн. Книги, которых нет в вашей библиотеке.</div>
+      <input type="text" id="ai-rec-extra" class="ai-prompt-input" placeholder="Уточнение: «похоже на Ремарка», «лёгкие романы»... (необязательно)"/>
+      <div class="btn-group" style="margin-top:12px">
+        <button id="ai-rec-go" class="btn-primary">Подобрать</button>
+        <button id="ai-rec-close" class="btn-secondary">Закрыть</button>
+      </div>
+      <div id="ai-rec-results"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#ai-rec-close').addEventListener('click', () => modal.remove());
+  modal.querySelector('#ai-rec-extra').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  modal.querySelector('#ai-rec-go').addEventListener('click', go);
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  setTimeout(() => modal.querySelector('#ai-rec-extra')?.focus(), 50);
+
+  async function go() {
+    const resultsEl = modal.querySelector('#ai-rec-results');
+    const extra = modal.querySelector('#ai-rec-extra').value.trim();
+    resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Подбираю книги...</div>';
+    try {
+      const system = 'Ты — рекомендатель книг. По книгам пользователя предложи 5 книг, которых НЕТ в его библиотеке. Верни ТОЛЬКО JSON без пояснений и markdown по схеме: {"recommendations":[{"title":"","author":"","genre":"","why":""}]}.' + (extra ? ' Учти пожелание: ' + extra : '');
+      const user = `Книги пользователя (контекст: ${scopeLabel}):\n${listText}`;
+      const content = await chatXkiro({
+        apiKey: S.settings.xkiroApiKey, model: S.settings.xkiroModel,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        json: true,
+      });
+      const data = extractJson(content);
+      const recs = Array.isArray(data?.recommendations) ? data.recommendations : [];
+      if (recs.length === 0) throw new AiApiError('AI не вернул рекомендации');
+      resultsEl.innerHTML = recs.map((r, i) => `
+        <div class="web-result" style="align-items:flex-start">
+          <div class="web-result-info" style="flex:1">
+            <div class="web-result-title">${i + 1}. ${esc(r.title || '')}${r.author ? ' — ' + esc(r.author) : ''}</div>
+            ${r.genre ? `<div class="web-result-meta">жанр: ${esc(r.genre)}</div>` : ''}
+            ${r.why ? `<div class="text-small" style="color:var(--text-muted);margin-top:4px">${esc(r.why)}</div>` : ''}
+            <div class="mt-8"><button class="btn-secondary" data-rec-add="${i}" style="padding:4px 10px;font-size:.75rem">＋ В библиотеку</button></div>
+          </div>
+        </div>
+      `).join('');
+      recs.forEach((r, i) => {
+        const btn = resultsEl.querySelector(`[data-rec-add="${i}"]`);
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+          const b = {
+            id: 'bk_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+            title: r.title || 'Без названия', author: r.author || '', genre: r.genre || '',
+            status: 'wishlist', dateAdded: new Date().toISOString(),
+            contentItems: [], review: {}, readingForContent: {},
+            source: 'ai',
+          };
+          await putBook(b);
+          btn.textContent = '✅ Добавлена';
+          btn.disabled = true;
+          await refreshData();
+          showToast('✨ Книга добавлена в «Хочу прочитать»', 'success');
+        });
+      });
+    } catch (e) {
+      resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка')}</div>`;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1245,6 +1373,10 @@ function renderBookCard(book) {
         <div class="book-title-row">
           <div class="book-title">${esc(book.title)}</div>
           ${markHtml}
+          ${isAiConfigured(S.settings) ? `
+            <button class="book-badge badge-ai btn-ai-card" data-ai-book-id="${escAttr(book.id)}" aria-label="Заполнить через AI" title="Заполнить карточку через AI">
+              ${icon('sparkles', 11)} AI
+            </button>` : ''}
         </div>
         <div class="book-author">${esc(book.author)}</div>
         <div class="book-meta">
@@ -1448,6 +1580,22 @@ function openBookForm(book = null) {
       </div>
       <div id="bf-webresults" class="web-search-results"></div>
     </div>
+    ${isAiConfigured(S.settings) ? `
+    <div class="form-group">
+      <label>${icon('sparkles', 13)} ✨ AI-поиск (xKiro)</label>
+      <div class="flex gap-8">
+        <input type="text" id="bf-ai-query" placeholder="Любой запрос: «Стивен Кинг 1980-х» или ISBN"/>
+        <button id="bf-ai-search" class="btn-secondary" style="width:auto;flex-shrink:0">${icon('sparkles', 14)} Искать</button>
+      </div>
+      <div id="bf-ai-results" class="web-search-results"></div>
+      <div class="form-hint">Найдёт в интернете и предложит заполнить карточку целиком: авторы, жанр, описание, серия, цена.</div>
+    </div>
+    ` : `
+    <div class="form-group">
+      <label>${icon('sparkles', 13)} ✨ AI-поиск (xKiro)</label>
+      <div class="form-hint">Не настроен. Добавьте ключ в Настройки → AI (xKiro).</div>
+    </div>
+    `}
     <div class="form-group">
       <label>${icon('link', 13)} Или вставьте ссылку на страницу книги</label>
       <div class="flex gap-8">
@@ -1636,6 +1784,14 @@ function openBookForm(book = null) {
   });
   fb.querySelector('#bf-websearch').addEventListener('click', () => handleWebSearch());
   fb.querySelector('#bf-webquery').addEventListener('keydown', (e) => { if (e.key === 'Enter') handleWebSearch(); });
+
+  // 🔖 3.8.6: AI-поиск книги (xKiro).
+  const aiQuery = fb.querySelector('#bf-ai-query');
+  const aiSearchBtn = fb.querySelector('#bf-ai-search');
+  if (aiQuery && aiSearchBtn) {
+    aiSearchBtn.addEventListener('click', () => handleAiBookSearch(fb));
+    aiQuery.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleAiBookSearch(fb); });
+  }
 
   fb.querySelector('#bf-page-extract').addEventListener('click', async () => {
     const url = fb.querySelector('#bf-page-url').value.trim();
@@ -2181,6 +2337,220 @@ function fillFormFromResult(r) {
   if (r.litresSeries?.length > 0) { set('#bf-series', r.litresSeries[0].name); set('#bf-series-num', r.litresSeries[0].number); }
   if (r.litresMinAge) set('#bf-age', r.litresMinAge + '+');
   if (r.price?.amount > 0) { set('#bf-price', r.price.amount); set('#bf-currency', r.price.currency); }
+}
+
+// ═══════════════════════════════════════════════
+//  🔖 3.8.6: AI-ПОИСК КНИГИ (xKiro)
+// ═══════════════════════════════════════════════
+async function handleAiBookSearch(fb) {
+  const query = (fb.querySelector('#bf-ai-query')?.value || '').trim();
+  const resultsEl = fb.querySelector('#bf-ai-results');
+  if (!query) { showToast('⚠️ Введите запрос', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+
+  resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
+  try {
+    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 5 });
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px">Ничего не найдено. Попробуйте другой запрос.</div>';
+      return;
+    }
+    resultsEl.innerHTML = results.map((r, i) => `
+      <div class="web-result" data-idx="${i}" role="button" tabindex="0">
+        ${r.thumbnail
+          ? `<img class="web-result-cover" src="${esc(safeUrl(r.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
+          : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
+        <div class="web-result-info">
+          <div class="web-result-title">${esc(r.title)}</div>
+          <div class="web-result-meta">${esc(r.snippet || '').slice(0, 160)}${r.source ? ' · ' + esc(r.source) : ''}${r.publicationDate ? ' · ' + esc(r.publicationDate) : ''}</div>
+        </div>
+      </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.web-result').forEach(el => {
+      const pick = () => {
+        const r = results[parseInt(el.dataset.idx)];
+        fillAiFormFromSearch(fb, r, query);
+      };
+      el.addEventListener('click', pick);
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    });
+  } catch (e) {
+    resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка сети')}</div>`;
+  }
+}
+
+async function fillAiFormFromSearch(fb, result, query) {
+  const resultsEl = fb.querySelector('#bf-ai-results');
+  resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Извлекаю данные книги...</div>';
+  try {
+    const system = 'Ты — помощник книжного каталога. По данным поиска о книге верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"priceAmount":0,"coverUrl":""}. Если данных нет — пустая строка или 0.';
+    const user = `Запрос пользователя: ${query}\n\nДанные веб-поиска:\nНазвание: ${result.title}\nURL: ${result.url}\nОписание: ${result.snippet}\nИсточник: ${result.source}${result.publicationDate ? '\nДата: ' + result.publicationDate : ''}`;
+    const content = await chatXkiro({
+      apiKey: S.settings.xkiroApiKey,
+      model: S.settings.xkiroModel,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: 0.2,
+      json: true,
+    });
+    const data = extractJson(content);
+    if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
+    fillFormFromAi(fb, data);
+    resultsEl.innerHTML = '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>';
+    showToast('✨ AI заполнил карточку', 'success');
+  } catch (e) {
+    resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка')}</div>`;
+  }
+}
+
+function fillFormFromAi(fb, d) {
+  const set = (id, val) => { const el = fb.querySelector(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
+  set('#bf-title', d.title);
+  set('#bf-author', d.author);
+  set('#bf-isbn', d.isbn);
+  set('#bf-genre', d.genre);
+  set('#bf-publisher', d.publisher);
+  set('#bf-year', d.publishedDate);
+  set('#bf-pages', d.pageCount || '');
+  set('#bf-age', d.ageRating);
+  set('#bf-desc', d.description);
+  set('#bf-series', d.series);
+  set('#bf-series-num', d.seriesNumber || '');
+  if (Number(d.priceAmount) > 0) { set('#bf-price', Number(d.priceAmount)); set('#bf-currency', 'RUB'); }
+  if (d.coverUrl) set('#bf-cover', d.coverUrl);
+  const img = fb.querySelector('#bf-cover-preview-img');
+  const box = fb.querySelector('#bf-cover-preview');
+  if (img && d.coverUrl) { img.src = d.coverUrl; box?.classList.remove('hidden'); }
+  else if (box) box.classList.add('hidden');
+}
+
+// ═══════════════════════════════════════════════
+//  🔖 3.8.6: ЗАПОЛНЕНИЕ КАРТОЧКИ ЧЕРЕЗ AI (xKiro)
+// ═══════════════════════════════════════════════
+
+/** Промпт для извлечения полей книги (общий для формы и карточки). */
+const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога. По данным поиска о книге верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"priceAmount":0,"coverUrl":""}. Если данных нет — пустая строка или 0.';
+
+/** Вызывает chatXkiro и надёжно разбирает JSON-ответ модели. */
+async function aiExtractBookFields(query, searchResult, extraHints = '') {
+  const user = `Запрос: ${query}\n\nДанные веб-поиска:\nНазвание: ${searchResult.title}\nURL: ${searchResult.url}\nОписание: ${searchResult.snippet}\nИсточник: ${searchResult.source}${searchResult.publicationDate ? '\nДата: ' + searchResult.publicationDate : ''}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
+  const content = await chatXkiro({
+    apiKey: S.settings.xkiroApiKey,
+    model: S.settings.xkiroModel,
+    messages: [{ role: 'system', content: AI_BOOK_FIELDS_SYSTEM }, { role: 'user', content: user }],
+    temperature: 0.2,
+    json: true,
+  });
+  const data = extractJson(content);
+  if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
+  return data;
+}
+
+/** Применяет извлечённые поля к объекту книги (не сохраняет в БД). */
+function applyAiFieldsToBook(book, d, searchResult) {
+  const define = (key, val, fb) => {
+    if (val !== undefined && val !== null && val !== '') book[key] = fb(val);
+  };
+  define('title', d.title || searchResult?.title, (v) => v);
+  define('author', d.author, (v) => v);
+  define('isbn', d.isbn, (v) => v);
+  define('genre', d.genre, (v) => v);
+  define('publisher', d.publisher, (v) => v);
+  define('publishedDate', d.publishedDate, (v) => String(v));
+  const pages = Number(d.pageCount);
+  if (Number.isFinite(pages) && pages > 0) book.pageCount = pages;
+  define('ageRating', d.ageRating, (v) => String(v));
+  define('description', d.description, (v) => v);
+  define('series', d.series, (v) => v);
+  const sn = Number(d.seriesNumber);
+  if (Number.isFinite(sn) && sn > 0) book.seriesNumber = sn;
+  const amount = Number(d.priceAmount);
+  if (Number.isFinite(amount) && amount > 0) {
+    book.price = { amount, currency: 'RUB' };
+  }
+  return book;
+}
+
+/** Скачивает обложку в covers-стор; устанавливает сессионный blob: URL. */
+async function attachAiCover(book, url) {
+  const src = url || book.cover;
+  if (!src || !/^https?:\/\//i.test(src)) return;
+  try {
+    const ok = await saveCoverFromUrl(book.id, src);
+    if (ok) {
+      const blob = await getCover(book.id);
+      if (blob) {
+        const u = URL.createObjectURL(blob);
+        cacheCoverUrl(book.id, u);
+        book.coverUrl = u;
+        book.cover = src; // http(s)-фолбэк в бэкапе (паттерн P1-3)
+      }
+    }
+  } catch { /* обложка не критична для заполнения полей */ }
+}
+
+/** Простой ввод-диалог для пустой карточки (без ключевого имени книги). */
+function askAiPrompt(question) {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'ai-prompt-modal';
+    modal.innerHTML = `
+      <div class="ai-prompt-panel">
+        <div class="ai-prompt-title">${icon('sparkles', 20)} Заполнить через AI</div>
+        <div class="ai-prompt-text">${esc(question)}</div>
+        <input type="text" id="ai-prompt-input" class="ai-prompt-input" placeholder="Напр. «Три товарища Ремарк»" autofocus/>
+        <div class="btn-group" style="margin-top:12px">
+          <button id="ai-prompt-ok" class="btn-primary">Заполнить</button>
+          <button id="ai-prompt-cancel" class="btn-secondary">Отмена</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const close = (val) => { modal.remove(); resolve(val); };
+    modal.querySelector('#ai-prompt-ok').addEventListener('click', () => close(modal.querySelector('#ai-prompt-input').value.trim()));
+    modal.querySelector('#ai-prompt-cancel').addEventListener('click', () => close(''));
+    modal.querySelector('#ai-prompt-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') close(modal.querySelector('#ai-prompt-input').value.trim());
+      if (e.key === 'Escape') close('');
+    });
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(''); });
+    setTimeout(() => modal.querySelector('#ai-prompt-input')?.focus(), 50);
+  });
+}
+
+/** Главная точка входа для кнопки «✨ AI» на карточке книги. */
+async function fillBookViaAi(bookId) {
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  const book = S.books.find(b => b.id === bookId);
+  if (!book) return;
+
+  const hint = [book.title, book.author, book.isbn].filter(Boolean).join(' — ');
+  let query = hint;
+  if (!query) {
+    query = await askAiPrompt('В карточке нет данных о книге. Что это за книга?');
+    if (!query) return;
+  }
+
+  showToast('✨ Заполняю карточку через AI...', 'info');
+  try {
+    const hasFields = Boolean(book.title || book.author || book.genre || book.description || book.isbn);
+    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 3 });
+    const top = results[0];
+    if (!top) { showToast('⚠️ AI ничего не нашёл по этому запросу', 'error'); return; }
+    const data = await aiExtractBookFields(query, top, hasFields ? JSON.stringify({
+      existingTitle: book.title, existingAuthor: book.author, isbn: book.isbn,
+    }) : '');
+
+    applyAiFieldsToBook(book, data, top);
+    await putBook(book);
+    if (data.coverUrl || top.thumbnail) await attachAiCover(book, data.coverUrl || top.thumbnail);
+    await refreshData();
+    showToast('✅ Карточка заполнена через AI', 'success');
+  } catch (e) {
+    showToast(`❌ ${e instanceof AiApiError ? e.message : 'Не удалось заполнить карточку'}`, 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -2968,6 +3338,25 @@ function renderSettingsTab() {
       <div class="mt-8"><button id="set-microlink-clear" class="btn-secondary">Очистить кеш превью</button></div>
     </div>
     <div class="settings-section">
+      <h3>${icon('sparkles', 15)} AI (xKiro) <span class="badge">поиск книг · заполнение · отзывы</span></h3>
+      <p class="hint">Подключает AI-поиск книг, автозаполнение карточек, рекомендации и исправление текста отзывов.<br/>Ключ и модель хранятся локально (IndexedDB) и никуда, кроме сервера xKiro, не отправляются.</p>
+      <div class="form-group">
+        <label>API-ключ</label>
+        <input type="password" id="set-xkiro-key" value="${escAttr(s.xkiroApiKey || '')}" placeholder="Ваш ключ https://docs.xkiro.com" autocomplete="off"/>
+      </div>
+      <div class="form-group">
+        <label>Модель</label>
+        <select id="set-xkiro-model" disabled>
+          <option value="">— сначала сохраните ключ —</option>
+        </select>
+      </div>
+      <div class="flex gap-8" style="flex-wrap:wrap">
+        <button id="set-xkiro-load" class="btn-secondary">Загрузить список моделей</button>
+        <button id="set-xkiro-clear" class="btn-secondary">Удалить ключ</button>
+      </div>
+      <span id="set-xkiro-status" class="status-text"></span>
+    </div>
+    <div class="settings-section">
       <h3>${icon('bookClosed', 15)} ЛитРес API <span class="badge">опционально</span></h3>
       <p class="hint">Улучшает поиск российских книг. Ключи задаются здесь и хранятся локально.</p>
       <details>
@@ -3022,7 +3411,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.5 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.8.6 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
@@ -3147,6 +3536,70 @@ function renderSettingsTab() {
     await clearPreviewCache();
     showToast('🗑️ Кеш превью очищен', 'info');
   });
+
+  // ── 🔖 3.8.6: AI (xKiro) ───────────────────────────────────────────
+  const xkiroKey = mc.querySelector('#set-xkiro-key');
+  const xkiroStatus = () => mc.querySelector('#set-xkiro-status');
+
+  /** Загружает список моделей в <select> и выбирает сохранённую. */
+  const loadXkiroModels = async (withReset = false) => {
+    const select = mc.querySelector('#set-xkiro-model');
+    const key = S.settings.xkiroApiKey;
+    const status = xkiroStatus();
+    if (!key) { status.textContent = '⚠️ Сначала введите API-ключ'; return; }
+    status.textContent = '⏳ Загружаю модели...';
+    select.disabled = true;
+    select.innerHTML = '<option value="">— загрузка —</option>';
+    try {
+      const models = await listModels(key);
+      if (models.length === 0) {
+        status.textContent = '⚠️ xKiro не вернул ни одной модели';
+        select.innerHTML = '<option value="">— модели не найдены —</option>';
+        return;
+      }
+      select.disabled = false;
+      select.innerHTML = '<option value="">— выберите модель —</option>' + models.map(m =>
+        `<option value="${escAttr(m.id)}">${esc(m.id)}${m.tier ? ' · ' + esc(m.tier) : ''}${m.description ? ' — ' + esc(m.description.slice(0, 60)) : ''}</option>`
+      ).join('');
+      if (S.settings.xkiroModel && models.some(m => m.id === S.settings.xkiroModel)) {
+        select.value = S.settings.xkiroModel;
+      }
+      if (withReset && models.length > 0 && !S.settings.xkiroModel) S.settings.xkiroModel = models[0].id;
+      status.textContent = `✅ Доступно моделей: ${models.length}${S.settings.xkiroModel ? ' · выбрана: ' + S.settings.xkiroModel : ''}`;
+    } catch (e) {
+      select.innerHTML = '<option value="">— ошибка загрузки —</option>';
+      status.textContent = `❌ ${e instanceof AiApiError ? e.message : 'Ошибка сети'}`;
+    }
+  };
+
+  xkiroKey?.addEventListener('change', async function() {
+    S.settings.xkiroApiKey = this.value.trim();
+    if (!S.settings.xkiroApiKey) { S.settings.xkiroModel = ''; }
+    await saveAppSettings();
+    await loadXkiroModels();
+  });
+
+  bind('#set-xkiro-load', () => loadXkiroModels());
+  bind('#set-xkiro-clear', async () => {
+    S.settings.xkiroApiKey = '';
+    S.settings.xkiroModel = '';
+    await saveAppSettings();
+    mc.querySelector('#set-xkiro-key').value = '';
+    mc.querySelector('#set-xkiro-model').innerHTML = '<option value="">— сначала сохраните ключ —</option>';
+    mc.querySelector('#set-xkiro-model').disabled = true;
+    mc.querySelector('#set-xkiro-status').textContent = '🗑️ Ключ удалён';
+    showToast('🗑️ AI-ключ удалён', 'info');
+  });
+
+  const xkiroModelSelect = mc.querySelector('#set-xkiro-model');
+  xkiroModelSelect?.addEventListener('change', function() {
+    S.settings.xkiroModel = this.value;
+    saveAppSettings();
+    loadXkiroModels(); // обновит статус «выбрана модель»
+  });
+
+  // Автозагрузка моделей при открытии, если ключ уже сохранён
+  if (S.settings.xkiroApiKey) loadXkiroModels();
 
   bind('#set-lr-test', async () => {
     const appId = mc.querySelector('#set-lr-appid').value.trim();

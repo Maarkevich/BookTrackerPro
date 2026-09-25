@@ -5,7 +5,7 @@
 // Оригинальная проблема (до фикса):
 //   sw.js precache содержит ТОЛЬКО сам ocr.js. Тяжёлые OCR-ресурсы
 //   (tesseract.min.js, worker.min.js, tesseract-core-simd.wasm.js,
-//   rus.traineddata.gz) попадают в btp-ocr-v1 ТОЛЬКО через runtime-ответ
+//   rus.traineddata.gz) попадают в btp-ocr-v2 ТОЛЬКО через runtime-ответ
 //   handleOcrAsset — т.е. после ПЕРВОГО успешного онлайн-OCR-запроса.
 //   loadTesseractLib() грузит tesseract.min.js динамическим <script>:
 //   у пользователя, установившего PWA, но не запускавшего OCR с сетью,
@@ -15,13 +15,13 @@
 //
 // Что доказывают тесты (РЕАЛЬНАЯ симуляция prepareOcrOffline):
 //   — fresh profile (кеш пуст) + online: подготовка кладёт ВСЕ 4 URL
-//     в btp-ocr-v1, isOcrReadyOffline() → true;
+//     в btp-ocr-v2, isOcrReadyOffline() → true;
 //   — interrupted download (404 на 3-м файле): {ok:false} и в кеше НЕТ
 //     частично скачанных файлов (атомарный rollback);
 //   — quota failure: cache.put отклоняется → {ok:false} + rollback;
 //   — повторная подготовка: уже готовый набор НЕ перекачивается
 //     (fetch не вызывается — кеш не дублируется);
-//   - контроль всех URL в btp-ocr-v1: набор идентичен OCR_OFFLINE_ASSETS
+//   - контроль всех URL в btp-ocr-v2: набор идентичен OCR_OFFLINE_ASSETS
 //     и НЕ содержит eng.traineddata.gz (P1-12);
 //   — контракт имён: имя кеша OCR в ocr.js == OCR_CACHE_NAME в sw.js.
 // ═══════════════════════════════════════════════════════════════════
@@ -35,7 +35,8 @@ const OCR_SOURCE = readFileSync(path.resolve(process.cwd(), 'ocr.js'), 'utf8');
 const SW_SOURCE = readFileSync(path.resolve(process.cwd(), 'sw.js'), 'utf8');
 
 const BASE = (OCR_SOURCE.match(/const\s+BASE\s*=\s*'([^']+)'/) || [])[1];
-const OCR_CACHE = 'btp-ocr-v1';
+// 🔖 3.8.6: v1 → v2 (в v1 мог быть закеширован обрезанный Tesseract).
+const OCR_CACHE = 'btp-ocr-v2';
 const ASSETS = [
   `${BASE}/tesseract.min.js`,
   `${BASE}/worker.min.js`,
@@ -106,7 +107,7 @@ describe('P1-13: подготовка OCR для полного offline', () => 
   it('контракт: OCR_CACHE_NAME в ocr.js совпадает с OCR_CACHE_NAME в sw.js', () => {
     const ocrCache = (OCR_SOURCE.match(/const\s+OCR_CACHE_NAME\s*=\s*'([^']+)'/) || [])[1];
     const swCache = (SW_SOURCE.match(/const\s+OCR_CACHE_NAME\s*=\s*'([^']+)'/) || [])[1];
-    expect(swCache).toBe('btp-ocr-v1');
+    expect(swCache).toBe('btp-ocr-v2');
     expect(ocrCache).toBe(swCache);
   });
 
@@ -122,7 +123,7 @@ describe('P1-13: подготовка OCR для полного offline', () => 
     expect(urls.some(u => u.includes('tesseract-core-simd.wasm.js'))).toBe(true);
   });
 
-  it('fresh profile + online: подготовка заполняет btp-ocr-v1 всеми URL, isOcrReadyOffline → true', async () => {
+  it('fresh profile + online: подготовка заполняет btp-ocr-v2 всеми URL, isOcrReadyOffline → true', async () => {
     const caches = createMockCaches();
     const fetchMock = mockFetch();
     vi.stubGlobal('caches', caches);
@@ -199,7 +200,7 @@ describe('P1-13: подготовка OCR для полного offline', () => 
     expect(cached.length).toBe(4);
   });
 
-  it('контроль всех URL в btp-ocr-v1: набор на диске попарно покрывает OCR_OFFLINE_ASSETS', () => {
+  it('контроль всех URL в btp-ocr-v2: набор на диске попарно покрывает OCR_OFFLINE_ASSETS', () => {
     const sizes = diskSizes();
     for (const url of ASSETS) {
       const file = url.split('/').pop();
