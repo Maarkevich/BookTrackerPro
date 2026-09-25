@@ -21,7 +21,7 @@
 //      — SVG-иконки, referrerpolicy no-referrer
 //      — Кликабельный контент в календаре → onOpenContent
 // ─────────────────────────────────────────────
-import { esc, safeUrl, formatPrice, convertToDefault } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
+import { esc, safeUrl, formatPrice, convertToDefault, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-18: keyboard карточек
 import { BOOK_STATUSES, CURRENCIES } from './db.js';
 import { CONTENT_TYPES, CONTENT_STATUSES, PLATFORMS, platformIcon } from './content.js';
 import { calcChallengeProgress } from './challenges.js';
@@ -681,15 +681,14 @@ export function renderCalendarTab(container, books, callbacks) {
           if (item && callbacks.onOpenContent) callbacks.onOpenContent(item, el.dataset.calBook);
         };
         el.addEventListener('click', openContent);
-        el.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openContent(); }
-        });
+        // 🆕 P2-18: keyboard-доступность (ранее keydown был, но без tabindex
+        // элемент был недостижим с клавиатуры)
+        makeCardKeyboardAccessible(el, { label: 'Открыть карточку контента' });
       });
     };
     day.addEventListener('click', openDay);
-    day.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDay(); }
-    });
+    // 🆕 P2-18: keyboard-доступность ячейки календаря
+    makeCardKeyboardAccessible(day, { label: 'Открыть контент за эту дату' });
   });
 
   container.querySelector('#cal-add').addEventListener('click', () => callbacks.onAdd());

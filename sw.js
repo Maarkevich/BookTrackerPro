@@ -295,9 +295,14 @@ async function syncBookMetadata() {
     if (!pending || pending.length === 0) return;
     for (const item of pending) {
       if (!navigator.onLine) break;
+      let handled = false;
       try {
         const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${item.isbn}&maxResults=1`);
+        // 🆕 P3-2: элемент удаляется из очереди ТОЛЬКО при успешном ответе —
+        // метаданные применены или их просто нет (manual-запись).
+        // При сбое сети / не-ok элемент ОСТАЁТСЯ для повторной попытки.
         if (response.ok) {
+          handled = true;
           const data = await response.json();
           const volume = data.items?.[0]?.volumeInfo;
           if (volume?.title) {
@@ -314,8 +319,8 @@ async function syncBookMetadata() {
             }
           }
         }
-        await deleteFromStore(db, 'pending-sync', item.id);
       } catch { break; }
+      if (handled) await deleteFromStore(db, 'pending-sync', item.id);
     }
   } catch (err) { console.warn('[SW] Background sync error:', err.message); }
 }

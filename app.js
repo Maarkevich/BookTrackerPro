@@ -26,7 +26,8 @@ import {
   moveCollection, getNextCollectionOrder,
   exportAll, importAll, getDBSize,
   repairCovers, isValidCoverBlob,
-  repairDanglingRefs, DBBlockedError
+  repairDanglingRefs, DBBlockedError,
+  putPendingSync, getPendingSync
 } from './db.js';
 import {
   validateISBN, cleanISBN, fetchBookByIsbn, searchBooks,
@@ -59,13 +60,14 @@ import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffl
 import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
-import { registerSW, setupOnlineIndicator } from './sw-register.js';
+import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import {
   esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
   consumePoppingState, hasOverlays, pushSentinel, closeTopOverlay, closeTopOverlayForBack,
+  makeCardKeyboardAccessible,
   formatPrice, convertToDefault
 } from './utils.js';
 
@@ -174,7 +176,7 @@ function cacheDom() {
    'review-overlay','review-form-title','review-form-close','review-form-body',
    'cover-overlay','cover-close','cover-viewer-img','cover-viewer-title',
    'cover-photo-btn','cover-photo-input','cover-gallery-btn','cover-gallery-input',
-   'toast','confetti-canvas','update-banner','install-banner',
+   'toast','confetti-canvas','update-banner','install-banner','install-ios-banner',
    'drawer-version','drawer-offline','active-filters',
    'drawer-collections','drawer-series','drawer-filters','drawer-add-collection',
    'drawer-title-collections','drawer-title-series','drawer-title-filters',
@@ -308,7 +310,7 @@ async function init() {
 
   registerSW();
   setupOnlineIndicator(showToast);
-  setupInstallPrompt();
+  maybeShowInstallBanner();
   setupBackGesture();
   updateOfflineIndicator();
   injectNavIcons();
@@ -528,6 +530,7 @@ function bindEvents() {
     if (S.deferredPrompt) { S.deferredPrompt.prompt(); S.deferredPrompt = null; DOM.installBanner.classList.add('hidden'); }
   });
   $('#install-dismiss')?.addEventListener('click', () => DOM.installBanner.classList.add('hidden'));
+  $('#install-ios-dismiss')?.addEventListener('click', () => dismissIosInstallBanner());
 
   // Escape (🆕 v3.8.5: сначала закрываем FAB-меню)
   // 🆕 P2-17: единый lifecycle — все оверлеи (статические и динамические)
@@ -866,8 +869,10 @@ function searchSection(title, count, inner) {
 }
 function bindSearchResultEvents(el) {
   const go = (fn) => { closeGlobalSearch(); fn(); };
+  // 🆕 P2-18: все кликабельные результаты поиска доступны с клавиатуры
   el.querySelectorAll('[data-sr-book]').forEach(item => {
     item.addEventListener('click', () => go(() => openBookDetail(item.dataset.srBook)));
+    makeCardKeyboardAccessible(item);
   });
   // 🆕 v3.8.5: контент из поиска → read-only карточка
   el.querySelectorAll('[data-sr-content-book]').forEach(item => {
@@ -876,18 +881,23 @@ function bindSearchResultEvents(el) {
       const contentItem = (book?.contentItems || []).find(c => c.id === item.dataset.srContentId);
       go(() => openContentDetail(contentItem, book, { settings: S.settings }));
     });
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-collection]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openCollection = item.dataset.srCollection; renderTab('collections'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-challenge]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openChallenge = item.dataset.srChallenge; renderTab('challenges'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-series]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openSeries = item.dataset.srSeries; renderTab('series'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-tag]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.activeFilter = { type: 'tag', value: item.dataset.srTag }; renderTab('books'); }));
+    makeCardKeyboardAccessible(item);
   });
 }
 // ═══════════════════════════════════════════════
@@ -1064,6 +1074,8 @@ export function renderBookList(container, books, limit, handlers = {}) {
       if (e.target.closest('.tag-more-btn')) return;
       (handlers.onOpenBook || openBookDetail)(card.dataset.id);
     });
+    // 🆕 P2-18: keyboard-доступность карточки (Enter/Space)
+    makeCardKeyboardAccessible(card);
   });
 
   container.querySelectorAll('.status-btn').forEach(btn => {
@@ -1953,6 +1965,12 @@ async function saveBookForm(selectedTags, selectedFormats) {
     bookData.cover = safeUrl(coverVal);
   }
 
+  // 🆕 P3-2: офлайн-сохранение книги с ISBN → отложенная досинхронизация
+  // метаданных (Background Sync). Маркер ставится ДО записи, чтобы книга
+  // с первой же версии «знала» о pending-синхронизации.
+  const needOfflineSync = !navigator.onLine && validateISBN(bookData.isbn);
+  if (needOfflineSync) bookData.pendingSync = true;
+
   // 🆕 P1-5: подтверждённый commit только после успешной записи.
   // Ошибка IndexedDB → НЕ закрываем форму (введённое сохраняется),
   // НЕ показываем success toast.
@@ -1963,6 +1981,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
     showToast('❌ Не удалось сохранить книгу: ошибка базы данных', 'error');
     return;
   }
+
+  // 🆕 P3-2: реальное наполнение очереди Background Sync + регистрация.
+  // Best-effort: сбой очереди не отменяет уже сохранённую книгу.
+  if (needOfflineSync) await maybeEnqueueOfflineSync(bookData);
   closeOverlay(DOM.formOverlay);
   await refreshData();
   // 🆕 P2-10: confetti и rating prompt — только от реально случившегося
@@ -1975,6 +1997,35 @@ async function saveBookForm(selectedTags, selectedFormats) {
   }
   showToast(S.editingBookId ? '✅ Книга обновлена' : '✅ Книга добавлена', 'success');
   S.editingBookId = null;
+}
+
+/**
+ * 🆕 P3-2: кладёт книгу в очередь отложенной досинхронизации метаданных
+ * (Background Sync, tag 'sync-book-metadata'). Вызывается из saveBookForm
+ * ПОСЛЕ успешной записи книги, только при офлайн-режиме и валидном ISBN.
+ *
+ * Идемпотентность: повторный вызов для уже поставленной в очередь книги
+ * (повторное сохранение формы / редактирование) НЕ дублирует запись.
+ *
+ * Сбой очереди НЕ бросает исключение: книга уже сохранена, теряется только
+ * «досинхронизация» — логируем warning (fail-loud, а не тихое проглатывание).
+ *
+ * @param {{ id: string, isbn: string }} book
+ * @returns {Promise<boolean>} true — книга в очереди (или уже стояла)
+ */
+export async function maybeEnqueueOfflineSync(book) {
+  if (navigator.onLine || !validateISBN(book?.isbn)) return false;
+  try {
+    const queued = await getPendingSync();
+    if (queued.some(x => x.bookId === book.id)) return true;
+    await putPendingSync({ id: `ps_${book.id}`, bookId: book.id, isbn: cleanISBN(book.isbn) });
+    registerPendingSync('sync-book-metadata').catch(err =>
+      console.warn('[Sync] Не удалось зарегистрировать background sync:', err.message));
+    return true;
+  } catch (err) {
+    console.warn('[Sync] Отложенная синхронизация недоступна:', err.message);
+    return false;
+  }
 }
 
 function pickTagColor(i) {
@@ -2672,6 +2723,8 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
       close();
       if (book) onPick(book);
     });
+    // 🆕 P2-18: keyboard-доступность строки выбора книги
+    makeCardKeyboardAccessible(row);
   });
 }
 
@@ -2853,6 +2906,8 @@ function showDayContent(dateStr) {
       closeDay();
       if (item) openContentDetail(item, bk, { settings: S.settings });
     });
+    // 🆕 P2-18: keyboard-доступность пунктов дня календаря
+    makeCardKeyboardAccessible(el);
   });
 }
 
@@ -3168,10 +3223,13 @@ function renderSettingsTab() {
   bind('#set-clear', async () => {
     const ok = await showConfirm('Удалить ВСЕ данные? Это необратимо!', { danger: true, okText: 'Удалить всё' });
     if (ok) {
-      const db = await openDB();
-      ['books','covers','settings','collections','challenges','tags','previews'].forEach(st => {
-        try { db.transaction(st, 'readwrite').objectStore(st).clear(); } catch {}
-      });
+      try {
+        await clearAllData();
+      } catch (err) {
+        console.error('[DB] set-clear error:', err);
+        showToast('❌ Не удалось очистить данные', 'error');
+        return;
+      }
       await refreshData();
       showToast('🗑️ Всё удалено', 'info');
     }
@@ -3191,6 +3249,26 @@ async function dbSafe(op, errorMsg) {
     showToast('❌ ' + errorMsg, 'error');
     return false;
   }
+}
+
+// 🆕 P3-1: «Очистить всё» — вынесено из bind('#set-clear') для тестируемости.
+// Список stores дополнен pending-sync (миграция v6); единая
+// readwrite-транзакция, Promise резолвится только после complete,
+// при abort/error/NotFoundException — reject (success-код не выполняется).
+export async function clearAllData() {
+  const db = await openDB();
+  const candidates = ['books','covers','settings','collections','challenges','tags','previews','pending-sync'];
+  const stores = candidates.filter(st => db.objectStoreNames.contains(st));
+  if (!stores.length) return;
+  const tx = db.transaction(stores, 'readwrite');
+  // P3-1: без try/catch — исчезнувший store обязан привести к reject,
+  // а не к молчаливой «полу-очистке»
+  stores.forEach(st => tx.objectStore(st).clear());
+  await new Promise((resolve, reject) => {
+    tx.addEventListener('complete', () => resolve());
+    tx.addEventListener('abort', () => reject(new Error('abort')));
+    tx.addEventListener('error', () => reject(new Error('error')));
+  });
 }
 
 async function saveAppSettings() {
@@ -3307,17 +3385,56 @@ function fireConfetti() {
 // ═══════════════════════════════════════════════
 //  PWA INSTALL
 // ═══════════════════════════════════════════════
-function setupInstallPrompt() {
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    S.deferredPrompt = e;
-    DOM.installBanner.classList.remove('hidden');
-  });
-  window.addEventListener('appinstalled', () => {
-    DOM.installBanner.classList.add('hidden');
-    S.deferredPrompt = null;
-    showToast('✅ Приложение установлено!', 'success');
-  });
+// 🆕 P3-3: слушатели регистрируются СИНХРОННО при загрузке модуля,
+// а не после await-цепочки init() — иначе beforeinstallprompt (Chrome
+// стреляет, как только criteria выполнены, ещё до конца старта) может
+// быть пропущен, и возможность «Установить» будет потеряна навсегда.
+window.addEventListener('beforeinstallprompt', beforeInstallPromptHandler);
+window.addEventListener('appinstalled', onAppInstalled);
+
+function beforeInstallPromptHandler(e) {
+  e.preventDefault();
+  S.deferredPrompt = e;
+  maybeShowInstallBanner();
+}
+
+function onAppInstalled() {
+  if (DOM.installBanner) DOM.installBanner.classList.add('hidden');
+  S.deferredPrompt = null;
+  // приложение установлено — iOS-инструкция больше не нужна
+  try { localStorage.setItem(IOS_INSTALL_DISMISS_KEY, '1'); } catch { /* ignore */ }
+  showToast('✅ Приложение установлено!', 'success');
+}
+
+// iOS Safari не имеет beforeinstallprompt: ненавязчивая инструкция
+// «Поделиться → На экран Домой» с dismiss persistence (P3-3).
+const IOS_INSTALL_DISMISS_KEY = 'btp_install_ios_dismissed';
+
+export function iosInstallDecision({ isIOS, standalone, dismissed }) {
+  return Boolean(isIOS && !standalone && !dismissed);
+}
+
+export function iosInstallInfo() {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = Boolean(window.matchMedia?.('(display-mode: standalone)').matches)
+    || navigator.standalone === true;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(IOS_INSTALL_DISMISS_KEY) === '1'; } catch { /* ignore */ }
+  return { show: iosInstallDecision({ isIOS, standalone, dismissed }), isIOS, standalone, dismissed };
+}
+
+export function dismissIosInstallBanner() {
+  try { localStorage.setItem(IOS_INSTALL_DISMISS_KEY, '1'); } catch { /* ignore */ }
+  if (DOM.installIosBanner) DOM.installIosBanner.classList.add('hidden');
+}
+
+function maybeShowInstallBanner() {
+  if (!DOM.installBanner) return;
+  if (S.deferredPrompt) { DOM.installBanner.classList.remove('hidden'); return; }
+  if (iosInstallInfo().show && DOM.installIosBanner) {
+    DOM.installIosBanner.classList.remove('hidden');
+  }
 }
 
 // ═══════════════════════════════════════════════

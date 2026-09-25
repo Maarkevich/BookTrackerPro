@@ -98,12 +98,20 @@ function positionPop(pop, anchor) {
 // ═══════════════════════════════════════════════
 let _activePicker = null;
 let _pickerState = null;
+// 🆕 P2-18: гасит focus-переоткрытие, когда closeDatePicker() сам
+// возвращает фокус на input (иначе выбор/закрытие мгновенно
+// ре-открывали бы пикер — Desktop-режим открывается по фокусу).
+let _suppressNextFocus = false;
 
 /**
  * Привязывает кастомный календарь к <input type="date">.
  * Нативный пикер блокируется через readonly, значение остаётся ISO.
  *
- * Доступность: role="dialog", aria-label, Escape для закрытия.
+ * Доступность: role="dialog", aria-label, Escape/
+ * стрелки/Home/End/PageUp/PageDown, roving tabindex, возврат фокуса.
+ *
+ * 🆕 P2-18: keyboard-открытие и фокус-менеджмент. На coarse-указателях
+ * (iOS/Android) сохраняется «гашение» нативного пикера через blur.
  *
  * @param {HTMLInputElement} input
  */
@@ -113,12 +121,38 @@ export function attachDatePicker(input) {
   input.setAttribute('readonly', 'readonly');
   input.classList.add('dp-input');
   input.addEventListener('click', () => openDatePicker(input));
-  // iOS может пытаться открыть нативный пикер при фокусе — гасим
-  input.addEventListener('focus', (e) => e.target.blur());
+
+  const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  if (coarse) {
+    // iOS/Android: нативный пикер открывается при фокусе — гасим
+    input.addEventListener('focus', (e) => e.target.blur());
+  } else {
+    // Desktop: открытие по фокусу (как нативный) и по Enter/Space
+    input.addEventListener('focus', () => {
+      if (_suppressNextFocus) { _suppressNextFocus = false; return; }
+      openDatePicker(input);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDatePicker(input); }
+    });
+  }
+}
+
+/** Прибавляет дни к дате (пересекает границы месяца/года). */
+function addDays(y, m, d, delta) {
+  const dt = new Date(y, m, d + delta);
+  return { y: dt.getFullYear(), m: dt.getMonth(), d: dt.getDate() };
+}
+
+function fmtDate(dt) {
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
 }
 
 function openDatePicker(input) {
-  closeDatePicker();
+  // P2-18: guard — не переоткрывать уже открытый пикер того же input
+  // (на desktop focus → click открывают его дважды подряд).
+  if (_activePicker && _pickerState?.input === input) return;
+  closeDatePicker({ restoreFocus: false });
   closeDropdown();
   const cur = parseISO(input.value);
   const now = new Date();
@@ -127,22 +161,96 @@ function openDatePicker(input) {
     year: cur ? cur.getFullYear() : now.getFullYear(),
     month: cur ? cur.getMonth() : now.getMonth(),
     selected: input.value || null,
+    focusDate: cur || new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+    returnFocus: document.activeElement === input, // 🆕 P2-18
   };
   _activePicker = document.createElement('div');
   _activePicker.className = 'dp-pop';
   _activePicker.setAttribute('role', 'dialog');           // 🆕 v3.8.3
   _activePicker.setAttribute('aria-modal', 'true');        // 🆕 v3.8.3
   _activePicker.setAttribute('aria-label', 'Выбор даты');  // 🆕 v3.8.3
+  // 🆕 P2-18: клавиатура внутри диалога (слушатель живёт на контейнере,
+  // renderPicker() не пересоздаёт его)
+  _activePicker.addEventListener('keydown', onPickerKeydown);
   renderPicker();
   document.body.appendChild(_activePicker);
   positionPop(_activePicker, input);
-  setTimeout(() => document.addEventListener('click', _onPickerOutside, { capture: true }), 0);
+  focusPickerDay();
+  // P2-18: регистрируем «клик вне» только если пикер дожил до таймаута
+  // (иначе отложенная регистрация подтекала после быстрого close →
+  // ложное закрытие следующего пикера)
+  setTimeout(() => {
+    if (_activePicker) document.addEventListener('click', _onPickerOutside, { capture: true });
+  }, 0);
+}
+
+/** Перемещает фокус на день, соответствующий focusDate (или первый день). */
+function focusPickerDay() {
+  const s = _pickerState;
+  const target = s?.focusDate ? fmtDate(s.focusDate) : null;
+  let btn = _activePicker && target
+    ? _activePicker.querySelector(`[data-dp-date="${target}"]`)
+    : null;
+  if (!btn) btn = _activePicker?.querySelector('.dp-grid [data-dp-date]');
+  if (btn && typeof btn.focus === 'function') btn.focus();
+}
+
+/**
+ * 🆕 P2-18: клавиатурная навигация внутри пикера.
+ * Стрелки/Home/End перемещают «фокус-день» (не выбирая его),
+ * PageUp/PageDown — месяц (Shift — год), Enter/Space выбирают через
+ * нативный click кнопки дня, Escape — закрывает без изменения.
+ */
+function onPickerKeydown(e) {
+  const s = _pickerState;
+  if (!s) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeDatePicker();
+    return;
+  }
+  const dayBtn = e.target.closest?.('[data-dp-date]');
+  if (!dayBtn) return;
+  const cur = parseISO(dayBtn.dataset.dpDate);
+  if (!cur) return;
+  let y = cur.getFullYear(), m = cur.getMonth(), d = cur.getDate();
+  const dim = new Date(y, m + 1, 0).getDate();
+  switch (e.key) {
+    case 'ArrowLeft':  { const r = addDays(y, m, d, -1);  y = r.y; m = r.m; d = r.d; } break;
+    case 'ArrowRight': { const r = addDays(y, m, d, 1);   y = r.y; m = r.m; d = r.d; } break;
+    case 'ArrowUp':    { const r = addDays(y, m, d, -7);  y = r.y; m = r.m; d = r.d; } break;
+    case 'ArrowDown':  { const r = addDays(y, m, d, 7);   y = r.y; m = r.m; d = r.d; } break;
+    case 'Home': d = 1; break;
+    case 'End': d = dim; break;
+    case 'PageUp':
+      if (e.shiftKey) y -= 1;
+      else { m -= 1; if (m < 0) { m = 11; y -= 1; } }
+      break;
+    case 'PageDown':
+      if (e.shiftKey) y += 1;
+      else { m += 1; if (m > 11) { m = 0; y += 1; } }
+      break;
+    default: return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const maxD = new Date(y, m + 1, 0).getDate();
+  if (d > maxD) d = maxD;
+  if (d < 1) d = 1;
+  s.focusDate = new Date(y, m, d);
+  const monthChanged = y !== s.year || m !== s.month;
+  s.year = y; s.month = m;
+  renderPicker();
+  focusPickerDay();
 }
 
 function renderPicker() {
   const s = _pickerState;
   const cells = buildCells(s.year, s.month);
   const today = todayISO();
+  // 🆕 P2-18: roving tabindex — только день focusDate в цепочке Tab
+  const focusStr = s.focusDate ? fmtDate(s.focusDate) : '';
   _activePicker.innerHTML = `
     <div class="dp-head">
       <button type="button" class="dp-nav" data-dp-prev aria-label="Предыдущий месяц">${icon('chevronLeft', 16)}</button>
@@ -155,7 +263,8 @@ function renderPicker() {
         if (c.other) return `<div class="dp-cell other">${c.day}</div>`;
         const sel = c.dateStr === s.selected ? ' selected' : '';
         const td = c.dateStr === today ? ' today' : '';
-        return `<button type="button" class="dp-cell${sel}${td}" data-dp-date="${c.dateStr}" aria-label="${c.day} ${MONTHS[s.month]} ${s.year}">${c.day}</button>`;
+        const tab = c.dateStr === focusStr ? '0' : '-1';
+        return `<button type="button" class="dp-cell${sel}${td}" data-dp-date="${c.dateStr}" tabindex="${tab}" aria-label="${c.day} ${MONTHS[s.month]} ${s.year}">${c.day}</button>`;
       }).join('')}
     </div>
     <div class="dp-foot">
@@ -185,14 +294,28 @@ function selectDate(iso) {
   closeDatePicker();
 }
 
-export function closeDatePicker() {
+/**
+ * Закрывает пикер.
+ * @param {object} [opts]
+ *   restoreFocus {boolean} — вернуть фокус на input (по умолчанию true,
+ *   только если пикер был открыт с клавиатуры/фокуса; false для клика вне).
+ */
+export function closeDatePicker(opts = {}) {
+  const s = _pickerState;
+  const restore = opts.restoreFocus !== false && s?.returnFocus;
   if (_activePicker) { _activePicker.remove(); _activePicker = null; }
   _pickerState = null;
   document.removeEventListener('click', _onPickerOutside, { capture: true });
+  if (restore && s.input && document.activeElement !== s.input && s.input.focus) {
+    _suppressNextFocus = true;
+    s.input.focus();
+  }
 }
 
 function _onPickerOutside(e) {
-  if (_activePicker && !_activePicker.contains(e.target) && e.target !== _pickerState?.input) closeDatePicker();
+  if (_activePicker && !_activePicker.contains(e.target) && e.target !== _pickerState?.input) {
+    closeDatePicker({ restoreFocus: false });
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -200,12 +323,17 @@ function _onPickerOutside(e) {
 // ═══════════════════════════════════════════════
 let _activeDropdown = null;
 let _ddState = null;
+let _ddSeq = 0; // 🆕 P2-18: id для aria-activedescendant/aria-controls
 
 /**
  * Заменяет системный <select> стилизованным dropdown.
  * Нативный select скрывается, но остаётся источником значения.
  *
- * Доступность: role="listbox" / role="option" / aria-selected.
+ * Доступность: role="combobox"/"listbox"/"option", aria-selected,
+ * roving tabindex + aria-activedescendant, стрелки/Home/End/Enter/Escape,
+ * возврат фокуса на триггер.
+ *
+ * 🆕 P2-18: полный keyboard pattern управления списком.
  *
  * @param {HTMLSelectElement} select
  * @param {object} opts
@@ -245,6 +373,20 @@ export function attachCustomSelect(select, opts = {}) {
     if (_activeDropdown && _ddState?.select === select) closeDropdown();
     else openDropdown(select);
   });
+
+  // 🆕 P2-18: keyboard — стрелки открывают список с фокусом внутри,
+  // Escape закрывает
+  trigger.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!(_activeDropdown && _ddState?.select === select)) openDropdown(select, { keyboard: true });
+    } else if (e.key === 'Escape' && _activeDropdown && _ddState?.select === select) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDropdown();
+    }
+  });
 }
 
 /** Обновляет текст триггера под текущее значение select. */
@@ -269,19 +411,101 @@ export function refreshCustomSelect(select) {
   if (select && select._csTrigger) updateTrigger(select);
 }
 
-function openDropdown(select) {
+function openDropdown(select, opts = {}) {
   closeDropdown();
-  closeDatePicker();
+  closeDatePicker({ restoreFocus: false });
   _activeDropdown = document.createElement('div');
   _activeDropdown.className = 'cs-dropdown';
   _activeDropdown.setAttribute('role', 'listbox');       // 🆕 v3.8.3
-  _ddState = { select };
+  _activeDropdown.id = select.id || ('cs-dd-s' + (++_ddSeq));
+  _ddState = { select, keyboard: !!opts.keyboard, focusIdx: -1 };
   renderDropdown('');
   document.body.appendChild(_activeDropdown);
   positionPop(_activeDropdown, select._csTrigger);
-  // Обновляем aria-expanded на триггере
+  // Обновляем aria-expanded на триггере + связь с listbox
   select._csTrigger?.setAttribute('aria-expanded', 'true');
+  select._csTrigger?.setAttribute('aria-controls', _activeDropdown.id);
+  // 🆕 P2-18: клавиатура внутри списка (живёт на контейнере,
+  // renderDropdown() его не пересоздаёт)
+  _activeDropdown.addEventListener('keydown', onDropdownKeydown);
+  if (_ddState.keyboard) {
+    const sOpts = select._csOpts || {};
+    if (sOpts.search) {
+      const si = _activeDropdown.querySelector('.cs-search-input');
+      if (si && typeof si.focus === 'function') si.focus();
+    } else {
+      focusOption(initialOptionIndex(select));
+    }
+  }
   setTimeout(() => document.addEventListener('click', _onDdOutside, { capture: true }), 0);
+}
+
+/** 🆕 P2-18: индекс опции для стартового фокуса (текущая выбранная, иначе первая). */
+function initialOptionIndex(select) {
+  const options = _activeDropdown?.querySelectorAll('.cs-option') || [];
+  const selVal = select.options[select.selectedIndex]?.value;
+  for (let i = 0; i < options.length; i++) {
+    if (options[i].dataset.csVal === selVal) return i;
+  }
+  return 0;
+}
+
+/** 🆕 P2-18: roving tabindex + focus + aria-activedescendant на опции. */
+function focusOption(idx) {
+  const options = _activeDropdown?.querySelectorAll('.cs-option') || [];
+  if (options.length === 0) return;
+  if (idx < 0) idx = 0;
+  if (idx >= options.length) idx = options.length - 1;
+  _ddState.focusIdx = idx;
+  options.forEach((x, i) => x.setAttribute('tabindex', i === idx ? '0' : '-1'));
+  _activeDropdown.setAttribute('aria-activedescendant', options[idx].id);
+  if (typeof options[idx].focus === 'function') options[idx].focus();
+}
+
+/** 🆕 P2-18: keyboard-навигация внутри listbox. */
+function onDropdownKeydown(e) {
+  const st = _ddState;
+  if (!st) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeDropdown();
+    return;
+  }
+  // В поле поиска стрелки уводят в список-опций
+  if (e.target.classList?.contains('cs-search-input')) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusOption(initialOptionIndex(st.select));
+    }
+    return;
+  }
+  const options = [...(_activeDropdown?.querySelectorAll('.cs-option') || [])];
+  const idx = options.indexOf(e.target);
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      if (options.length) focusOption((idx + 1) % options.length);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      if (options.length) focusOption((idx - 1 + options.length) % options.length);
+      break;
+    case 'Home':
+      if (options.length) { e.preventDefault(); focusOption(0); }
+      break;
+    case 'End':
+      if (options.length) { e.preventDefault(); focusOption(options.length - 1); }
+      break;
+    case 'Enter':
+    case ' ':
+      if (idx >= 0 && e.target.hasAttribute('data-cs-val')) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectOption(st.select, e.target.dataset.csVal);
+      }
+      break;
+  }
 }
 
 function renderDropdown(filter) {
@@ -294,7 +518,7 @@ function renderDropdown(filter) {
     if (q && !text.toLowerCase().includes(q)) continue;
     const sel = opt.selected ? ' selected' : '';
     const content = opts.renderOption ? opts.renderOption(opt) : esc(text);
-    items += `<div class="cs-option${sel}" data-cs-val="${esc(opt.value)}" role="option" aria-selected="${opt.selected}">` +
+    items += `<div class="cs-option${sel}" id="cs-opt-${++_ddSeq}" data-cs-val="${esc(opt.value)}" role="option" aria-selected="${opt.selected}" tabindex="-1">` +
       `<span class="cs-option-body">${content}</span>` +
       `${opt.selected ? `<span class="cs-check">${icon('check', 14)}</span>` : ''}</div>`;
   }
@@ -336,6 +560,11 @@ export function closeDropdown() {
     _ddState?.select?._csTrigger?.setAttribute('aria-expanded', 'false');
     _activeDropdown.remove();
     _activeDropdown = null;
+  }
+  // 🆕 P2-18: при клавиатурном открытии фокус возвращается на триггер
+  const st = _ddState;
+  if (st?.keyboard && st.select?._csTrigger && document.activeElement !== st.select._csTrigger) {
+    st.select._csTrigger.focus();
   }
   _ddState = null;
   document.removeEventListener('click', _onDdOutside, { capture: true });

@@ -1,7 +1,18 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { applyStatusTransition, changeBookStatus, putBook, getBook, BOOK_STATUSES } from '../db.js';
+
+// изменение: путь dropdown (changeBookStatus) берёт «сегодня» из реальных
+// часов, путь формы — из параметра NOW. Фиксируем системные часы на Date,
+// иначе тест разъезжается на сутки при смене реальной даты.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-24T12:00:00.000Z'));
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 // ─────────────────────────────────────────────────────────────
 // P2-10: единая семантика перехода статуса.

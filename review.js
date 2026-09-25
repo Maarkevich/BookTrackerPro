@@ -25,7 +25,7 @@
 //      — Копирование отзыва для описания видео
 // ─────────────────────────────────────────────
 import { saveReviewForBook, removeReviewFromBook, loadBooks } from './db.js';
-import { esc, safeUrl, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев; 🆕 P2-18: keyboard карточек
 import { captureQuoteByPhoto } from './ocr.js';
 import { icon } from './icons.js';
 import { attachCustomSelect, showConfirm } from './uikit.js'; // 🆕 showConfirm
@@ -105,6 +105,8 @@ export function renderReviewsTab(container, books, callbacks) {
       if (e.target.closest('button')) return;
       callbacks.onOpenBook(card.dataset.bookId);
     });
+    // 🆕 P2-18: keyboard-доступность карточки отзыва
+    makeCardKeyboardAccessible(card);
   });
   container.querySelectorAll('[data-edit-review]').forEach(btn => {
     btn.addEventListener('click', (e) => { e.stopPropagation(); callbacks.onEdit(btn.dataset.editReview); });

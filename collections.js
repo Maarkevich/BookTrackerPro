@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────
 import { loadCollections, putCollection, delCollection,
          addBookToCollection, removeBookFromCollection } from './db.js';
-import { esc, safeUrl, applyCoverFallback, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: из utils
+import { esc, safeUrl, applyCoverFallback, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: из utils; 🆕 P2-18: keyboard карточек
 import { icon } from './icons.js';
 import { showConfirm } from './uikit.js';
 
@@ -206,6 +206,8 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
       if (e.target.closest('[data-col-remove]')) return;
       callbacks.onOpenBook(card.dataset.bookId);
     });
+    // 🆕 P2-18: keyboard-доступность карточки книги в подборке
+    makeCardKeyboardAccessible(card);
   });
 
   container.querySelectorAll('[data-col-remove]').forEach(btn => {

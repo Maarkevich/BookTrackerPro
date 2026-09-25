@@ -35,7 +35,6 @@ const MODULES = [
   'scanner.js',
   'microlink.js',
   'button.js',
-  'version.js',
   'utils.js',
 ];
 

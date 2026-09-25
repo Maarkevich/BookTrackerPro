@@ -14,7 +14,7 @@
 //      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
 import { addContentToBook, updateContentInBook, removeContentFromBook, moveContentItem, loadBooks } from './db.js';
-import { esc, safeUrl, safeLinkUrl, escAttr, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
+import { esc, safeUrl, safeLinkUrl, escAttr, showToast, trackOverlay, untrackOverlay, formatDateRu, makeCardKeyboardAccessible } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
@@ -177,6 +177,8 @@ export function renderContentTab(container, books, settings, callbacks) {
         card.dataset.bookId
       );
     });
+    // 🆕 P2-18: keyboard-доступность карточки контента
+    makeCardKeyboardAccessible(card);
   });
 
   container.querySelectorAll('[data-status-btn]').forEach(btn => {

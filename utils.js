@@ -590,3 +590,47 @@ export function hasOverlays() {
 export function pushSentinel() {
   try { history.pushState({ btpSentinel: true }, ''); } catch (e) {}
 }
+
+/**
+ * Делает кликабельный div (карточку) достижимым с клавиатуры:
+ * tabindex="0", role="button", Enter/Space эмулируют клик по САМОМУ элементу.
+ * Срабатывает только когда фокус стоит на карточке, поэтому вложенные кнопки,
+ * ссылки и инпуты получают собственные клавиши без двойной активации.
+ * Enter срабатывает на keydown, Space — на keydown+keyup (стандартное поведение).
+ *
+ * 🆕 P2-18: единая keyboard-доступность кликабельных карточек.
+ *
+ * @param {HTMLElement} el
+ * @param {object} [opts] — { label } → aria-label
+ */
+export function makeCardKeyboardAccessible(el, opts = {}) {
+  if (!el || el._cardKb) return;
+  el._cardKb = true;
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  if (opts.label) el.setAttribute('aria-label', opts.label);
+
+  el.addEventListener('keydown', (e) => {
+    if (document.activeElement !== el) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      el.click();
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      el._kbSpacePending = true;
+    }
+  });
+  el.addEventListener('keyup', (e) => {
+    if (e.key === ' ' && el._kbSpacePending) {
+      el._kbSpacePending = false;
+      if (document.activeElement === el) {
+        e.preventDefault();
+        e.stopPropagation();
+        el.click();
+      }
+    }
+  });
+  el.addEventListener('blur', () => { el._kbSpacePending = false; });
+}
