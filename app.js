@@ -1,6 +1,20 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.7 | 2026-09-25
+// 🔖 v3.8.8 | 2026-09-25
 // 📝 Точка входа: навигация, рендеринг, события
+//
+//    Новое в 3.8.8:
+//      — AI: прозрачное окно предпросмотра ответа — что применить в
+//        карточку (чекбоксы полей + «сырой» ответ AI), как в Microlink
+//      — AI: добавление книги — принимает ссылки http(s).:
+//        Microlink → AI-обогащение → предпросмотр (фолбэк: web-поиск xKiro)
+//      — AI: обложки — thumbnail поиска попадает в промпт и используется
+//        как фолбэк; при недоступном CORS сохраняется http(s)-ссылка (P1-3)
+//      — Извлечение: максимум полей — серия (название/номер/всего в серии),
+//        цена с валютой, возраст, теги, обложка
+//      — FAB → «AI функции»: AI-рекомендации с выбором контекста
+//        (вся библиотека/статус/жанр/автор/издательство/серия/подборка/тег)
+//        и «AI-отзыв по книге» (выбор книги → краткое мнение → развёрнутый
+//        отзыв с опорой на книгу)
 //
 //    Новое в 3.8.7:
 //      — AI (xKiro): исправлен CORS. Прямой вызов api.xkiro.com из браузера
@@ -80,6 +94,8 @@ import {
 } from './utils.js';
 
 export { esc, showToast, trackOverlay, untrackOverlay, formatPrice, convertToDefault };
+// 🔖 3.8.8: экспорт для тестов (прозрачное AI-превью, заполнение, обложки)
+export { openAiDataPreview, fillFormFromAi, attachAiCover, AI_BOOK_FIELDS_SYSTEM };
 
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ
@@ -155,7 +171,7 @@ const NAV_ICON_SIZES = {
   stats: 20, settings: 18, series: 20, collections: 20,
 };
 
-// 🆕 v3.8.5: FAB-меню создания
+// 🆕 v3.8.5: FAB-меню создания (🔖 3.8.8: + «AI функции»)
 const FAB_ITEMS = [
   { id: 'book',       icon: 'bookClosed', label: 'Книга' },
   { id: 'content',    icon: 'film',       label: 'Контент' },
@@ -163,6 +179,7 @@ const FAB_ITEMS = [
   { id: 'challenge',  icon: 'trophy',     label: 'Челлендж' },
   { id: 'series',     icon: 'layers',     label: 'Серия' },
   { id: 'collection', icon: 'folder',     label: 'Подборка' },
+  { id: 'ai',         icon: 'sparkles',   label: 'AI функции' },
 ];
 
 // ═══════════════════════════════════════════════
@@ -1234,39 +1251,45 @@ function openAiRecommendations() {
   const lib = S.books.filter(b => b.id !== '__no_book__');
   if (lib.length === 0) { showToast('⚠️ Сначала добавьте книги в библиотеку', 'error'); return; }
 
-  // Контекст = текущий фильтр (жанр/тег/подборка/серия/автор/статус) или вся библиотека.
-  let scopeLabel = 'вся библиотека';
-  let pool = lib;
+  // 🔖 3.8.8: выбор контекста подбора — вся библиотека или конкретный срез
+  // (статус/жанр/автор/издательство/серия/подборка/тег).
+  const REC_CTX = [
+    { id: 'all', label: 'Вся библиотека' },
+    { id: 'status', label: 'Статус' },
+    { id: 'genre', label: 'Жанр' },
+    { id: 'author', label: 'Автор' },
+    { id: 'publisher', label: 'Издательство' },
+    { id: 'series', label: 'Серия' },
+    { id: 'collection', label: 'Подборка' },
+    { id: 'tag', label: 'Тег' },
+  ];
+
+  // Пред-выбор из активного фильтра/статуса (сохранение старого поведения).
+  let pre = null;
   if (S.activeFilter) {
     const { type, value } = S.activeFilter;
-    if (type === 'tag') { pool = lib.filter(b => (b.tags || []).includes(value)); scopeLabel = `тег «${value}»`; }
-    else if (type === 'genre') { pool = lib.filter(b => b.genre === value); scopeLabel = `жанр «${value}»`; }
-    else if (type === 'author') { pool = lib.filter(b => b.author === value); scopeLabel = `автор «${value}»`; }
-    else if (type === 'publisher') { pool = lib.filter(b => b.publisher === value); scopeLabel = `издательство «${value}»`; }
-    else if (type === 'series') { pool = lib.filter(b => b.series === value); scopeLabel = `серия «${value}»`; }
-    else if (type === 'collection') {
-      const col = S.collections.find(c => c.id === value);
-      pool = col ? lib.filter(b => col.bookIds.includes(b.id)) : [];
-      scopeLabel = `подборка «${col?.name || value}»`;
-    }
-  } else if (S.bookFilter !== 'all') {
-    pool = lib.filter(b => b.status === S.bookFilter);
-    scopeLabel = `статус «${S.bookFilter}»`;
-  }
-  if (pool.length === 0) { showToast('⚠️ Нет книг по текущему фильтру', 'error'); return; }
-
-  const samples = [...pool].sort(() => Math.random() - 0.5).slice(0, 40);
-  const listText = samples.map(b =>
-    `- «${b.title}» автор: ${b.author || '—'} жанр: ${b.genre || '—'}${(b.tags || []).length ? ' теги: ' + b.tags.join(', ') : ''}${b.review?.rating ? ' оценка: ' + b.review.rating + '/5' : ''}${b.status ? ' статус: ' + b.status : ''}`
-  ).join('\n');
+    if (type === 'tag') pre = { ctx: 'tag', val: value };
+    else if (type === 'genre') pre = { ctx: 'genre', val: value };
+    else if (type === 'author') pre = { ctx: 'author', val: value };
+    else if (type === 'publisher') pre = { ctx: 'publisher', val: value };
+    else if (type === 'series') pre = { ctx: 'series', val: value };
+    else if (type === 'collection') pre = { ctx: 'collection', val: value };
+  } else if (S.bookFilter !== 'all') pre = { ctx: 'status', val: S.bookFilter };
 
   const modal = document.createElement('div');
   modal.className = 'ai-prompt-modal';
   modal.innerHTML = `
     <div class="ai-prompt-panel" style="width:min(94vw,560px);max-height:86vh;overflow:auto">
       <div class="ai-prompt-title">${icon('sparkles', 20)} AI-рекомендации</div>
-      <div class="ai-prompt-text">Подбираю книги на основе: <b>${esc(scopeLabel)}</b> — в выборке ${pool.length} кн. Книги, которых нет в вашей библиотеке.</div>
-      <input type="text" id="ai-rec-extra" class="ai-prompt-input" placeholder="Уточнение: «похоже на Ремарка», «лёгкие романы»... (необязательно)"/>
+      <div class="ai-prompt-text">Подбор книг, которых нет в вашей библиотеке, на основе выбранного контекста.</div>
+      <div class="flex gap-8 mt-8">
+        <select id="ai-rec-ctx" class="ai-prompt-input" style="flex:1;min-width:0" aria-label="Контекст подбора">
+          ${REC_CTX.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
+        </select>
+        <select id="ai-rec-val" class="ai-prompt-input" style="flex:1.4;min-width:0" hidden aria-label="Значение контекста"></select>
+      </div>
+      <div class="text-small text-muted" id="ai-rec-scope" style="margin-top:8px"></div>
+      <input type="text" id="ai-rec-extra" class="ai-prompt-input" style="margin-top:10px" placeholder="Уточнение: «похоже на Ремарка», «лёгкие романы»... (необязательно)"/>
       <div class="btn-group" style="margin-top:12px">
         <button id="ai-rec-go" class="btn-primary">Подобрать</button>
         <button id="ai-rec-close" class="btn-secondary">Закрыть</button>
@@ -1276,15 +1299,92 @@ function openAiRecommendations() {
   `;
   document.body.appendChild(modal);
 
+  const ctxSel = modal.querySelector('#ai-rec-ctx');
+  const valSel = modal.querySelector('#ai-rec-val');
+  const scopeEl = modal.querySelector('#ai-rec-scope');
+
+  function ctxValues(ctxId) {
+    const uniq = (arr) => [...new Set(arr.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+    switch (ctxId) {
+      case 'status': return Object.entries(BOOK_STATUSES).map(([v, s]) => ({ v, l: s.label }));
+      case 'genre': return uniq(lib.map(b => b.genre)).map(v => ({ v, l: v }));
+      case 'author': return uniq(lib.map(b => b.author)).map(v => ({ v, l: v }));
+      case 'publisher': return uniq(lib.map(b => b.publisher)).map(v => ({ v, l: v }));
+      case 'series': return uniq(lib.map(b => b.series)).map(v => ({ v, l: v }));
+      case 'collection': return S.collections.map(c => ({ v: c.id, l: c.name }));
+      case 'tag': return uniq(lib.flatMap(b => b.tags || [])).map(v => ({ v, l: v }));
+      default: return [];
+    }
+  }
+
+  function countPool(ctxId, val) {
+    if (ctxId === 'all') return lib.length;
+    if (!val) return 0;
+    switch (ctxId) {
+      case 'status': return lib.filter(b => b.status === val).length;
+      case 'genre': return lib.filter(b => b.genre === val).length;
+      case 'author': return lib.filter(b => b.author === val).length;
+      case 'publisher': return lib.filter(b => b.publisher === val).length;
+      case 'series': return lib.filter(b => b.series === val).length;
+      case 'collection': { const col = S.collections.find(c => c.id === val); return col ? col.bookIds.filter(id => lib.some(b => b.id === id)).length : 0; }
+      case 'tag': return lib.filter(b => (b.tags || []).includes(val)).length;
+      default: return 0;
+    }
+  }
+
+  function refreshScope() {
+    const ctxId = ctxSel.value;
+    const list = ctxValues(ctxId);
+    valSel.innerHTML = list.map(o => `<option value="${esc(o.v)}">${esc(o.l)}</option>`).join('');
+    valSel.hidden = ctxId === 'all';
+    if (!valSel.hidden && !valSel.value) valSel.selectedIndex = 0;
+    const val = valSel.hidden ? '' : valSel.value;
+    const ctxLbl = REC_CTX.find(c => c.id === ctxId)?.label || '';
+    scopeEl.textContent = (ctxId !== 'all' && val)
+      ? `Контекст: ${ctxLbl} «${val}» — в выборке ${countPool(ctxId, val)} кн.`
+      : (ctxId === 'all' ? `Контекст: вся библиотека — в выборке ${lib.length} кн.` : '');
+  }
+
+  ctxSel.addEventListener('change', refreshScope);
+  refreshScope();
+  if (pre) {
+    ctxSel.value = pre.ctx;
+    refreshScope();
+    if (!valSel.hidden && pre.val) valSel.value = pre.val;
+    refreshScope();
+  }
+
   modal.querySelector('#ai-rec-close').addEventListener('click', () => modal.remove());
   modal.querySelector('#ai-rec-extra').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   modal.querySelector('#ai-rec-go').addEventListener('click', go);
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-  setTimeout(() => modal.querySelector('#ai-rec-extra')?.focus(), 50);
+  setTimeout(() => modal.querySelector('#ai-rec-ctx')?.focus(), 50);
 
   async function go() {
     const resultsEl = modal.querySelector('#ai-rec-results');
     const extra = modal.querySelector('#ai-rec-extra').value.trim();
+    const ctxId = ctxSel.value;
+    const val = valSel.hidden ? '' : valSel.value;
+    if (ctxId !== 'all' && !val) { showToast('⚠️ Выберите значение контекста', 'error'); return; }
+
+    let scopeLabel = 'вся библиотека';
+    let pool = lib;
+    switch (ctxId) {
+      case 'status': pool = lib.filter(b => b.status === val); scopeLabel = `статус «${BOOK_STATUSES[val]?.label || val}»`; break;
+      case 'genre': pool = lib.filter(b => b.genre === val); scopeLabel = `жанр «${val}»`; break;
+      case 'author': pool = lib.filter(b => b.author === val); scopeLabel = `автор «${val}»`; break;
+      case 'publisher': pool = lib.filter(b => b.publisher === val); scopeLabel = `издательство «${val}»`; break;
+      case 'series': pool = lib.filter(b => b.series === val); scopeLabel = `серия «${val}»`; break;
+      case 'collection': { const col = S.collections.find(c => c.id === val); pool = col ? lib.filter(b => col.bookIds.includes(b.id)) : []; scopeLabel = `подборка «${col?.name || val}»`; break; }
+      case 'tag': pool = lib.filter(b => (b.tags || []).includes(val)); scopeLabel = `тег «${val}»`; break;
+    }
+    if (pool.length === 0) { showToast('⚠️ Нет книг по этому контексту', 'error'); return; }
+
+    const samples = [...pool].sort(() => Math.random() - 0.5).slice(0, 40);
+    const listText = samples.map(b =>
+      `- «${b.title}» автор: ${b.author || '—'} жанр: ${b.genre || '—'}${(b.tags || []).length ? ' теги: ' + b.tags.join(', ') : ''}${b.review?.rating ? ' оценка: ' + b.review.rating + '/5' : ''}${b.status ? ' статус: ' + b.status : ''}`
+    ).join('\n');
+
     resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Подбираю книги...</div>';
     try {
       const system = 'Ты — рекомендатель книг. По книгам пользователя предложи 5 книг, которых НЕТ в его библиотеке. Верни ТОЛЬКО JSON без пояснений и markdown по схеме: {"recommendations":[{"title":"","author":"","genre":"","why":""}]}.' + (extra ? ' Учти пожелание: ' + extra : '');
@@ -1591,11 +1691,11 @@ function openBookForm(book = null) {
     <div class="form-group">
       <label>${icon('sparkles', 13)} ✨ AI-поиск (xKiro)</label>
       <div class="flex gap-8">
-        <input type="text" id="bf-ai-query" placeholder="Любой запрос: «Стивен Кинг 1980-х» или ISBN"/>
+        <input type="text" id="bf-ai-query" placeholder="Запрос, ISBN или ссылка http(s):// на книгу"/>
         <button id="bf-ai-search" class="btn-secondary" style="width:auto;flex-shrink:0">${icon('sparkles', 14)} Искать</button>
       </div>
       <div id="bf-ai-results" class="web-search-results"></div>
-      <div class="form-hint">Найдёт в интернете и предложит заполнить карточку целиком: авторы, жанр, описание, серия, цена.</div>
+      <div class="form-hint">Найдёт в интернете, покажет найденные поля и даст выбрать, что применить: название, автор, жанр, серия, цена, обложка и др.</div>
     </div>
     ` : `
     <div class="form-group">
@@ -2356,6 +2456,12 @@ async function handleAiBookSearch(fb) {
   if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
   if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
 
+  // 🔖 3.8.8: ссылка http(s): обрабатывается через Microlink + AI-обогащение
+  if (/^https?:\/\//i.test(query) || /^www\./i.test(query)) {
+    await handleAiBookLink(fb, /^https?:\/\//i.test(query) ? query : 'https://' + query);
+    return;
+  }
+
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
   try {
     const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 5, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
@@ -2388,61 +2494,212 @@ async function handleAiBookSearch(fb) {
   }
 }
 
+/**
+ * 🔖 3.8.8: обработка ссылки на страницу книги в AI-поиске.
+ * Microlink извлекает поля со страницы → AI обогащает (серия, возраст,
+ * цена, теги...) → прозрачный предпросмотр. Если Microlink не справился —
+ * фолбэк на xKiro web-поиск по адресу.
+ */
+async function handleAiBookLink(fb, url) {
+  const resultsEl = fb.querySelector('#bf-ai-results');
+  resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Обрабатываю ссылку (Microlink + AI)...</div>';
+  try {
+    const mic = await extractBookPreview(url);
+    let pseudo = null;
+    if (mic?.merged && (mic.merged.title || mic.merged.author || mic.merged.isbn)) {
+      pseudo = {
+        title: mic.merged.title || url,
+        url,
+        snippet: mic.merged.description || mic.merged.genre || mic.merged.author || '',
+        source: mic.source || 'Microlink',
+        publicationDate: mic.merged.publishedDate || '',
+        thumbnail: mic.merged.cover || '',
+      };
+    }
+    if (!pseudo) {
+      // Фолбэк: xKiro web-поиск по адресу страницы
+      const res = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query: url, maxResults: 3, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+      if (res.length === 0) throw new AiApiError('По ссылке ничего не найдено');
+      pseudo = res[0];
+    }
+    const data = await aiExtractBookFields(url, pseudo);
+    if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
+    const applied = await openAiDataPreview(fb, data, { fallbackCover: pseudo.thumbnail });
+    resultsEl.innerHTML = applied
+      ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
+      : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
+  } catch (e) {
+    resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка при обработке ссылки')}</div>`;
+  }
+}
+
 async function fillAiFormFromSearch(fb, result, query) {
   const resultsEl = fb.querySelector('#bf-ai-results');
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Извлекаю данные книги...</div>';
   try {
-    const system = 'Ты — помощник книжного каталога. По данным поиска о книге верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"priceAmount":0,"coverUrl":""}. Если данных нет — пустая строка или 0.';
-    const user = `Запрос пользователя: ${query}\n\nДанные веб-поиска:\nНазвание: ${result.title}\nURL: ${result.url}\nОписание: ${result.snippet}\nИсточник: ${result.source}${result.publicationDate ? '\nДата: ' + result.publicationDate : ''}`;
-    const content = await chatXkiro({
-      apiKey: S.settings.xkiroApiKey,
-      model: S.settings.xkiroModel,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0.2,
-      json: true,
-      baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
-    });
-    const data = extractJson(content);
+    const data = await aiExtractBookFields(query, result);
     if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
-    fillFormFromAi(fb, data);
-    resultsEl.innerHTML = '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>';
-    showToast('✨ AI заполнил карточку', 'success');
+    // 🔖 3.8.8: прозрачность — показываем, что AI нашёл, и что применить
+    const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail });
+    resultsEl.innerHTML = applied
+      ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
+      : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
   } catch (e) {
     resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка')}</div>`;
   }
 }
 
-function fillFormFromAi(fb, d) {
+/**
+ * Заполняет форму книги полями из ответа AI.
+ * @param {object} opts {chosen:Object|null, cover:string}
+ *   chosen — id полей (title/author/isbn/...) для применения (null = все);
+ *   cover — готовый URL обложки (fallback из результата поиска).
+ * 🔖 3.8.8: прозрачное применение выбранных в предпросмотре полей.
+ */
+function fillFormFromAi(fb, d, opts = {}) {
+  const chosen = opts.chosen || null;
+  const want = (id) => !chosen || chosen[id];
   const set = (id, val) => { const el = fb.querySelector(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
-  set('#bf-title', d.title);
-  set('#bf-author', d.author);
-  set('#bf-isbn', d.isbn);
-  set('#bf-genre', d.genre);
-  set('#bf-publisher', d.publisher);
-  set('#bf-year', d.publishedDate);
-  set('#bf-pages', d.pageCount || '');
-  set('#bf-age', d.ageRating);
-  set('#bf-desc', d.description);
-  set('#bf-series', d.series);
-  set('#bf-series-num', d.seriesNumber || '');
-  if (Number(d.priceAmount) > 0) { set('#bf-price', Number(d.priceAmount)); set('#bf-currency', 'RUB'); }
-  if (d.coverUrl) set('#bf-cover', d.coverUrl);
-  const img = fb.querySelector('#bf-cover-preview-img');
-  const box = fb.querySelector('#bf-cover-preview');
-  if (img && d.coverUrl) { img.src = d.coverUrl; box?.classList.remove('hidden'); }
-  else if (box) box.classList.add('hidden');
+  if (want('title')) set('#bf-title', d.title);
+  if (want('author')) set('#bf-author', d.author);
+  if (want('isbn')) set('#bf-isbn', d.isbn);
+  if (want('genre')) set('#bf-genre', d.genre);
+  if (want('publisher')) set('#bf-publisher', d.publisher);
+  if (want('publishedDate')) set('#bf-year', d.publishedDate);
+  if (want('pageCount')) set('#bf-pages', d.pageCount || '');
+  if (want('ageRating')) set('#bf-age', d.ageRating);
+  if (want('description')) set('#bf-desc', d.description);
+  if (want('series')) {
+    set('#bf-series', d.series);
+    set('#bf-series-num', d.seriesNumber || '');
+    set('#bf-series-total', d.seriesTotal || '');
+  }
+  if (want('price') && Number(d.priceAmount) > 0) {
+    set('#bf-price', Number(d.priceAmount));
+    if (d.priceCurrency) set('#bf-currency', d.priceCurrency);
+  }
+  const coverSrc = opts.cover !== undefined ? opts.cover : d.coverUrl;
+  if (want('cover')) {
+    if (coverSrc) set('#bf-cover', coverSrc);
+    const img = fb.querySelector('#bf-cover-preview-img');
+    const box = fb.querySelector('#bf-cover-preview');
+    if (img && coverSrc) { img.src = coverSrc; box?.classList.remove('hidden'); }
+    else if (box) box.classList.add('hidden');
+  }
+}
+
+/**
+ * 🔖 3.8.8: Прозрачное окно ответа AI (аналог Microlink-превью).
+ * Пользователь видит ВСЕ извлечённые AI поля, чекбоксами выбирает, что
+ * применить в форму книги, и может посмотреть «сырой» ответ модели.
+ * @param {HTMLElement} fb — корень формы книги (querySelector по id полей).
+ * @param {object} data — извлечённый AI объект.
+ * @param {object} opts {fallbackCover:string} — обложка из результата поиска.
+ * @returns {Promise<boolean>} true — применено, false — закрыто без применения.
+ */
+function openAiDataPreview(fb, data, opts = {}) {
+  return new Promise((resolve) => {
+    const fallbackCover = opts.fallbackCover || '';
+    const cover = data.coverUrl || fallbackCover || '';
+    const FIELDS = [
+      { id: 'title', label: 'Название', value: data.title },
+      { id: 'author', label: 'Автор', value: data.author },
+      { id: 'isbn', label: 'ISBN', value: data.isbn },
+      { id: 'genre', label: 'Жанр', value: data.genre },
+      { id: 'publisher', label: 'Издательство', value: data.publisher },
+      { id: 'publishedDate', label: 'Год', value: data.publishedDate },
+      { id: 'pageCount', label: 'Страницы', value: data.pageCount ? String(data.pageCount) : '' },
+      { id: 'ageRating', label: 'Возраст', value: data.ageRating },
+      { id: 'series', label: 'Серия', value: data.series ? `${data.series}${data.seriesNumber ? ' · №' + data.seriesNumber : ''}${data.seriesTotal ? ' из ' + data.seriesTotal : ''}` : '' },
+      { id: 'price', label: 'Цена', value: Number(data.priceAmount) > 0 ? `${data.priceAmount} ${data.priceCurrency || 'RUB'}` : '' },
+      { id: 'description', label: 'Описание', value: data.description },
+    ].filter(f => f.value !== undefined && f.value !== null && f.value !== '');
+    const hasCover = Boolean(cover) && /^https?:\/\//i.test(cover);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    overlay.innerHTML = `
+      <div class="overlay-panel" style="max-height:88dvh;width:min(94vw,620px)">
+        <div class="overlay-header">
+          <h2>${icon('sparkles', 16)} Ответ AI — что применить</h2>
+          <button class="icon-btn ai-prev-close">${icon('close', 16)}</button>
+        </div>
+        <div class="overlay-body">
+          <div class="text-small text-muted mb-16">
+            Найдено полей: <strong>${FIELDS.length + (hasCover ? 1 : 0)}</strong>.
+            Отметьте, что добавить в карточку, и нажмите «Применить выбранное».
+          </div>
+          <div id="ai-prev-fields">
+            ${FIELDS.map(f => `
+              <div class="ml-field">
+                <label class="ai-prev-row" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                  <input type="checkbox" class="ai-prev-check" checked data-prev-id="${f.id}" style="margin-top:3px"/>
+                  <span style="flex:1">
+                    <span class="text-small text-muted" style="display:block">${esc(f.label)}</span>
+                    <span class="text-small" style="color:var(--text-color)">${esc(f.value)}</span>
+                  </span>
+                </label>
+              </div>
+            `).join('')}
+            ${hasCover ? `
+              <div class="ml-field">
+                <label class="ai-prev-row" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+                  <input type="checkbox" class="ai-prev-check" checked data-prev-id="cover" style="margin-top:3px"/>
+                  <span style="flex:1">
+                    <span class="text-small text-muted" style="display:block">Обложка</span>
+                    <img src="${esc(safeUrl(cover))}" alt="" referrerpolicy="no-referrer" loading="lazy" style="max-width:96px;max-height:128px;border-radius:6px;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>
+                  </span>
+                </label>
+              </div>` : ''}
+          </div>
+          <details class="mt-16">
+            <summary class="text-small text-muted" style="cursor:pointer">Показать «сырой» ответ AI</summary>
+            <pre style="max-height:180px;overflow:auto;background:var(--bg-input,#111);padding:10px;border-radius:8px;font-size:.72rem;white-space:pre-wrap;word-break:break-word;margin-top:8px">${esc(JSON.stringify(data, null, 2))}</pre>
+          </details>
+          <div class="btn-group mt-16">
+            <button id="ai-prev-apply" class="btn-primary">${icon('check', 15)} Применить выбранное</button>
+            <button id="ai-prev-cancel" class="btn-secondary">Отмена</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    trackOverlay(overlay, { onClose: () => done(false) });
+
+    const done = (ok) => {
+      overlay.remove();
+      untrackOverlay(overlay);
+      resolve(ok);
+    };
+    overlay.querySelector('.ai-prev-close').addEventListener('click', () => done(false));
+    overlay.querySelector('#ai-prev-cancel').addEventListener('click', () => done(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+
+    overlay.querySelector('#ai-prev-apply').addEventListener('click', () => {
+      const chosen = {};
+      overlay.querySelectorAll('.ai-prev-check').forEach(cb => {
+        if (cb.checked) chosen[cb.dataset.prevId] = true;
+      });
+      fillFormFromAi(fb, data, { chosen, cover: cover || undefined });
+      done(true);
+      showToast('✨ AI: выбранные поля применены', 'success');
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════
 //  🔖 3.8.6: ЗАПОЛНЕНИЕ КАРТОЧКИ ЧЕРЕЗ AI (xKiro)
 // ═══════════════════════════════════════════════
 
-/** Промпт для извлечения полей книги (общий для формы и карточки). */
-const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога. По данным поиска о книге верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"priceAmount":0,"coverUrl":""}. Если данных нет — пустая строка или 0.';
+/** Промпт для извлечения полей книги (общий для формы и карточки).
+ *  🔖 3.8.8: максимум информации — серия (название/номер/всего), цена с
+ *  валютой, возраст, теги, обложка. */
+const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога. По данным поиска о книге вытащи МАКСИМУМ информации и верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"seriesTotal":0,"priceAmount":0,"priceCurrency":"","coverUrl":"","tags":[]}. title — название; author — автор(ы); isbn — ISBN-13/ISBN-10; genre — жанр; publisher — издательство; publishedDate — год выпуска или дата; pageCount — количество страниц; ageRating — возрастное ограничение (напр. «16+»); description — аннотация; series — название серии, ЕСЛИ книга входит в серию (иначе пустая строка); seriesNumber — номер книги в серии; seriesTotal — сколько всего книг в серии (если известно); priceAmount — цена числом; priceCurrency — валюта (RUB, USD...); coverUrl — прямая ссылка на обложку из данных поиска; tags — до 5 тегов. Если данных нет — пустая строка или 0. Используй ТОЛЬКО факты из данных поиска, ничего не выдумывай.';
 
 /** Вызывает chatXkiro и надёжно разбирает JSON-ответ модели. */
 async function aiExtractBookFields(query, searchResult, extraHints = '') {
-  const user = `Запрос: ${query}\n\nДанные веб-поиска:\nНазвание: ${searchResult.title}\nURL: ${searchResult.url}\nОписание: ${searchResult.snippet}\nИсточник: ${searchResult.source}${searchResult.publicationDate ? '\nДата: ' + searchResult.publicationDate : ''}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
+  const thumb = searchResult?.thumbnail ? '\nURL обложки: ' + searchResult.thumbnail : '';
+  const user = `Запрос: ${query}\n\nДанные веб-поиска:\nНазвание: ${searchResult.title}\nURL: ${searchResult.url}\nОписание: ${searchResult.snippet}\nИсточник: ${searchResult.source}${searchResult.publicationDate ? '\nДата: ' + searchResult.publicationDate : ''}${thumb}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
   const content = await chatXkiro({
     apiKey: S.settings.xkiroApiKey,
     model: S.settings.xkiroModel,
@@ -2474,17 +2731,25 @@ function applyAiFieldsToBook(book, d, searchResult) {
   define('series', d.series, (v) => v);
   const sn = Number(d.seriesNumber);
   if (Number.isFinite(sn) && sn > 0) book.seriesNumber = sn;
+  // 🔖 3.8.8: сколько всего книг в серии (если модель вернула)
+  const st = Number(d.seriesTotal);
+  if (Number.isFinite(st) && st > 0) book.seriesTotal = st;
   const amount = Number(d.priceAmount);
   if (Number.isFinite(amount) && amount > 0) {
-    book.price = { amount, currency: 'RUB' };
+    book.price = { amount, currency: d.priceCurrency || 'RUB' };
   }
   return book;
 }
 
-/** Скачивает обложку в covers-стор; устанавливает сессионный blob: URL. */
+/** Скачивает обложку в covers-стор; устанавливает сессионный blob: URL.
+ *  🔖 3.8.8: сразу кладём http(s)-фолбэк (паттерн P1-3) — обложка
+ *  показывается и когда CDN блокирует CORS-скачивание (403/блокировка
+ *  hotlink), т.к. <img> с referrerpolicy="no-referrer" грузит внешний URL. */
 async function attachAiCover(book, url) {
   const src = url || book.cover;
   if (!src || !/^https?:\/\//i.test(src)) return;
+  book.cover = src;
+  book.coverUrl = src;
   try {
     const ok = await saveCoverFromUrl(book.id, src);
     if (ok) {
@@ -2493,10 +2758,9 @@ async function attachAiCover(book, url) {
         const u = URL.createObjectURL(blob);
         cacheCoverUrl(book.id, u);
         book.coverUrl = u;
-        book.cover = src; // http(s)-фолбэк в бэкапе (паттерн P1-3)
       }
     }
-  } catch { /* обложка не критична для заполнения полей */ }
+  } catch { /* remote-фолбэк остаётся */ }
 }
 
 /** Простой ввод-диалог для пустой карточки (без ключевого имени книги). */
@@ -3048,7 +3312,45 @@ function fabAction(id) {
       showToast('✅ Подборка создана', 'success');
       return true;
     }); break;
+    // 🔖 3.8.8: FAB → AI-функции (рекомендации с контекстом / AI-отзыв)
+    case 'ai': openAiFunctionsMenu(); break;
   }
+}
+
+/** 🔖 3.8.8: подменю «AI функции» из FAB. */
+function openAiFunctionsMenu() {
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="overlay-panel" style="max-height:86dvh;width:min(94vw,520px)">
+      <div class="overlay-header">
+        <h2>${icon('sparkles', 16)} AI функции</h2>
+        <button class="icon-btn ai-fn-close">${icon('close', 16)}</button>
+      </div>
+      <div class="overlay-body" style="text-align:left">
+        <button class="fab-menu-item" id="ai-fn-recs" style="width:100%;justify-content:flex-start;font-size:.95rem">
+          ${icon('sparkles', 16)} AI-рекомендации
+        </button>
+        <div class="form-hint mt-8" style="margin-bottom:16px">Подбор книг по вашей библиотеке: серии, жанры, авторы, статус, подборки, теги...</div>
+        <button class="fab-menu-item" id="ai-fn-review" style="width:100%;justify-content:flex-start;font-size:.95rem">
+          ${icon('pen', 16)} AI-отзыв по книге
+        </button>
+        <div class="form-hint mt-8">Выберите книгу → напишите краткое мнение → AI развернёт его в яркий отзыв с опорой на книгу.</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
+  const close = () => { overlay.remove(); untrackOverlay(overlay); };
+  overlay.querySelector('.ai-fn-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#ai-fn-recs').addEventListener('click', () => { close(); openAiRecommendations(); });
+  overlay.querySelector('#ai-fn-review').addEventListener('click', () => {
+    close();
+    openBookPicker(b => openAiReviewWriter(b), 'Выберите книгу для AI-отзыва');
+  });
 }
 
 // 🆕 v3.8.5: выбор книги (для отзыва / серии)
@@ -3105,6 +3407,109 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
     // 🆕 P2-18: keyboard-доступность строки выбора книги
     makeCardKeyboardAccessible(row);
   });
+}
+
+/**
+ * 🔖 3.8.8: AI-отзыв по книге. Пользователь выбирает книгу и пишет краткое
+ * мнение — AI разворачивает его в яркий развёрнутый отзыв с опорой на
+ * конкретную книгу (автор, жанр, сюжет, серия). Результат можно сохранить
+ * в отзыв книги (форма отзыва откроется с готовым текстом) или скопировать.
+ */
+function openAiReviewWriter(book) {
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
+  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!book) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="overlay-panel" style="max-height:88dvh;width:min(94vw,620px)">
+      <div class="overlay-header">
+        <h2>${icon('sparkles', 16)} AI-отзыв: ${esc(book.title)}</h2>
+        <button class="icon-btn ai-rw-close">${icon('close', 16)}</button>
+      </div>
+      <div class="overlay-body" style="text-align:left">
+        <div class="text-small text-muted mb-16">
+          ${esc([book.author, book.genre, book.series && 'серия «' + book.series + '»', book.seriesNumber && 'кн. №' + book.seriesNumber, book.publishedDate, book.pageCount && book.pageCount + ' стр.'].filter(Boolean).join(' · '))}
+        </div>
+        <div class="form-group">
+          <label>${icon('pen', 13)} Ваше краткое мнение</label>
+          <textarea id="ai-rw-brief" rows="3" placeholder="Напр.: «Эта книга меня зацепила, но вторая половина провисает»">${esc(book.review?.text || '')}</textarea>
+          <div class="form-hint">AI развернёт ваше мнение в яркий отзыв с опорой на книгу: автор, жанр, сюжет, серия. Сохранить → откроется форма отзыва с готовым текстом.</div>
+        </div>
+        <button id="ai-rw-go" class="btn-primary">${icon('sparkles', 14)} Написать отзыв</button>
+        <div id="ai-rw-out" style="margin-top:14px"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
+  const close = () => { overlay.remove(); untrackOverlay(overlay); };
+  overlay.querySelector('.ai-rw-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const outEl = overlay.querySelector('#ai-rw-out');
+  const briefEl = overlay.querySelector('#ai-rw-brief');
+
+  async function generate() {
+    const brief = briefEl.value.trim() || 'напиши развёрнутый отзыв об этой книге';
+    outEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Пишу отзыв...</div>';
+    try {
+      const context = [
+        `Книга: «${book.title}»${book.author ? ' — ' + book.author : ''}`,
+        book.genre ? `Жанр: ${book.genre}` : '',
+        book.series ? `Серия: «${book.series}»${book.seriesNumber ? ' (кн. №' + book.seriesNumber + ')' : ''}` : '',
+        book.publishedDate ? `Год: ${book.publishedDate}` : '',
+        book.pageCount ? `Страниц: ${book.pageCount}` : '',
+        book.description ? `Аннотация: ${book.description.slice(0, 700)}` : '',
+        (book.tags || []).length ? `Теги: ${book.tags.join(', ')}` : '',
+      ].filter(Boolean).join('\n');
+      const system = 'Ты — профессиональный книжный критик и редактор. Пользователь дал краткое мнение о книге. На основе КОНКРЕТНОЙ книги (автор, жанр, сюжет, темы, особенности) напиши развёрнутый, яркий, живой отзыв: погрузи читателя в атмосферу, отметь сильные стороны, уместно упомяни сюжет БЕЗ спойлеров развязки. Сохрани интонацию и оценку пользователя. Объём — 150–300 слов. Верни ТОЛЬКО текст отзыва, без заголовков и пояснений.';
+      const content = await chatXkiro({
+        apiKey: S.settings.xkiroApiKey,
+        model: S.settings.xkiroModel,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: `Краткое мнение пользователя: ${brief}\n\nДанные о книге:\n${context}` },
+        ],
+        temperature: 0.7,
+        baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
+      });
+      const clean = (content || '').trim().replace(/^["'“«]|["'”»]$/g, '');
+      if (!clean) throw new AiApiError('AI вернул пустой отзыв');
+      outEl.innerHTML = `
+        <div class="ml-field">
+          <div class="text-small text-muted mb-8">Отзыв готов — сохраните или скопируйте:</div>
+          <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.55">${esc(clean)}</div>
+        </div>
+        <div class="btn-group mt-16" style="flex-wrap:wrap">
+          <button id="ai-rw-save" class="btn-primary" style="width:auto">${icon('check', 14)} Сохранить в отзыв книги</button>
+          <button id="ai-rw-copy" class="btn-secondary" style="width:auto">${icon('quote', 13)} Скопировать</button>
+          <button id="ai-rw-retry" class="btn-secondary" style="width:auto">${icon('refresh', 13)} Перегенерировать</button>
+        </div>
+      `;
+      outEl.querySelector('#ai-rw-save').addEventListener('click', async () => {
+        try {
+          const updated = { ...book, review: { ...(book.review || {}), text: clean, updatedAt: new Date().toISOString() } };
+          await putBook(updated);
+          await refreshData();
+          close();
+          openReviewForm(book.id);
+          showToast('✅ Отзыв сохранён — проверьте и отредактируйте', 'success');
+        } catch { showToast('❌ Не удалось сохранить отзыв: база данных', 'error'); }
+      });
+      outEl.querySelector('#ai-rw-copy').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(clean); showToast('📋 Отзыв скопирован', 'success'); }
+        catch { showToast('❌ Не удалось скопировать', 'error'); }
+      });
+      outEl.querySelector('#ai-rw-retry').addEventListener('click', generate);
+    } catch (e) {
+      outEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка при обращении к AI')}</div>`;
+    }
+  }
+  overlay.querySelector('#ai-rw-go').addEventListener('click', generate);
+  briefEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) generate(); });
+  setTimeout(() => briefEl.focus(), 50);
 }
 
 // ═══════════════════════════════════════════════
@@ -3426,7 +3831,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.7 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.8.8 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 

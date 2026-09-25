@@ -1,6 +1,6 @@
 {
   "name": "booktrackerpro",
-  "version": "3.8.7",
+  "version": "3.8.8",
   "private": true,
   "description": "BookTrackerPro — offline-first PWA для управления личной библиотекой",
   "scripts": {
