@@ -1,31 +1,29 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.5 | 2026-08-17
+// 🔖 v3.8.6 | 2026-09-25
 // 📝 Точка входа: навигация, рендеринг, события
 //
-//    Новое в 3.8.5:
-//      — Контент: клик по контенту (книга/контент-план/календарь/поиск)
-//        открывает READ-ONLY карточку openContentDetail, не редактор
-//      — FAB «+» → меню: книга / контент / отзыв / челлендж / серия / подборка
-//      — Убрана кнопка «+ Новая подборка» из drawer
-//      — «Контент-план» переименован в «Контент»
-//      — Настройки: площадка через attachCustomSelect с brand-иконками
-//      — Форма книги: attachDatePicker для даты получения PR
-//      — Доп.оценки: SVG (pepper/droplet/mystery/facePalm),
-//        имена «Горячесть/Слезливость/Интрига/Жуткость», выбор иконками
-//      — Импорт = синхронизация (добавляет отсутствующее, дубли.skip)
+//    Новое в 3.8.6:
+//      — Офлайн: добавление книги при отсутствии сети ставится
+//        в очередь фоновой синхронизации (maybeEnqueueOfflineSync)
+//      — «Удалить всё» (clearAllData) очищает и store pending-sync
+//      — Установка: синхронные install-слушатели на уровне модуля +
+//        подсказка «На экран Домой» для iPhone/iPad (iosInstallDecision)
+//      — A11y: клавиатурная доступность карточек/модалок
 //
-//    Сохранено из 3.8.4:
+//    Сохранено из 3.8.5:
 //      — restoreCoverUrls, shelfMark, SVG-иконки, аккордеон drawer,
 //        янтарные заголовки, разрыв циклов через utils.js
 // ─────────────────────────────────────────────
 import {
-  openDB, loadBooks, putBook, delBook, loadSettings, saveSettings,
-  saveCover, deleteCover, getCover, changeBookStatus,
+  openDB, loadBooks, putBook, deleteBookCascade, loadSettings, saveSettings,
+  saveCover, loadCovers, changeBookStatus, applyStatusTransition,
   BOOK_STATUSES, CURRENCIES,
   loadCollections, loadChallenges, loadTags, putTag, delTag,
   moveCollection, getNextCollectionOrder,
   exportAll, importAll, getDBSize,
-  repairCovers, isValidCoverBlob
+  repairCovers, isValidCoverBlob,
+  repairDanglingRefs, DBBlockedError,
+  putPendingSync, getPendingSync
 } from './db.js';
 import {
   validateISBN, cleanISBN, fetchBookByIsbn, searchBooks,
@@ -54,17 +52,18 @@ import {
   getSeriesList, renderSeriesList, renderSeriesDetail,
   attachSeriesAutocomplete, getSeriesTotal
 } from './series.js';
-import { captureQuoteByPhoto, checkOcrSupport } from './ocr.js';
+import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffline, isOcrActive } from './ocr.js';
 import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
-import { registerSW, setupOnlineIndicator } from './sw-register.js';
+import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import {
-  esc, showToast, debounce, sanitizeColor,
+  esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
   trackOverlay, untrackOverlay,
-  consumePoppingState, popTopOverlay, hasOverlays, pushSentinel,
+  consumePoppingState, hasOverlays, pushSentinel, closeTopOverlay, closeTopOverlayForBack,
+  makeCardKeyboardAccessible,
   formatPrice, convertToDefault
 } from './utils.js';
 
@@ -73,8 +72,14 @@ export { esc, showToast, trackOverlay, untrackOverlay, formatPrice, convertToDef
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ
 // ═══════════════════════════════════════════════
+// 🆕 P2-7: размер «окна» списка книг (полная пересборка без лимитов →
+// рендер окна + «Показать ещё», сохранение scroll/focus)
+export const BOOKS_PAGE_SIZE = 50;
+let _booksListKey = null; // последний filter-ключ книжного списка
+
 const S = {
   books: [], collections: [], challenges: [], tags: [],
+  booksLimit: BOOKS_PAGE_SIZE,
   settings: {
     lrAppId: '', lrSecret: '', lrPartnerId: '', lrPartnerSecret: '',
     microlinkApiKey: '',
@@ -167,7 +172,7 @@ function cacheDom() {
    'review-overlay','review-form-title','review-form-close','review-form-body',
    'cover-overlay','cover-close','cover-viewer-img','cover-viewer-title',
    'cover-photo-btn','cover-photo-input','cover-gallery-btn','cover-gallery-input',
-   'toast','confetti-canvas','update-banner','install-banner',
+   'toast','confetti-canvas','update-banner','install-banner','install-ios-banner',
    'drawer-version','drawer-offline','active-filters',
    'drawer-collections','drawer-series','drawer-filters','drawer-add-collection',
    'drawer-title-collections','drawer-title-series','drawer-title-filters',
@@ -181,14 +186,6 @@ function cacheDom() {
 let _exitArmed = false;
 let _exitTimer = null;
 
-function hideOverlayEl(el) {
-  if (!el) return;
-  el.classList.add('hidden');
-  if (el === DOM.scannerOverlay) stopScanner();
-  const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-  if (!anyOpen) document.body.style.overflow = '';
-}
-
 function setupBackGesture() {
   try {
     history.replaceState({ btpBase: true }, '');
@@ -196,7 +193,10 @@ function setupBackGesture() {
   } catch (e) {}
   window.addEventListener('popstate', () => {
     if (consumePoppingState()) return;
-    if (hasOverlays()) { hideOverlayEl(popTopOverlay()); return; }
+    // 🆕 P2-17: жест «назад» при открытом оверлее закрывает ВЕРХНИЙ
+    // через его onClose (DOM-очистка, фокус/скролл) — но БЕЗ повторного
+    // history.back(), чтобы не сделать двойную навигацию.
+    if (hasOverlays()) { closeTopOverlayForBack(); return; }
     if (S.currentTab === 'stats') {
       const mc = DOM.mainContent;
       const prev = getPrevStatsSub(mc._statsSub || 'books');
@@ -220,6 +220,31 @@ function setupBackGesture() {
 }
 
 // ═══════════════════════════════════════════════
+//  🆕 P2-4: экран «закрыта другая вкладка» (blocked IDB upgrade)
+//  Вместо бесконечного скелетона при заблокированной миграции БД:
+//  убираем skeleton, объясняем пользователю причину и даём кнопку retry.
+//  Когда старая вкладка закроется, повторное открытие БД пройдёт успешно.
+// ═══════════════════════════════════════════════
+function showBlockedScreen() {
+  const skeleton = document.getElementById('skeleton');
+  if (skeleton) skeleton.remove();
+  const mc = DOM.mainContent;
+  if (mc) {
+    mc.innerHTML = `
+      <div class="empty-state">
+        <div class="blocked-icon" aria-hidden="true">⏳</div>
+        <div class="blocked-title">Обновление базы данных заблокировано</div>
+        <p class="blocked-text">Другая вкладка BookTrackerPro всё ещё открыта.<br/>
+        Закройте её или обновите, затем нажмите «Повторить».</p>
+        <button id="blocked-retry-btn" class="btn btn-primary">Повторить</button>
+      </div>`;
+    setTimeout(() => {
+      mc.querySelector('#blocked-retry-btn')?.addEventListener('click', () => window.location.reload());
+    }, 0);
+  }
+}
+
+// ═══════════════════════════════════════════════
 //  ИНИЦИАЛИЗАЦИЯ
 // ═══════════════════════════════════════════════
 async function init() {
@@ -229,19 +254,50 @@ async function init() {
   // 🆕 v3.8.5: убираем «+ Новая подборка» из drawer
   DOM.drawerAddCollection?.remove();
 
-  await openDB();
+// 🆕 P2-4: blocked upgrade больше НЕ оставляет skeleton навсегда.
+  // Другая вкладка держит старую версию БД → показываем экран
+  // «закройте другие вкладки» с кнопкой retry вместо бесконечного ожидания.
+  try {
+    await openDB();
+  } catch (err) {
+    if (err instanceof DBBlockedError) {
+      showBlockedScreen();
+      return;
+    }
+    // иная ошибка открытия БД (не из-за блокировки) — общий экран ошибки
+    console.error('[DB] init open error:', err);
+    const skeleton = document.getElementById('skeleton');
+    if (skeleton) skeleton.remove();
+    const mc = DOM.mainContent;
+    if (mc) mc.innerHTML = '<div class="empty-state">⚠️ Не удалось открыть базу данных<br><span class="small text-muted">Обновите страницу и попробуйте ещё раз.</span></div>';
+    return;
+  }
   const repaired = await repairCovers();
   if (repaired > 0) console.log('[Cover] Удалено битых обложек: ' + repaired);
+  // 🆕 P1-8: чистим dangling bookIds в подборках/челленджах (ссылки на удалённые книги)
+  const repairedRefs = await repairDanglingRefs();
+  if (repairedRefs > 0) console.log('[Refs] Исправлено коллекций/челленджей: ' + repairedRefs);
 
-  S.books = await loadBooks();
-  await restoreCoverUrls(S.books);
-  S.collections = await loadCollections();
-  S.challenges = await loadChallenges();
-  S.tags = await loadTags();
+  // 🆕 P1-5: ошибка чтения IndexedDB больше НЕ маскируется пустой библиотекой —
+  // показываем явное сообщение вместо «успешно загруженной» пустоты.
+  try {
+    S.books = await loadBooks();
+    await restoreCoverUrls(S.books);
+    S.collections = await loadCollections();
+    S.challenges = await loadChallenges();
+    S.tags = await loadTags();
 
-  const saved = await loadSettings();
-  if (saved) Object.assign(S.settings, saved);
-  if (S.settings.microlinkApiKey) setMicrolinkApiKey(S.settings.microlinkApiKey);
+    const saved = await loadSettings();
+    if (saved) Object.assign(S.settings, saved);
+    if (S.settings.microlinkApiKey) setMicrolinkApiKey(S.settings.microlinkApiKey);
+  } catch (err) {
+    console.error('[DB] init data load error:', err);
+    const skeleton = document.getElementById('skeleton');
+    if (skeleton) skeleton.remove();
+    const mc = DOM.mainContent;
+    if (mc) mc.innerHTML = '<div class="empty-state">⚠️ Не удалось загрузить данные<br><span class="small text-muted">Ошибка базы данных. Попробуйте обновить страницу.</span></div>';
+    return;
+  }
 
   try {
     const v = await (await fetch('version.json')).json();
@@ -250,7 +306,7 @@ async function init() {
 
   registerSW();
   setupOnlineIndicator(showToast);
-  setupInstallPrompt();
+  maybeShowInstallBanner();
   setupBackGesture();
   updateOfflineIndicator();
   injectNavIcons();
@@ -295,27 +351,85 @@ function bindDrawerAccordion() {
 
 // 🆕 v3.8.4: восстановление Object URL обложек из IndexedDB
 const _coverUrlCache = new Map();
-async function restoreCoverUrls(books) {
+// 🆕 P2-8: batch-загрузка обложек одной транзакцией вместо N вызовов
+// getCover() (N+1 старт). loadCovers заполняет Map<bookId, Blob> один раз.
+export async function restoreCoverUrls(books) {
+  if (!Array.isArray(books) || books.length === 0) return;
+  const pending = [];
   for (const book of books) {
-    if (_coverUrlCache.has(book.id)) { book.coverUrl = _coverUrlCache.get(book.id); continue; }
-    const blob = await getCover(book.id);
+    if (_coverUrlCache.has(book.id)) {
+      book.coverUrl = _coverUrlCache.get(book.id);
+    } else {
+      pending.push(book);
+    }
+  }
+  if (pending.length === 0) return;
+  const covers = await loadCovers(pending.map((b) => b.id));
+  for (const book of pending) {
+    const blob = covers.get(book.id);
     if (blob) {
       const url = URL.createObjectURL(blob);
-      _coverUrlCache.set(book.id, url);
+      cacheCoverUrl(book.id, url);
       book.coverUrl = url;
     } else if (book.coverUrl && book.coverUrl.startsWith('blob:')) {
       book.coverUrl = '';
     }
   }
 }
-function cacheCoverUrl(bookId, url) { if (bookId && url) _coverUrlCache.set(bookId, url); }
+// 🆕 P2-9: централизованный lifecycle object URL обложек/экспорта.
+function safeRevoke(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    try { URL.revokeObjectURL(url); } catch { /* noop */ }
+  }
+}
+// При замене обложки предыдущий URL книги отзывается, а не копится в кэше.
+export function cacheCoverUrl(bookId, url) {
+  if (!bookId || !url) return;
+  const prev = _coverUrlCache.get(bookId);
+  if (prev && prev !== url) safeRevoke(prev);
+  _coverUrlCache.set(bookId, url);
+}
+// Удаление книги: освобождаем её object URL из кэша.
+export function revokeCoverUrlForBook(bookId) {
+  const url = _coverUrlCache.get(bookId);
+  if (!url) return false;
+  safeRevoke(url);
+  _coverUrlCache.delete(bookId);
+  return true;
+}
+// Выгрузка всех закэшированных URL (unload/controlled refresh).
+export function revokeAllCoverUrls() {
+  const urls = Array.from(_coverUrlCache.values());
+  _coverUrlCache.clear();
+  for (const url of urls) safeRevoke(url);
+  return urls.length;
+}
+// 🆕 P2-9: экспорт JSON — object URL отзываем после click/download tick.
+export function triggerDownload(blob, filename) {
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => safeRevoke(url), 0);
+  return url;
+}
+// 🆕 P2-9: при выгрузке страницы не оставляем blob: URL висеть в памяти.
+window.addEventListener('pagehide', () => revokeAllCoverUrls());
 
 async function refreshData() {
-  S.books = await loadBooks();
-  await restoreCoverUrls(S.books);
-  S.collections = await loadCollections();
-  S.challenges = await loadChallenges();
-  S.tags = await loadTags();
+  // 🆕 P1-5: ошибка чтения не маскируется пустым состоянием
+  try {
+    S.books = await loadBooks();
+    await restoreCoverUrls(S.books);
+    S.collections = await loadCollections();
+    S.challenges = await loadChallenges();
+    S.tags = await loadTags();
+  } catch (err) {
+    console.error('[DB] refreshData error:', err);
+    showToast('⚠️ Не удалось обновить данные: ошибка базы данных', 'error');
+    return;
+  }
   renderDrawer();
   renderTab(S.currentTab);
 }
@@ -407,28 +521,23 @@ function bindEvents() {
 
   document.addEventListener('btp-stats-sub', () => { pushSentinel(); });
 
-  // PWA обновление / установка
-  $('#update-apply')?.addEventListener('click', () => {
-    navigator.serviceWorker?.getRegistration().then(r => r?.waiting?.postMessage('SKIP_WAITING'));
-    DOM.updateBanner.classList.add('hidden');
-  });
-  $('#update-dismiss')?.addEventListener('click', () => DOM.updateBanner.classList.add('hidden'));
+  // PWA установка
   $('#install-apply')?.addEventListener('click', () => {
     if (S.deferredPrompt) { S.deferredPrompt.prompt(); S.deferredPrompt = null; DOM.installBanner.classList.add('hidden'); }
   });
   $('#install-dismiss')?.addEventListener('click', () => DOM.installBanner.classList.add('hidden'));
+  $('#install-ios-dismiss')?.addEventListener('click', () => dismissIosInstallBanner());
 
   // Escape (🆕 v3.8.5: сначала закрываем FAB-меню)
+  // 🆕 P2-17: единый lifecycle — все оверлеи (статические и динамические)
+  // закрываются через верхний элемент back-стека (closeTopOverlay),
+  // а не по chain из захардкоженных ID (это чинило «закрытие не того слоя»
+  // при вложенных оверлеях).
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (document.querySelector('.fab-menu')) { closeFabMenu(); return; }
-    if (!DOM.scannerOverlay.classList.contains('hidden')) closeScanner();
-    else if (!DOM.coverOverlay.classList.contains('hidden')) closeOverlay(DOM.coverOverlay);
-    else if (!DOM.formOverlay.classList.contains('hidden')) closeOverlay(DOM.formOverlay);
-    else if (!DOM.detailOverlay.classList.contains('hidden')) closeOverlay(DOM.detailOverlay);
-    else if (!DOM.contentOverlay.classList.contains('hidden')) closeOverlay(DOM.contentOverlay);
-    else if (!DOM.reviewOverlay.classList.contains('hidden')) closeOverlay(DOM.reviewOverlay);
-    else if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
+    if (hasOverlays()) { closeTopOverlay(); return; }
+    if (!DOM.searchBar.classList.contains('hidden')) closeGlobalSearch();
     else if (DOM.drawer.classList.contains('open')) toggleDrawer(false);
     closeStatusDropdown();
   });
@@ -566,16 +675,36 @@ function renderSearchBookTags() {
     });
   });
 }
-function matchesBook(b, q) {
+// 🆕 P2-5: экспорт чистой функции поиска — уменьшение дублирования
+// для тестов и единая точка правды глобального поиска.
+export function matchesBook(b, q) {
   if (!q) return true;
+  // 🆕 P2-5: ISBN-подобный запрос сравнивается после нормализации:
+  // cleanISBN убирает пробелы/дефисы/en-em dash и нормализует регистр X,
+  // поэтому форматированный ввод находит чистую запись и наоборот.
+  const isbnHit = (b.isbn || '').includes(q) || isIsbnLike(q) && cleanIsbnMatch(b.isbn, q);
   return b.title.toLowerCase().includes(q) ||
     b.author.toLowerCase().includes(q) ||
-    (b.isbn || '').includes(q) ||
+    isbnHit ||
     (b.genre || '').toLowerCase().includes(q) ||
     (b.publisher || '').toLowerCase().includes(q) ||
     (b.series || '').toLowerCase().includes(q) ||
     (b.tags || []).some(t => t.toLowerCase().includes(q)) ||
     (b.tropes || []).some(t => t.toLowerCase().includes(q));
+}
+// 🆕 P2-5: запрос похож на ISBN, если после cleanISBN остаются
+// только цифры и/или X и длина достаточно осмысленна (≥ 4 символов).
+function isIsbnLike(q) {
+  const s = cleanISBN(q);
+  return s.length >= 4 && /^[0-9X]+$/.test(s);
+}
+// 🆕 P2-5: нормализованное сравнение ISBN — чистая запись находит
+// форматированную и наоборот (включая X vs x и en/em dash).
+function cleanIsbnMatch(bookIsbn, q) {
+  const cleanQ = cleanISBN(q);
+  const cleanB = cleanISBN(bookIsbn);
+  if (!cleanB) return false;
+  return cleanB === cleanQ || cleanB.includes(cleanQ);
 }
 function performGlobalSearch() {
   const q = S.searchQuery;
@@ -644,7 +773,7 @@ function renderSearchResults(results, hasQuery) {
   if (results.books.length) {
     html += searchSection(icon('library', 13) + ' Книги', results.books.length, results.books.map(b => `
       <div class="sr-item" data-sr-book="${b.id}">
-        ${b.coverUrl ? `<img class="sr-cover" src="${b.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="sr-cover ph">${icon('bookClosed', 16)}</div>`}
+        ${b.coverUrl ? `<img class="sr-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="sr-cover ph">${icon('bookClosed', 16)}</div>`}
         <div class="sr-info">
           <div class="sr-title">${esc(b.title)}</div>
           <div class="sr-sub">${esc(b.author)}${b.series ? ' · ' + esc(b.series) : ''}</div>
@@ -736,8 +865,10 @@ function searchSection(title, count, inner) {
 }
 function bindSearchResultEvents(el) {
   const go = (fn) => { closeGlobalSearch(); fn(); };
+  // 🆕 P2-18: все кликабельные результаты поиска доступны с клавиатуры
   el.querySelectorAll('[data-sr-book]').forEach(item => {
     item.addEventListener('click', () => go(() => openBookDetail(item.dataset.srBook)));
+    makeCardKeyboardAccessible(item);
   });
   // 🆕 v3.8.5: контент из поиска → read-only карточка
   el.querySelectorAll('[data-sr-content-book]').forEach(item => {
@@ -746,18 +877,23 @@ function bindSearchResultEvents(el) {
       const contentItem = (book?.contentItems || []).find(c => c.id === item.dataset.srContentId);
       go(() => openContentDetail(contentItem, book, { settings: S.settings }));
     });
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-collection]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openCollection = item.dataset.srCollection; renderTab('collections'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-challenge]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openChallenge = item.dataset.srChallenge; renderTab('challenges'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-series]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.openSeries = item.dataset.srSeries; renderTab('series'); }));
+    makeCardKeyboardAccessible(item);
   });
   el.querySelectorAll('[data-sr-tag]').forEach(item => {
     item.addEventListener('click', () => go(() => { S.activeFilter = { type: 'tag', value: item.dataset.srTag }; renderTab('books'); }));
+    makeCardKeyboardAccessible(item);
   });
 }
 // ═══════════════════════════════════════════════
@@ -909,6 +1045,72 @@ function renderActiveFilters() {
 // ═══════════════════════════════════════════════
 //  ВКЛАДКА: КНИГИ (🆕 SVG-фильтры)
 // ═══════════════════════════════════════════════
+// 🆕 P2-7: рендер книг через «окно» (BOOKS_PAGE_SIZE) + «Показать ещё»,
+// вместо полной пересборки всех карточек. Экспортируется для тестов.
+export function renderBookList(container, books, limit, handlers = {}) {
+  const visible = books.slice(0, limit);
+  const hasMore = books.length > limit;
+  const moreFocusedBefore = document.activeElement?.id === 'books-load-more';
+
+  container.innerHTML = `
+    <div class="book-list">
+      ${visible.length === 0 ? renderEmptyBooks() : visible.map(renderBookCard).join('')}
+    </div>
+    ${hasMore ? `
+      <button id="books-load-more" class="btn-secondary load-more-btn" data-hidden="${books.length - limit}">
+        ${icon('chevronDown', 14)} Показать ещё (${books.length - limit})
+      </button>
+    ` : ''}
+  `;
+
+  container.querySelectorAll('.book-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.status-btn')) return;
+      if (e.target.closest('.tag-chip')) return;
+      if (e.target.closest('.tag-more-btn')) return;
+      (handlers.onOpenBook || openBookDetail)(card.dataset.id);
+    });
+    // 🆕 P2-18: keyboard-доступность карточки (Enter/Space)
+    makeCardKeyboardAccessible(card);
+  });
+
+  container.querySelectorAll('.status-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      (handlers.onStatus || openStatusDropdown)(btn, btn.dataset.bookId);
+    });
+  });
+
+  container.querySelectorAll('.tag-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      (handlers.onTag || ((chipEl) => {
+        S.activeFilter = { type: 'tag', value: chipEl.dataset.tag };
+        renderBooksTab();
+      }))(chip);
+    });
+  });
+
+  container.querySelectorAll('.tag-more-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      (handlers.onOpenBook || openBookDetail)(btn.dataset.id);
+    });
+  });
+
+  const moreBtn = container.querySelector('#books-load-more');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      const next = limit + BOOKS_PAGE_SIZE;
+      (handlers.onMore || ((n) => {
+        S.booksLimit = n;
+        renderBooksTab();
+      }))(next);
+    });
+    if (moreFocusedBefore) moreBtn.focus();
+  }
+}
+
 function renderBooksTab() {
   const mc = DOM.mainContent;
   let books = S.books.filter(b => b.id !== '__no_book__');
@@ -941,6 +1143,16 @@ function renderBooksTab() {
 
   books.sort((a, b) => (b.dateAdded || '').localeCompare(a.dateAdded || ''));
 
+  // 🆕 P2-7: окно книг сбрасывается при смене фильтра, scroll сохраняется
+  // при повторной пересборке того же списка (после смены статуса и т.п.).
+  const filterKey = JSON.stringify([S.bookFilter, S.activeFilter]);
+  const filterChanged = _booksListKey !== filterKey;
+  if (filterChanged) {
+    _booksListKey = filterKey;
+    S.booksLimit = BOOKS_PAGE_SIZE;
+  }
+  const prevScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+
   mc.innerHTML = `
     <div class="filter-bar no-scrollbar">
       ${filters.map(f => `
@@ -948,10 +1160,11 @@ function renderBooksTab() {
                 data-filter="${f.id}">${f.ic ? icon(f.ic, 13) + ' ' : ''}${f.label}</button>
       `).join('')}
     </div>
-    <div class="book-list">
-      ${books.length === 0 ? renderEmptyBooks() : books.map(renderBookCard).join('')}
-    </div>
   `;
+
+  const listHost = document.createElement('div');
+  mc.appendChild(listHost);
+  renderBookList(listHost, books, S.booksLimit);
 
   mc.querySelectorAll('.filter-chip').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -961,36 +1174,10 @@ function renderBooksTab() {
     });
   });
 
-  mc.querySelectorAll('.book-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.status-btn')) return;
-      if (e.target.closest('.tag-chip')) return;
-      if (e.target.closest('.tag-more-btn')) return;
-      openBookDetail(card.dataset.id);
-    });
-  });
-
-  mc.querySelectorAll('.status-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openStatusDropdown(btn, btn.dataset.bookId);
-    });
-  });
-
-  mc.querySelectorAll('.tag-chip').forEach(chip => {
-    chip.addEventListener('click', (e) => {
-      e.stopPropagation();
-      S.activeFilter = { type: 'tag', value: chip.dataset.tag };
-      renderBooksTab();
-    });
-  });
-
-  mc.querySelectorAll('.tag-more-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openBookDetail(btn.dataset.id);
-    });
-  });
+  // 🆕 P2-7: восстановление позиции прокрутки при пересборке без смены фильтра
+  if (!filterChanged && (prevScrollY > 0)) {
+    try { window.scrollTo(0, prevScrollY); } catch (e) { /* скролл недоступен (jsdom) */ }
+  }
 }
 
 function renderEmptyBooks() {
@@ -1021,7 +1208,7 @@ function renderBookCard(book) {
   const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCount) * 100) : 0;
 
   const coverHtml = book.coverUrl
-    ? `<img class="book-cover" src="${book.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
+    ? `<img class="book-cover" src="${esc(safeUrl(book.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
     : `<div class="book-cover-placeholder">${icon('bookClosed', 32)}<span class="cover-ph-title">${esc(book.title)}</span></div>`;
 
   const priceHtml = (S.settings.showPriceInCards && book.price?.amount > 0)
@@ -1111,7 +1298,15 @@ function openStatusDropdown(anchor, bookId) {
       closeStatusDropdown();
       if (newStatus === book.status) return;
 
-      const result = await changeBookStatus(bookId, newStatus);
+      // 🆕 P1-5: при ошибке IndexedDB — нет success toast
+      let result;
+      try {
+        result = await changeBookStatus(bookId, newStatus);
+      } catch (err) {
+        console.error('[DB] changeBookStatus error:', err);
+        showToast('❌ Не удалось обновить статус: ошибка базы данных', 'error');
+        return;
+      }
       if (!result) return;
       await refreshData();
       if (result.confetti && S.settings.confetti) fireConfetti();
@@ -1284,7 +1479,7 @@ function openBookForm(book = null) {
         <button type="button" id="bf-cover-gallery-btn" class="btn-secondary" style="flex:1">${icon('image', 14)} Из галереи</button>
         <button type="button" id="bf-cover-camera-btn" class="btn-secondary" style="flex:1">${icon('camera', 14)} Камера</button>
       </div>
-      <input type="url" id="bf-cover" value="${esc(b.cover || b.coverUrl || '')}" placeholder="https://... или загрузите выше"/>
+      <input type="url" id="bf-cover" value="${escAttr(b.cover || b.coverUrl || '')}" placeholder="https://... или загрузите выше"/>
       <div id="bf-cover-preview" class="cover-preview hidden">
         <img id="bf-cover-preview-img" src="" alt="Предпросмотр обложки"/>
       </div>
@@ -1415,7 +1610,7 @@ function openBookForm(book = null) {
       </div>
       <div id="bf-joint-fields" class="${b.jointReading?.active ? '' : 'hidden'}">
         <div class="form-group"><label>Участники (через запятую)</label><input type="text" id="bf-joint-people" value="${esc((b.jointReading?.participants || []).join(', '))}" placeholder="Аня, Маша, Катя"/></div>
-        <div class="form-group"><label>Ссылка на чат</label><input type="url" id="bf-joint-chat" value="${esc(b.jointReading?.chatLink || '')}" placeholder="https://t.me/+..."/></div>
+        <div class="form-group"><label>Ссылка на чат</label><input type="url" id="bf-joint-chat" value="${escAttr(b.jointReading?.chatLink || '')}" placeholder="https://t.me/+..."/></div>
         <div class="form-group"><label>Заметки</label><input type="text" id="bf-joint-notes" value="${esc(b.jointReading?.notes || '')}" placeholder="Читаем по 3 главы в день"/></div>
       </div>
     </div>
@@ -1456,7 +1651,8 @@ function openBookForm(book = null) {
     const url = fb.querySelector('#bf-cover').value.trim();
     const box = fb.querySelector('#bf-cover-preview');
     const img = fb.querySelector('#bf-cover-preview-img');
-    if (url && /^https?:\/\//i.test(url)) { img.src = url; box.classList.remove('hidden'); }
+    const safe = safeUrl(url);
+    if (safe) { img.src = safe; box.classList.remove('hidden'); }
     else { box.classList.add('hidden'); img.src = ''; }
   }
   fb.querySelector('#bf-cover').addEventListener('input', debounce(updateCoverPreview, 400));
@@ -1600,8 +1796,16 @@ function openBookForm(book = null) {
   if (delBtn) delBtn.addEventListener('click', async () => {
     const ok = await showConfirm('Удалить эту книгу?', { danger: true, okText: 'Удалить' });
     if (ok) {
-      await delBook(S.editingBookId);
-      await deleteCover(S.editingBookId);
+      // 🆕 P1-5: success toast только после подтверждённого удаления
+      // 🆕 P1-8: атомарный каскад — книга, обложка и ссылки в подборках/челленджах
+      try {
+        await deleteBookCascade(S.editingBookId);
+        revokeCoverUrlForBook(S.editingBookId); // 🆕 P2-9: освобождаем object URL удалённой книги
+      } catch (err) {
+        console.error('[DB] delete book error:', err);
+        showToast('❌ Не удалось удалить книгу: ошибка базы данных', 'error');
+        return;
+      }
       closeOverlay(DOM.formOverlay);
       await refreshData();
       showToast('🗑️ Книга удалена', 'info');
@@ -1662,7 +1866,7 @@ async function saveBookForm(selectedTags, selectedFormats) {
     jointReading: {
       active: isJoint,
       participants: isJoint ? f.querySelector('#bf-joint-people').value.split(',').map(p => p.trim()).filter(Boolean) : [],
-      chatLink: isJoint ? f.querySelector('#bf-joint-chat').value.trim() : '',
+      chatLink: isJoint ? safeLinkUrl(f.querySelector('#bf-joint-chat').value.trim()) : '',
       notes: isJoint ? f.querySelector('#bf-joint-notes').value.trim() : '',
       startDate: isJoint ? (S.books.find(b => b.id === S.editingBookId)?.jointReading?.startDate || now.slice(0, 10)) : '',
     },
@@ -1679,6 +1883,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
     updatedAt: now,
   };
 
+  // 🆕 P2-10: единый переход статуса вызывается и из формы, и из dropdown —
+  // side effects (даты, readingDays, confetti, rating prompt) больше не дублируются.
+  // Старые значения формы сохраняются, переход применяется только при реальной смене.
+  let statusFx = { confetti: false, askRating: false };
   if (S.editingBookId) {
     const ex = S.books.find(b => b.id === S.editingBookId);
     if (ex) {
@@ -1689,19 +1897,28 @@ async function saveBookForm(selectedTags, selectedFormats) {
       bookData.dateFinished = ex.dateFinished || '';
       bookData.readingDays = ex.readingDays;
       bookData.source = ex.source || 'manual';
-      if (bookData.status === 'reading' && !bookData.dateStarted) bookData.dateStarted = now.slice(0, 10);
-      if ((bookData.status === 'finished' || bookData.status === 'dropped') && ex.status !== bookData.status) bookData.dateFinished = now.slice(0, 10);
+      if (ex.status !== bookData.status) {
+        statusFx = applyStatusTransition(bookData, ex.status, bookData.status, now);
+      }
     }
   } else {
     bookData.contentItems = []; bookData.review = {}; bookData.readingForContent = {};
     bookData.source = 'manual';
-    if (bookData.status === 'reading') bookData.dateStarted = now.slice(0, 10);
+    // 🆕 P2-10: для новой книги тоже единый переход — даты/readingDays/confetti/rating
+    // не зависят от того, открыли книгу через форму или через dropdown.
+    statusFx = applyStatusTransition(bookData, '', bookData.status, now);
   }
 
-  for (const t of tags) {
-    if (!S.tags.find(x => x.name === t)) {
-      await putTag({ name: t, color: pickTagColor(S.tags.length) });
+  try {
+    for (const t of tags) {
+      if (!S.tags.find(x => x.name === t)) {
+        await putTag({ name: t, color: pickTagColor(S.tags.length) });
+      }
     }
+  } catch (err) {
+    console.error('[DB] saveBookForm tags error:', err);
+    showToast('❌ Не удалось сохранить книгу: ошибка базы данных', 'error');
+    return;
   }
 
   const coverVal = bookData.cover;
@@ -1718,27 +1935,93 @@ async function saveBookForm(selectedTags, selectedFormats) {
         bookData.coverUrl = URL.createObjectURL(blob);
         cacheCoverUrl(bookData.id, bookData.coverUrl);
         bookData.cover = '';
+      } else {
+        bookData.cover = '';
       }
-    } catch (err) { console.warn('[Cover] dataURL save failed:', err); }
-  } else if (coverVal && coverVal.startsWith('http')) {
+    } catch (err) { console.warn('[Cover] dataURL save failed:', err); bookData.cover = ''; }
+  } else if (coverVal && /^https?:\/\//i.test(coverVal)) {
+    const safeCover = safeUrl(coverVal);
     try {
-      const blob = await (await fetch(coverVal)).blob();
+      const blob = await (await fetch(safeCover)).blob();
       if (isValidCoverBlob(blob)) {
         await saveCover(bookData.id, blob);
         bookData.coverUrl = URL.createObjectURL(blob);
         cacheCoverUrl(bookData.id, bookData.coverUrl);
+        // 🆕 P1-3: сохраняем исходный http(s)-текст как фолбэк в бэкапе
+        // (сам coverUrl — сессионный blob:, мёртвый после reload).
+        // safeCover уже нормализован safeUrl() — только http/https.
+        bookData.cover = safeCover;
       } else {
-        bookData.coverUrl = coverVal;
+        bookData.coverUrl = safeCover;
       }
-    } catch { bookData.coverUrl = coverVal; }
+    } catch { bookData.coverUrl = safeCover || coverVal; }
+  } else if (coverVal) {
+    // Не http(s)/data: — оставляем только безопасную схему обложки (blob/http/https) или ''.
+    // javascript:, custom:, file: и пр. в IndexedDB не попадают.
+    bookData.cover = safeUrl(coverVal);
   }
 
-  await putBook(bookData);
+  // 🆕 P3-2: офлайн-сохранение книги с ISBN → отложенная досинхронизация
+  // метаданных (Background Sync). Маркер ставится ДО записи, чтобы книга
+  // с первой же версии «знала» о pending-синхронизации.
+  const needOfflineSync = !navigator.onLine && validateISBN(bookData.isbn);
+  if (needOfflineSync) bookData.pendingSync = true;
+
+  // 🆕 P1-5: подтверждённый commit только после успешной записи.
+  // Ошибка IndexedDB → НЕ закрываем форму (введённое сохраняется),
+  // НЕ показываем success toast.
+  try {
+    await putBook(bookData);
+  } catch (err) {
+    console.error('[DB] saveBookForm error:', err);
+    showToast('❌ Не удалось сохранить книгу: ошибка базы данных', 'error');
+    return;
+  }
+
+  // 🆕 P3-2: реальное наполнение очереди Background Sync + регистрация.
+  // Best-effort: сбой очереди не отменяет уже сохранённую книгу.
+  if (needOfflineSync) await maybeEnqueueOfflineSync(bookData);
   closeOverlay(DOM.formOverlay);
   await refreshData();
-  if (bookData.status === 'finished' && S.settings.confetti) fireConfetti();
+  // 🆕 P2-10: confetti и rating prompt — только от реально случившегося
+  // перехода (единая семантика с dropdown), а не от повторного сохранения
+  // формы уже-finished книги.
+  if (statusFx.confetti && S.settings.confetti) fireConfetti();
+  if (statusFx.askRating) {
+    const saved = S.books.find(b => b.id === bookData.id);
+    openRatingModal(saved || bookData);
+  }
   showToast(S.editingBookId ? '✅ Книга обновлена' : '✅ Книга добавлена', 'success');
   S.editingBookId = null;
+}
+
+/**
+ * 🆕 P3-2: кладёт книгу в очередь отложенной досинхронизации метаданных
+ * (Background Sync, tag 'sync-book-metadata'). Вызывается из saveBookForm
+ * ПОСЛЕ успешной записи книги, только при офлайн-режиме и валидном ISBN.
+ *
+ * Идемпотентность: повторный вызов для уже поставленной в очередь книги
+ * (повторное сохранение формы / редактирование) НЕ дублирует запись.
+ *
+ * Сбой очереди НЕ бросает исключение: книга уже сохранена, теряется только
+ * «досинхронизация» — логируем warning (fail-loud, а не тихое проглатывание).
+ *
+ * @param {{ id: string, isbn: string }} book
+ * @returns {Promise<boolean>} true — книга в очереди (или уже стояла)
+ */
+export async function maybeEnqueueOfflineSync(book) {
+  if (navigator.onLine || !validateISBN(book?.isbn)) return false;
+  try {
+    const queued = await getPendingSync();
+    if (queued.some(x => x.bookId === book.id)) return true;
+    await putPendingSync({ id: `ps_${book.id}`, bookId: book.id, isbn: cleanISBN(book.isbn) });
+    registerPendingSync('sync-book-metadata').catch(err =>
+      console.warn('[Sync] Не удалось зарегистрировать background sync:', err.message));
+    return true;
+  } catch (err) {
+    console.warn('[Sync] Отложенная синхронизация недоступна:', err.message);
+    return false;
+  }
 }
 
 function pickTagColor(i) {
@@ -1795,8 +2078,7 @@ function openMicrolinkPreview(result, fb) {
     </div>
   `;
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   overlay.querySelectorAll('.ml-target').forEach(sel => {
     sel.addEventListener('change', () => { mapping[sel.dataset.fieldId] = sel.value; });
@@ -1805,8 +2087,6 @@ function openMicrolinkPreview(result, fb) {
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-    if (!anyOpen) document.body.style.overflow = '';
   };
   overlay.querySelector('.ml-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -1869,7 +2149,7 @@ async function handleWebSearch() {
     const src = sourceMeta[r.source] || { label: r.source, cls: 'badge-source', ic: 'globe' };
     return `
       <div class="web-result" data-idx="${i}">
-        ${r.cover ? `<img class="web-result-cover" src="${r.cover}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
+        ${r.cover ? `<img class="web-result-cover" src="${esc(safeUrl(r.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
         <div class="web-result-info">
           <div class="web-result-title">${esc(r.title)}</div>
           <div class="web-result-meta">${esc(r.author)}${r.publisher ? ' · ' + esc(r.publisher) : ''}${r.pageCount ? ' · ' + r.pageCount + ' стр.' : ''}</div>
@@ -1905,20 +2185,28 @@ function fillFormFromResult(r) {
 async function handleIsbnLookup(isbnInput) {
   const isbn = cleanISBN(isbnInput);
   if (!validateISBN(isbn)) { showToast('❌ Неверный формат ISBN', 'error'); return; }
-  showLoading('🔍 Ищу книгу...');
+  // 🆕 P2-13: единый AbortController для всего каскада.
+  // Кнопка «Отменить» на loading-overlay прерывает lookup;
+  // после разблокировки checked сигнал — поздний результат не применяется.
+  const lookupCtrl = new AbortController();
+  showLoading('🔍 Ищу книгу...', () => lookupCtrl.abort());
   if (isRussianISBN(isbn)) updateLoading('Российский ISBN — ищу в базах...');
   const litresKeys = S.settings.lrAppId && S.settings.lrSecret
     ? { appId: S.settings.lrAppId, secretKey: S.settings.lrSecret } : null;
-  const book = await fetchBookByIsbn(isbn, litresKeys);
-  hideLoading();
-  closeScanner();
-  const sourceLabels = { google: 'Google Books', openlibrary: 'Open Library', litres: 'ЛитРес', cover: 'Только обложка', microlink: 'Microlink' };
-  if (book) {
-    showToast(`Найдено: ${sourceLabels[book.source] || book.source}`, 'success');
-    openBookForm({ ...book, isbn: book.isbn || isbn, status: 'wishlist' });
-  } else {
-    showToast('Не найдено — заполните вручную', 'info');
-    openBookForm({ isbn, title: '', author: '', status: 'wishlist' });
+  try {
+    const book = await fetchBookByIsbn(isbn, litresKeys, { signal: lookupCtrl.signal });
+    if (lookupCtrl.signal.aborted) return; // отменено/expired — UI не трогаем
+    const sourceLabels = { google: 'Google Books', openlibrary: 'Open Library', litres: 'ЛитРес', cover: 'Только обложка', microlink: 'Microlink' };
+    if (book) {
+      showToast(`Найдено: ${sourceLabels[book.source] || book.source}`, 'success');
+      openBookForm({ ...book, isbn: book.isbn || isbn, status: 'wishlist' });
+    } else {
+      showToast('Не найдено — заполните вручную', 'info');
+      openBookForm({ isbn, title: '', author: '', status: 'wishlist' });
+    }
+  } finally {
+    hideLoading();
+    closeScanner();
   }
 }
 
@@ -2006,7 +2294,7 @@ function openBookDetail(bookId) {
   DOM.detailBody.innerHTML = `
     <div class="detail-hero">
       ${book.coverUrl
-        ? `<img class="detail-cover" id="detail-cover-img" src="${book.coverUrl}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
+        ? `<img class="detail-cover" id="detail-cover-img" src="${esc(safeUrl(book.coverUrl))}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
         : `<div class="detail-cover-placeholder" id="detail-cover-ph" style="cursor:pointer" title="Добавить обложку">${icon('bookClosed', 52)}<span class="cover-ph-title">${esc(book.title)}</span></div>`}
       <div style="flex:1;min-width:0">
         <div class="detail-title-row">
@@ -2103,7 +2391,7 @@ function openBookDetail(bookId) {
       <div class="detail-section">
         <h3>${icon('users', 14)} Совместное чтение</h3>
         <div class="text-small">${icon('users', 12)} ${esc((jr.participants || []).join(', '))}</div>
-        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(jr.chatLink)}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
+        ${jr.chatLink ? `<div class="text-small mt-8">${icon('link', 12)} <a href="${esc(safeLinkUrl(jr.chatLink))}" target="_blank" rel="noopener">${esc(jr.chatLink)}</a></div>` : ''}
         ${jr.notes ? `<div class="text-small text-muted mt-8">${esc(jr.notes)}</div>` : ''}
       </div>` : ''}
     ${book.notes ? `<div class="detail-section"><h3>${icon('edit', 14)} Заметки</h3><div class="detail-description">${esc(book.notes)}</div></div>` : ''}
@@ -2131,7 +2419,16 @@ function openBookDetail(bookId) {
   db.querySelector('#detail-delete').addEventListener('click', async () => {
     const ok = await showConfirm('Удалить эту книгу?', { danger: true, okText: 'Удалить' });
     if (ok) {
-      await delBook(book.id); await deleteCover(book.id);
+      // 🆕 P1-5: success toast только после подтверждённого удаления
+      // 🆕 P1-8: атомарный каскад — книга, обложка и ссылки в подборках/челленджах
+      try {
+        await deleteBookCascade(book.id);
+        revokeCoverUrlForBook(book.id); // 🆕 P2-9: освобождаем object URL удалённой книги
+      } catch (err) {
+        console.error('[DB] detail delete book error:', err);
+        showToast('❌ Не удалось удалить книгу: ошибка базы данных', 'error');
+        return;
+      }
       closeOverlay(DOM.detailOverlay);
       await refreshData();
       showToast('🗑️ Книга удалена', 'info');
@@ -2164,7 +2461,14 @@ function openBookDetail(bookId) {
     book.review = book.review || {};
     book.review.quotes = book.review.quotes || [];
     book.review.quotes.push({ text, page: page || 0, used: false });
-    await putBook(book);
+    // 🆕 P1-5: success toast только после успешной записи
+    try {
+      await putBook(book);
+    } catch (err) {
+      console.error('[DB] addQuote error:', err);
+      showToast('❌ Не удалось сохранить цитату: ошибка базы данных', 'error');
+      return;
+    }
     await refreshData();
     openBookDetail(book.id);
     showToast('💬 Цитата добавлена', 'success');
@@ -2192,7 +2496,7 @@ let _coverBookId = null;
 function openCoverViewer(book) {
   _coverBookId = book.id;
   if (book.coverUrl) {
-    DOM.coverViewerImg.src = book.coverUrl;
+    DOM.coverViewerImg.src = safeUrl(book.coverUrl);
     DOM.coverViewerImg.style.display = '';
     const existingPh = DOM.coverOverlay.querySelector('.cover-viewer-empty');
     if (existingPh) existingPh.style.display = 'none';
@@ -2245,8 +2549,11 @@ async function handleCoverPhotoChange(e) {
 //  СКАНЕР
 // ═══════════════════════════════════════════════
 async function openScanner() {
+  // 🆕 P2-15: запрет одновременного camera flow — если OCR-оверлей уже
+  // захватил камеру, сканер не запускаем (пользователь вернётся к OCR).
+  if (isOcrActive()) return;
   DOM.scannerOverlay.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+  trackOverlay(DOM.scannerOverlay, { onClose: () => closeScanner() });
   DOM.scannerManualInput.value = '';
   const result = await startScanner(DOM.scannerVideo, (status, msg) => {
     DOM.scannerStatus.textContent = msg;
@@ -2254,7 +2561,11 @@ async function openScanner() {
   });
   if (result) handleIsbnLookup(result);
 }
-function closeScanner() { stopScanner(); DOM.scannerOverlay.classList.add('hidden'); document.body.style.overflow = ''; }
+function closeScanner() {
+  stopScanner();
+  DOM.scannerOverlay.classList.add('hidden');
+  untrackOverlay(DOM.scannerOverlay);
+}
 
 // ═══════════════════════════════════════════════
 //  КОНТЕНТ / ОТЗЫВЫ
@@ -2262,12 +2573,24 @@ function closeScanner() { stopScanner(); DOM.scannerOverlay.classList.add('hidde
 async function handleDeleteContent(itemId, bookId) {
   const ok = await showConfirm('Удалить этот контент?', { danger: true, okText: 'Удалить' });
   if (!ok) return;
-  await deleteContentItem(bookId, itemId);
+  try {
+    await deleteContentItem(bookId, itemId);
+  } catch (err) {
+    console.error('[DB] handleDeleteContent error:', err);
+    showToast('❌ Не удалось удалить контент: ошибка базы данных', 'error');
+    return;
+  }
   await refreshData();
   showToast('🗑️ Контент удалён', 'info');
 }
 async function handleContentStatus(itemId, bookId, status) {
-  await updateContentStatus(bookId, itemId, status);
+  try {
+    await updateContentStatus(bookId, itemId, status);
+  } catch (err) {
+    console.error('[DB] handleContentStatus error:', err);
+    showToast('❌ Не удалось обновить статус: ошибка базы данных', 'error');
+    return;
+  }
   await refreshData();
   if (status === 'published' && S.settings.confetti) {
     fireConfetti();
@@ -2277,7 +2600,13 @@ async function handleContentStatus(itemId, bookId, status) {
 async function handleDeleteReview(bookId) {
   const ok = await showConfirm('Удалить отзыв?', { danger: true, okText: 'Удалить' });
   if (!ok) return;
-  await deleteReview(bookId);
+  try {
+    await deleteReview(bookId);
+  } catch (err) {
+    console.error('[DB] handleDeleteReview error:', err);
+    showToast('❌ Не удалось удалить отзыв: ошибка базы данных', 'error');
+    return;
+  }
   await refreshData();
   showToast('🗑️ Отзыв удалён', 'info');
 }
@@ -2317,15 +2646,24 @@ function fabAction(id) {
     case 'content': openContentForm(null, null, S.settings); break;
     case 'review': openBookPicker(b => openReviewForm(b.id), 'Выберите книгу для отзыва'); break;
     case 'challenge': openChallengeForm(null, S.books, async (data) => {
-      await createChallenge(data); await refreshData(); showToast('✅ Челлендж создан', 'success');
+      if (!(await dbSafe(() => createChallenge(data), 'Не удалось создать челлендж'))) return false;
+      await refreshData();
+      showToast('✅ Челлендж создан', 'success');
+      return true;
     }); break;
     case 'series': openBookPicker(b => {
       openBookForm(b);
       showToast('Укажите серию в форме', 'info');
     }, 'Выберите книгу для серии'); break;
     case 'collection': openCollectionForm(null, async (data) => {
-      data.order = await getNextCollectionOrder();
-      await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success');
+      const ok = await dbSafe(async () => {
+        data.order = await getNextCollectionOrder();
+        await createCollection(data);
+      }, 'Не удалось создать подборку');
+      if (!ok) return false;
+      await refreshData();
+      showToast('✅ Подборка создана', 'success');
+      return true;
     }); break;
   }
 }
@@ -2348,7 +2686,7 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
           ${S.books.filter(b => b.id !== '__no_book__').map(b => `
             <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}" data-bp-id="${b.id}" style="cursor:pointer">
               ${b.coverUrl
-                ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                 : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
               <span class="picker-name" style="flex:1">${esc(b.title)}</span>
             </label>
@@ -2358,13 +2696,11 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
     </div>
   `;
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
   overlay.querySelector('.bp-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -2383,6 +2719,8 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
       close();
       if (book) onPick(book);
     });
+    // 🆕 P2-18: keyboard-доступность строки выбора книги
+    makeCardKeyboardAccessible(row);
   });
 }
 
@@ -2411,31 +2749,42 @@ function renderCollectionsScreen() {
     renderCollectionDetail(mc, col, S.books, {
       onOpenBook: openBookDetail,
       onRemoveBook: async (colId, bookId) => {
-        await removeBookFromCol(colId, bookId);
+        if (!(await dbSafe(() => removeBookFromCol(colId, bookId), 'Не удалось убрать книгу из подборки'))) return;
         await refreshData();
         showToast('Убрано из подборки', 'info');
       },
       onAddBook: (colId) => openAddBooksToCollection(colId, S.books, col, refreshData),
       onBack: () => { S.openCollection = null; renderCollectionsScreen(); },
       onEdit: (c) => openCollectionForm(c, async (data) => {
-        await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success');
+        if (!(await dbSafe(() => updateCollection(data), 'Не удалось сохранить подборку'))) return false;
+        await refreshData(); showToast('✅ Сохранено', 'success');
+        return true;
       }),
     });
   } else {
     renderCollectionsList(mc, S.books, S.collections, {
       onOpen: (id) => { S.openCollection = id; renderCollectionsScreen(); },
       onAdd: () => openCollectionForm(null, async (data) => {
-        data.order = await getNextCollectionOrder();
-        await createCollection(data); await refreshData(); showToast('✅ Подборка создана', 'success');
+        const ok = await dbSafe(async () => {
+          data.order = await getNextCollectionOrder();
+          await createCollection(data);
+        }, 'Не удалось создать подборку');
+        if (!ok) return false;
+        await refreshData(); showToast('✅ Подборка создана', 'success');
+        return true;
       }),
       onEdit: (c) => openCollectionForm(c, async (data) => {
-        await updateCollection(data); await refreshData(); showToast('✅ Сохранено', 'success');
+        if (!(await dbSafe(() => updateCollection(data), 'Не удалось сохранить подборку'))) return false;
+        await refreshData(); showToast('✅ Сохранено', 'success');
+        return true;
       }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить подборку?', { danger: true, okText: 'Удалить' });
-        if (ok) { await deleteCollection(id); await refreshData(); showToast('🗑️ Подборка удалена', 'info'); }
+        if (ok && (await dbSafe(() => deleteCollection(id), 'Не удалось удалить подборку'))) { await refreshData(); showToast('🗑️ Подборка удалена', 'info'); }
       },
-      onMove: async (id, direction) => { await moveCollection(id, direction); await refreshData(); },
+      onMove: async (id, direction) => {
+        if (await dbSafe(() => moveCollection(id, direction), 'Не удалось переместить подборку')) await refreshData();
+      },
       onAddBook: () => {},
     });
   }
@@ -2448,18 +2797,26 @@ function renderChallenges() {
     renderChallengeDetail(mc, ch, S.books, {
       onBack: () => { S.openChallenge = null; renderChallenges(); },
       onEdit: (c) => openChallengeForm(c, S.books, async (data) => {
-        await updateChallenge(data); await refreshData(); showToast('✅ Сохранено', 'success');
+        if (!(await dbSafe(() => updateChallenge(data), 'Не удалось сохранить челлендж'))) return false;
+        await refreshData(); showToast('✅ Сохранено', 'success');
+        return true;
       }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить челлендж?', { danger: true, okText: 'Удалить' });
-        if (ok) { await deleteChallengeById(id); S.openChallenge = null; await refreshData(); showToast('🗑️ Челлендж удалён', 'info'); }
+        if (ok && (await dbSafe(() => deleteChallengeById(id), 'Не удалось удалить челлендж'))) { S.openChallenge = null; await refreshData(); showToast('🗑️ Челлендж удалён', 'info'); }
       },
       onOpenBook: openBookDetail,
       onAddBook: (chId) => openAddBooksToChallenge(chId, ch, S.books, refreshData),
       onStatusChange: async (chId, status) => {
-        const challenges = await loadChallenges();
-        const c = challenges.find(x => x.id === chId);
-        if (c) { c.status = status; await updateChallenge(c); }
+        try {
+          const challenges = await loadChallenges();
+          const c = challenges.find(x => x.id === chId);
+          if (c) { c.status = status; await updateChallenge(c); }
+        } catch (err) {
+          console.error('[DB] challenge status error:', err);
+          showToast('❌ Не удалось обновить статус челленджа: база данных', 'error');
+          return;
+        }
         await refreshData();
         if (status === 'completed' && S.settings.confetti) {
           fireConfetti();
@@ -2468,21 +2825,25 @@ function renderChallenges() {
           showToast(`Статус: ${status === 'active' ? 'Активен' : 'Завершён'}`, 'success');
         }
       },
-      onAddNote: async (chId, text) => { await addChallengeNote(chId, text); await refreshData(); },
-      onDelNote: async (chId, idx) => { await removeChallengeNote(chId, idx); await refreshData(); },
+      onAddNote: async (chId, text) => { if (await dbSafe(() => addChallengeNote(chId, text), 'Не удалось добавить заметку')) await refreshData(); },
+      onDelNote: async (chId, idx) => { if (await dbSafe(() => removeChallengeNote(chId, idx), 'Не удалось удалить заметку')) await refreshData(); },
     });
   } else {
     renderChallengesList(mc, S.challenges, S.books, {
       onOpen: (id) => { S.openChallenge = id; renderChallenges(); },
       onAdd: () => openChallengeForm(null, S.books, async (data) => {
-        await createChallenge(data); await refreshData(); showToast('✅ Челлендж создан', 'success');
+        if (!(await dbSafe(() => createChallenge(data), 'Не удалось создать челлендж'))) return false;
+        await refreshData(); showToast('✅ Челлендж создан', 'success');
+        return true;
       }),
       onEdit: (c) => openChallengeForm(c, S.books, async (data) => {
-        await updateChallenge(data); await refreshData();
+        if (!(await dbSafe(() => updateChallenge(data), 'Не удалось сохранить челлендж'))) return false;
+        await refreshData();
+        return true;
       }),
       onDelete: async (id) => {
         const ok = await showConfirm('Удалить челлендж?', { danger: true, okText: 'Удалить' });
-        if (ok) { await deleteChallengeById(id); await refreshData(); showToast('🗑️ Удалён', 'info'); }
+        if (ok && (await dbSafe(() => deleteChallengeById(id), 'Не удалось удалить челлендж'))) { await refreshData(); showToast('🗑️ Удалён', 'info'); }
       },
     });
   }
@@ -2530,7 +2891,7 @@ function showDayContent(dateStr) {
       </div>
     </div>`;
   document.body.appendChild(ov);
-  trackOverlay(ov);
+  trackOverlay(ov, { onClose: () => closeDay() });
   const closeDay = () => { untrackOverlay(ov); ov.remove(); };
   ov.querySelector('.day-ov-close').addEventListener('click', closeDay);
   ov.addEventListener('click', (e) => { if (e.target === ov) closeDay(); });
@@ -2541,6 +2902,8 @@ function showDayContent(dateStr) {
       closeDay();
       if (item) openContentDetail(item, bk, { settings: S.settings });
     });
+    // 🆕 P2-18: keyboard-доступность пунктов дня календаря
+    makeCardKeyboardAccessible(el);
   });
 }
 
@@ -2620,6 +2983,7 @@ function renderSettingsTab() {
       <h3>${icon('camera', 15)} Распознавание цитат (OCR)</h3>
       <p class="hint">Полный оффлайн. Файлы Tesseract.js должны лежать в корне проекта.</p>
       <button id="set-ocr-check" class="btn-secondary">Проверить файлы OCR</button>
+      <button id="set-ocr-prepare" class="btn-secondary">Подготовить OCR офлайн</button>
       <span id="set-ocr-status" class="status-text"></span>
     </div>
     <div class="settings-section">
@@ -2654,7 +3018,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.5 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.8.6 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
@@ -2720,21 +3084,46 @@ function renderSettingsTab() {
     const color = mc.querySelector('#set-tag-new-color').value;
     if (!name) { showToast('⚠️ Введите название тега', 'error'); return; }
     if (S.tags.find(t => t.name.toLowerCase() === name.toLowerCase())) { showToast('⚠️ Такой тег уже есть', 'error'); return; }
-    await putTag({ name, color });
-    S.tags = await loadTags();
+    // 🆕 P1-5: success toast только после успешной записи
+    try {
+      await putTag({ name, color });
+      S.tags = await loadTags();
+    } catch (err) {
+      console.error('[DB] add tag error:', err);
+      showToast('❌ Не удалось добавить тег: ошибка базы данных', 'error');
+      return;
+    }
     renderSettingsTab();
     showToast(`✅ Тег «${name}» добавлен`, 'success');
   });
   mc.querySelectorAll('[data-tag-color]').forEach(inp => {
     inp.addEventListener('change', async () => {
       const tag = S.tags.find(t => t.name === inp.dataset.tagColor);
-      if (tag) { tag.color = inp.value; await putTag(tag); S.tags = await loadTags(); }
+      if (!tag) return;
+      tag.color = inp.value;
+      try {
+        await putTag(tag);
+        S.tags = await loadTags();
+      } catch (err) {
+        console.error('[DB] tag color error:', err);
+        showToast('❌ Не удалось сохранить цвет тега: ошибка базы данных', 'error');
+      }
     });
   });
   mc.querySelectorAll('[data-tag-del]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ok = await showConfirm(`Удалить тег «${btn.dataset.tagDel}»?`, { danger: true, okText: 'Удалить' });
-      if (ok) { await delTag(btn.dataset.tagDel); S.tags = await loadTags(); renderSettingsTab(); }
+      if (ok) {
+        try {
+          await delTag(btn.dataset.tagDel);
+          S.tags = await loadTags();
+        } catch (err) {
+          console.error('[DB] delete tag error:', err);
+          showToast('❌ Не удалось удалить тег: ошибка базы данных', 'error');
+          return;
+        }
+        renderSettingsTab();
+      }
     });
   });
 
@@ -2774,14 +3163,42 @@ function renderSettingsTab() {
     status.textContent = r.ok ? '✅ Файлы OCR на месте' : '❌ ' + r.error;
   });
 
+  // 🆕 P1-13: преднамеренная подготовка OCR для полного offline.
+  // Раньше тяжёлые OCR-ресурсы кешировались SW только после первого
+  // онлайн-OCR-запроса → установленная PWA без сети не распознавала текст.
+  bind('#set-ocr-prepare', async () => {
+    const status = mc.querySelector('#set-ocr-status');
+    const fmt = (mb) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} ГБ` : `${mb} МБ`;
+    status.textContent = '⏳ Подготавливаю OCR для оффлайна...';
+    const r = await prepareOcrOffline({
+      onProgress: (p) => {
+        status.textContent = `⏳ Подготавливаю OCR для оффлайна… ${p.current}/${p.total} (~${fmt(Math.round((p.sizeBytes || 0) / 1048576))})`;
+      },
+    });
+    if (r.ok) {
+      const ready = await isOcrReadyOffline();
+      status.textContent = ready.ok
+        ? `✅ OCR готов для оффлайна (${fmt(Math.round((r.sizeBytes || 0) / 1048576))})`
+        : '❌ Кеш неполный';
+    } else {
+      status.textContent = '❌ ' + r.error;
+    }
+  });
+
   bind('#set-export', async () => {
-    const data = await exportAll();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `booktracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    showToast('📤 Экспортировано', 'success');
+    try {
+      // 🆕 P2-1: exportAll отклоняется при сбое чтения ЛЮБОГО store —
+      // неполный backup не скачивается и не показывается «успех».
+      const data = await exportAll();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      // 🆕 P2-9: triggerDownload revoke'ит object URL после click/tick
+      const url = triggerDownload(blob, `booktracker-backup-${new Date().toISOString().slice(0, 10)}.json`);
+      if (!url) { console.error('[export] no download url'); return; }
+      showToast('📤 Экспортировано', 'success');
+    } catch (e) {
+      console.error('[export]', e);
+      showToast('❌ Ошибка экспорта: данные не выгружены (неполный backup не создаётся)', 'error');
+    }
   });
   const importFile = mc.querySelector('#set-import-file');
   bind('#set-import', () => importFile.click());
@@ -2793,7 +3210,7 @@ function renderSettingsTab() {
       const result = await importAll(JSON.parse(await file.text()));
       await refreshData();
       if (result && typeof result === 'object' && ('addedBooks' in result)) {
-        showToast(`📥 Добавлено: ${result.addedBooks} книг, ${result.addedCollections} подборок, ${result.addedChallenges} челленджей · пропущено дублей: ${result.skippedBooks}`, 'success');
+        showToast(`📥 Добавлено: ${result.addedBooks} книг, ${result.addedCollections} подборок, ${result.addedChallenges} челленджей · пропущено дублей: ${result.skippedBooks}${result.appliedSettings ? ` · настроек: ${result.appliedSettings}` : ''}`, 'success');
       } else {
         showToast('📥 Импортировано', 'success');
       }
@@ -2802,10 +3219,13 @@ function renderSettingsTab() {
   bind('#set-clear', async () => {
     const ok = await showConfirm('Удалить ВСЕ данные? Это необратимо!', { danger: true, okText: 'Удалить всё' });
     if (ok) {
-      const db = await openDB();
-      ['books','covers','settings','collections','challenges','tags','previews'].forEach(st => {
-        try { db.transaction(st, 'readwrite').objectStore(st).clear(); } catch {}
-      });
+      try {
+        await clearAllData();
+      } catch (err) {
+        console.error('[DB] set-clear error:', err);
+        showToast('❌ Не удалось очистить данные', 'error');
+        return;
+      }
       await refreshData();
       showToast('🗑️ Всё удалено', 'info');
     }
@@ -2814,13 +3234,52 @@ function renderSettingsTab() {
   getDBSize().then(size => { const el = mc.querySelector('#set-dbsize'); if (el) el.textContent = size; });
 }
 
+// 🆕 P1-5: единая обёртка write-операций на границе UI.
+// Ошибка IndexedDB → error toast, НЕ выполняется success-код.
+async function dbSafe(op, errorMsg) {
+  try {
+    await op();
+    return true;
+  } catch (err) {
+    console.error('[DB]', errorMsg, err);
+    showToast('❌ ' + errorMsg, 'error');
+    return false;
+  }
+}
+
+// 🆕 P3-1: «Очистить всё» — вынесено из bind('#set-clear') для тестируемости.
+// Список stores дополнен pending-sync (миграция v6); единая
+// readwrite-транзакция, Promise резолвится только после complete,
+// при abort/error/NotFoundException — reject (success-код не выполняется).
+export async function clearAllData() {
+  const db = await openDB();
+  const candidates = ['books','covers','settings','collections','challenges','tags','previews','pending-sync'];
+  const stores = candidates.filter(st => db.objectStoreNames.contains(st));
+  if (!stores.length) return;
+  const tx = db.transaction(stores, 'readwrite');
+  // P3-1: без try/catch — исчезнувший store обязан привести к reject,
+  // а не к молчаливой «полу-очистке»
+  stores.forEach(st => tx.objectStore(st).clear());
+  await new Promise((resolve, reject) => {
+    tx.addEventListener('complete', () => resolve());
+    tx.addEventListener('abort', () => reject(new Error('abort')));
+    tx.addEventListener('error', () => reject(new Error('error')));
+  });
+}
+
 async function saveAppSettings() {
   const g = (id) => document.querySelector(id);
   if (g('#set-lr-appid')) S.settings.lrAppId = g('#set-lr-appid').value.trim();
   if (g('#set-lr-secret')) S.settings.lrSecret = g('#set-lr-secret').value.trim();
   if (g('#set-lr-pid')) S.settings.lrPartnerId = g('#set-lr-pid').value.trim();
   if (g('#set-lr-psecret')) S.settings.lrPartnerSecret = g('#set-lr-psecret').value.trim();
-  await saveSettings(S.settings);
+  // 🆕 P1-5: сбой записи настроек не «проглатывается»
+  try {
+    await saveSettings(S.settings);
+  } catch (err) {
+    console.error('[DB] saveAppSettings error:', err);
+    showToast('❌ Не удалось сохранить настройки: ошибка базы данных', 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -2849,22 +3308,28 @@ function toggleDrawer(open) {
 }
 function openOverlay(el) {
   el.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-  trackOverlay(el);
+  trackOverlay(el, { onClose: () => closeOverlay(el) });
 }
 function closeOverlay(el) {
   el.classList.add('hidden');
   untrackOverlay(el);
-  const anyOpen = [...document.querySelectorAll('.overlay')].some(o => !o.classList.contains('hidden'));
-  if (!anyOpen) document.body.style.overflow = '';
 }
 
 let loadingEl = null;
-function showLoading(text = 'Загрузка...') {
+function showLoading(text = 'Загрузка...', onCancel = null) {
   hideLoading();
   loadingEl = document.createElement('div');
   loadingEl.className = 'loading-overlay';
   loadingEl.innerHTML = `<div class="spinner"></div><div class="loading-text">${text}</div>`;
+  // 🆕 P2-13: кнопка «Отменить» для длительных операций (ISBN lookup).
+  if (typeof onCancel === 'function') {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'loading-cancel';
+    cancelBtn.textContent = 'Отменить';
+    cancelBtn.addEventListener('click', onCancel);
+    loadingEl.appendChild(cancelBtn);
+  }
   document.body.appendChild(loadingEl);
 }
 function updateLoading(text) { if (loadingEl) loadingEl.querySelector('.loading-text').textContent = text; }
@@ -2916,17 +3381,56 @@ function fireConfetti() {
 // ═══════════════════════════════════════════════
 //  PWA INSTALL
 // ═══════════════════════════════════════════════
-function setupInstallPrompt() {
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    S.deferredPrompt = e;
-    DOM.installBanner.classList.remove('hidden');
-  });
-  window.addEventListener('appinstalled', () => {
-    DOM.installBanner.classList.add('hidden');
-    S.deferredPrompt = null;
-    showToast('✅ Приложение установлено!', 'success');
-  });
+// 🆕 P3-3: слушатели регистрируются СИНХРОННО при загрузке модуля,
+// а не после await-цепочки init() — иначе beforeinstallprompt (Chrome
+// стреляет, как только criteria выполнены, ещё до конца старта) может
+// быть пропущен, и возможность «Установить» будет потеряна навсегда.
+window.addEventListener('beforeinstallprompt', beforeInstallPromptHandler);
+window.addEventListener('appinstalled', onAppInstalled);
+
+function beforeInstallPromptHandler(e) {
+  e.preventDefault();
+  S.deferredPrompt = e;
+  maybeShowInstallBanner();
+}
+
+function onAppInstalled() {
+  if (DOM.installBanner) DOM.installBanner.classList.add('hidden');
+  S.deferredPrompt = null;
+  // приложение установлено — iOS-инструкция больше не нужна
+  try { localStorage.setItem(IOS_INSTALL_DISMISS_KEY, '1'); } catch { /* ignore */ }
+  showToast('✅ Приложение установлено!', 'success');
+}
+
+// iOS Safari не имеет beforeinstallprompt: ненавязчивая инструкция
+// «Поделиться → На экран Домой» с dismiss persistence (P3-3).
+const IOS_INSTALL_DISMISS_KEY = 'btp_install_ios_dismissed';
+
+export function iosInstallDecision({ isIOS, standalone, dismissed }) {
+  return Boolean(isIOS && !standalone && !dismissed);
+}
+
+export function iosInstallInfo() {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = Boolean(window.matchMedia?.('(display-mode: standalone)').matches)
+    || navigator.standalone === true;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(IOS_INSTALL_DISMISS_KEY) === '1'; } catch { /* ignore */ }
+  return { show: iosInstallDecision({ isIOS, standalone, dismissed }), isIOS, standalone, dismissed };
+}
+
+export function dismissIosInstallBanner() {
+  try { localStorage.setItem(IOS_INSTALL_DISMISS_KEY, '1'); } catch { /* ignore */ }
+  if (DOM.installIosBanner) DOM.installIosBanner.classList.add('hidden');
+}
+
+function maybeShowInstallBanner() {
+  if (!DOM.installBanner) return;
+  if (S.deferredPrompt) { DOM.installBanner.classList.remove('hidden'); return; }
+  if (iosInstallInfo().show && DOM.installIosBanner) {
+    DOM.installIosBanner.classList.remove('hidden');
+  }
 }
 
 // ═══════════════════════════════════════════════

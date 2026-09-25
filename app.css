@@ -553,6 +553,12 @@ a:hover { text-decoration: underline; }
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 .btn-secondary:disabled { opacity: .5; cursor: not-allowed; }
 
+/* 🆕 P2-7: «Показать ещё» — широкая кнопка под списком */
+.load-more-btn {
+  width: 100%;
+  margin-top: 14px;
+}
+
 .btn-danger {
   background: var(--red-dim); color: var(--red);
   border: 1px solid transparent;
@@ -1630,6 +1636,18 @@ details summary:hover { color: var(--accent); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { font-size: .9rem; color: var(--text-secondary); }
+.loading-cancel {
+  margin-top: 4px;
+  padding: 8px 20px;
+  font-size: .9rem;
+  color: var(--text);
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.loading-cancel:active { opacity: .7; }
 
 /* ═══════════════════════════════════════════════
    КОНФЕТТИ
@@ -1747,6 +1765,10 @@ details summary:hover { color: var(--accent); }
   .fab-group { bottom: calc(20px + env(safe-area-inset-bottom)); }
   .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .pwa-banner { bottom: calc(16px + env(safe-area-inset-bottom)); }
+  /* 🆕 P2-17: нижние оверлеи не прячут контент под home-indicator /
+     виртуальной клавиатурой на iPhone/iPad */
+  .overlay-panel,
+  .cover-viewer-panel { padding-bottom: env(safe-area-inset-bottom); }
 }
 
 /* ═══════════════════════════════════════════════

@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────
 import { loadCollections, putCollection, delCollection,
          addBookToCollection, removeBookFromCollection } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: из utils
+import { esc, safeUrl, applyCoverFallback, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: из utils; 🆕 P2-18: keyboard карточек
 import { icon } from './icons.js';
 import { showConfirm } from './uikit.js';
 
@@ -174,9 +174,9 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
         ${colBooks.map(b => `
           <div class="book-card" data-book-id="${b.id}">
             ${b.coverUrl
-              ? `<img class="book-cover" src="${b.coverUrl}" alt="" loading="lazy"
+              ? `<img class="book-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy"
                       referrerpolicy="no-referrer"
-                      onerror="this.style.display='none'"/>`
+                      data-cover-fallback/>`
               : `<div class="book-cover-placeholder">${icon('bookClosed', 24)}</div>`}
             <div class="book-info">
               <div class="book-title">${esc(b.title)}</div>
@@ -194,6 +194,8 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
     </button>
   `;
 
+  applyCoverFallback(container);
+
   // События
   container.querySelector('#col-back').addEventListener('click', () => callbacks.onBack());
   const editHero = container.querySelector('#col-edit-hero');
@@ -204,6 +206,8 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
       if (e.target.closest('[data-col-remove]')) return;
       callbacks.onOpenBook(card.dataset.bookId);
     });
+    // 🆕 P2-18: keyboard-доступность карточки книги в подборке
+    makeCardKeyboardAccessible(card);
   });
 
   container.querySelectorAll('[data-col-remove]').forEach(btn => {
@@ -264,19 +268,17 @@ export function openCollectionForm(collection, onSave) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay); // 🆕 v3.8.4: жест «назад»
+  trackOverlay(overlay, { onClose: () => close() }); // 🆕 v3.8.4: жест «назад»
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.col-form-close').addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  overlay.querySelector('#col-f-save').addEventListener('click', () => {
+  overlay.querySelector('#col-f-save').addEventListener('click', async () => {
     const name = overlay.querySelector('#col-f-name').value.trim();
     if (!name) {
       showToast('⚠️ Введите название', 'error');
@@ -292,8 +294,16 @@ export function openCollectionForm(collection, onSave) {
       order: typeof c.order === 'number' ? c.order : undefined,
       createdAt: c.createdAt || new Date().toISOString(),
     };
-    onSave(data);
-    close();
+    // 🆕 P1-5: форма закрывается ТОЛЬКО после подтверждённой записи.
+    // onSave возвращает true при успехе; при ошибке — false/throw.
+    let ok = false;
+    try {
+      ok = await onSave(data);
+    } catch (err) {
+      console.error('[DB] collection form save error:', err);
+      showToast('❌ Ошибка сохранения подборки: база данных', 'error');
+    }
+    if (ok) close();
   });
 }
 
@@ -337,13 +347,11 @@ export function openBookCollectionsPicker(bookId, books, collections, onDone) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.picker-close').addEventListener('click', close);
@@ -398,7 +406,7 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
                 <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
-                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt=""
+                  ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt=""
                           style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                   : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
@@ -414,13 +422,11 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.add-books-close').addEventListener('click', close);
@@ -442,10 +448,19 @@ export function openAddBooksToCollection(collectionId, books, collection, onDone
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       const checked = overlay.querySelectorAll('#add-books-list input:checked');
-      for (const cb of checked) {
-        await addBookToCollection(collectionId, cb.dataset.bookId);
+      // 🆕 P1-5: считаем РЕАЛЬНО записанные книги; при ошибке БД — error toast
+      let added = 0;
+      try {
+        for (const cb of checked) {
+          const ok = await addBookToCollection(collectionId, cb.dataset.bookId);
+          if (ok) added++;
+        }
+      } catch (err) {
+        console.error('[DB] add books to collection error:', err);
+        showToast('❌ Не удалось добавить книги: база данных', 'error');
+        return;
       }
-      showToast(`✅ Добавлено: ${checked.length}`, 'success');
+      showToast(added > 0 ? `✅ Добавлено: ${added}` : '⚠️ Книги не добавлены', added > 0 ? 'success' : 'error');
       close();
       if (onDone) onDone();
     });

@@ -1,20 +1,20 @@
 // 📦 BookTrackerPro — content.js
-// 🔖 v3.8.5 | 2026-08-17
+// 🔖 v3.8.6 | 2026-09-25
 // 📝 Контент-план для бук-блогера
 //
-//    Новое в 3.8.5:
+//    Новое в 3.8.6: без функциональных изменений.
+//
+//    Сохранено из 3.8.5:
 //      — openContentDetail() — read-only карточка контента.
 //        Открывается вместо редактора при клике по контенту
 //        (из карточки книги, контент-плана, календаря).
 //        Внутри — «Редактировать», «Удалить», «→ след. статус».
-//
-//    Сохранено из 3.8.4:
 //      — defaultPlatform из настроек (3-й аргумент openContentForm)
 //      — Отчётность издательству, превью публикаций (Microlink)
 //      — SVG-иконки, кастомные селекты/дата-пикеры
 // ─────────────────────────────────────────────
-import { addContentToBook, updateContentInBook, removeContentFromBook, loadBooks } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay, formatDateRu } from './utils.js';
+import { addContentToBook, updateContentInBook, removeContentFromBook, moveContentItem, loadBooks } from './db.js';
+import { esc, safeUrl, safeLinkUrl, escAttr, showToast, trackOverlay, untrackOverlay, formatDateRu, makeCardKeyboardAccessible } from './utils.js';
 import { fetchLinkPreview } from './microlink.js';
 import { brandIcon, icon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import { attachCustomSelect, attachDatePicker, showConfirm } from './uikit.js';
@@ -60,6 +60,8 @@ const STATUS_ORDER = ['idea', 'planned', 'filming', 'editing', 'published'];
 // ═══════════════════════════════════════════════
 //  1. ВКЛАДКА «КОНТЕНТ»
 // ═══════════════════════════════════════════════
+// 🆕 P2-7: окно рендера контента вместо полной пересборки всех items
+export const CONTENT_PAGE_SIZE = 100;
 export function renderContentTab(container, books, settings, callbacks) {
   const allContent = [];
   for (const book of books) {
@@ -95,7 +97,13 @@ export function renderContentTab(container, books, settings, callbacks) {
     ? allContent
     : allContent.filter(c => c.status === currentFilter);
 
-  const groups = groupByDate(filtered);
+  // 🆕 P2-7: окно — рендерим не более CONTENT_PAGE_SIZE карточек,
+  // остальные — через «Показать ещё»
+  if (!container._contentLimit) container._contentLimit = CONTENT_PAGE_SIZE;
+  const limit = container._contentLimit;
+  const visibleItems = filtered.slice(0, limit);
+  const hasMore = filtered.length > limit;
+  const groups = groupByDate(visibleItems);
 
   container.innerHTML = `
     <div class="filter-bar no-scrollbar">
@@ -105,7 +113,7 @@ export function renderContentTab(container, books, settings, callbacks) {
         </button>
       `).join('')}
     </div>
-    ${filtered.length === 0 ? `
+    ${visibleItems.length === 0 ? `
       <div class="empty-state">
         <div class="empty-icon">${icon('film', 56)}</div>
         <div class="empty-title">Нет контента</div>
@@ -127,15 +135,33 @@ export function renderContentTab(container, books, settings, callbacks) {
         </div>
       `).join('')}
     `}
+    ${hasMore ? `
+      <button id="content-load-more" class="btn-secondary load-more-btn" data-hidden="${filtered.length - limit}">
+        ${icon('chevronDown', 14)} Показать ещё (${filtered.length - limit})
+      </button>
+    ` : ''}
     <button id="content-add-btn" class="btn-primary mt-16">${icon('plus', 16)} Новый контент</button>
   `;
 
   container.querySelectorAll('[data-cfilter]').forEach(chip => {
     chip.addEventListener('click', () => {
       container._contentFilter = chip.dataset.cfilter;
+      container._contentLimit = CONTENT_PAGE_SIZE;
       renderContentTab(container, books, settings, callbacks);
     });
   });
+
+  const loadMoreBtn = container.querySelector('#content-load-more');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      const scrollY = (typeof window !== 'undefined' && window.scrollY) || 0;
+      container._contentLimit = limit + CONTENT_PAGE_SIZE;
+      renderContentTab(container, books, settings, callbacks);
+      if (scrollY > 0) {
+        try { window.scrollTo(0, scrollY); } catch (e) { /* скролл недоступен (jsdom) */ }
+      }
+    });
+  }
 
   const addBtn = container.querySelector('#content-add-btn');
   const emptyAdd = container.querySelector('#content-empty-add');
@@ -151,6 +177,8 @@ export function renderContentTab(container, books, settings, callbacks) {
         card.dataset.bookId
       );
     });
+    // 🆕 P2-18: keyboard-доступность карточки контента
+    makeCardKeyboardAccessible(card);
   });
 
   container.querySelectorAll('[data-status-btn]').forEach(btn => {
@@ -190,6 +218,7 @@ function renderContentCard(item) {
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
   const dateStr = item.publishedDate || item.plannedDate || '';
+  const pubUrl = item.publishedUrl ? safeLinkUrl(item.publishedUrl) : '';
 
   const reportSent = item.reportSent || false;
   const reportBadge = reportSent
@@ -208,11 +237,11 @@ function renderContentCard(item) {
           ${dateStr ? `<span class="content-date">${icon('calendar', 11)} ${dateStr}</span>` : ''}
           ${reportBadge}
         </div>
-        ${item.publishedUrl ? `
-          <div class="content-published" data-preview-url="${esc(item.publishedUrl)}">
+        ${pubUrl ? `
+          <div class="content-published" data-preview-url="${esc(pubUrl)}">
             <div class="content-meta mt-8">
-              <a href="${esc(item.publishedUrl)}" target="_blank" rel="noopener" class="text-small">${icon('external', 12)} Открыть</a>
-              <button data-copy-url="${esc(item.publishedUrl)}"
+              <a href="${esc(pubUrl)}" target="_blank" rel="noopener" class="text-small">${icon('external', 12)} Открыть</a>
+              <button data-copy-url="${esc(pubUrl)}"
                 style="background:none;border:none;cursor:pointer;font-size:.78rem;color:var(--text-muted);display:inline-flex;align-items:center;gap:4px">
                 ${icon('copy', 11)} Копировать ссылку
               </button>
@@ -275,7 +304,7 @@ async function hydratePreview(el) {
   card.rel = 'noopener';
   card.innerHTML = `
     ${preview.image
-      ? `<img class="link-preview-img" src="${preview.image}" alt="" loading="lazy"/>`
+      ? `<img class="link-preview-img" src="${esc(safeUrl(preview.image))}" alt="" loading="lazy"/>`
       : `<div class="link-preview-img link-preview-img-empty">${platformIcon(preview.source, 18)}</div>`}
     <div class="link-preview-info">
       <div class="link-preview-title">${esc(preview.title || url)}</div>
@@ -309,6 +338,7 @@ export function openContentDetail(item, book, opts = {}) {
   const idx = STATUS_ORDER.indexOf(item.status);
   const nextStatus = idx < STATUS_ORDER.length - 1 ? STATUS_ORDER[idx + 1] : null;
   const nextInfo = nextStatus ? CONTENT_STATUSES[nextStatus] : null;
+  const pubUrl = item.publishedUrl ? safeLinkUrl(item.publishedUrl) : '';
 
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
@@ -325,7 +355,7 @@ export function openContentDetail(item, book, opts = {}) {
         ${book ? `
           <div class="cd-book">
             ${book.coverUrl
-              ? `<img src="${book.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:40px;height:60px;border-radius:5px;object-fit:cover"/>`
+              ? `<img src="${esc(safeUrl(book.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:40px;height:60px;border-radius:5px;object-fit:cover"/>`
               : `<span style="width:40px;height:60px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:5px">${icon('bookClosed', 20)}</span>`}
             <div>
               <div style="font-weight:700;font-size:.9rem">${esc(book.title)}</div>
@@ -357,11 +387,11 @@ export function openContentDetail(item, book, opts = {}) {
         ` : ''}
 
         <!-- Публикация -->
-        ${item.publishedUrl ? `
+        ${pubUrl ? `
           <div class="detail-section">
             <h3>${icon('link', 14)} Публикация</h3>
-            <div class="cd-published" data-preview-url="${esc(item.publishedUrl)}">
-              <a href="${esc(item.publishedUrl)}" target="_blank" rel="noopener" class="text-small">
+            <div class="cd-published" data-preview-url="${esc(pubUrl)}">
+              <a href="${esc(pubUrl)}" target="_blank" rel="noopener" class="text-small">
                 ${icon('external', 12)} Открыть ссылку
               </a>
             </div>
@@ -383,13 +413,11 @@ export function openContentDetail(item, book, opts = {}) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.cd-close').addEventListener('click', close);
@@ -403,7 +431,15 @@ export function openContentDetail(item, book, opts = {}) {
   overlay.querySelector('#cd-delete').addEventListener('click', async () => {
     const ok = await showConfirm('Удалить этот контент?', { danger: true, okText: 'Удалить' });
     if (!ok) return;
-    await removeContentFromBook(book?.id, item.id);
+    // 🆕 P1-5: success toast только после подтверждённого удаления
+    try {
+      const deleted = await removeContentFromBook(book?.id, item.id);
+      if (!deleted) throw new Error('content item not found');
+    } catch (err) {
+      console.error('[DB] content delete error:', err);
+      showToast('❌ Не удалось удалить контент: база данных', 'error');
+      return;
+    }
     close();
     showToast('🗑️ Контент удалён', 'info');
     document.dispatchEvent(new CustomEvent('data-changed'));
@@ -411,7 +447,14 @@ export function openContentDetail(item, book, opts = {}) {
 
   const nextBtn = overlay.querySelector('#cd-next');
   if (nextBtn) nextBtn.addEventListener('click', async () => {
-    await updateContentStatus(book?.id, item.id, nextStatus);
+    // 🆕 P1-5: success toast только после успешной записи
+    try {
+      await updateContentStatus(book?.id, item.id, nextStatus);
+    } catch (err) {
+      console.error('[DB] content status error:', err);
+      showToast('❌ Не удалось обновить статус: база данных', 'error');
+      return;
+    }
     close();
     if (nextStatus === 'published') showToast('📤 Контент опубликован! 🎉', 'success');
     else showToast(`Статус: ${nextInfo.label}`, 'success');
@@ -436,10 +479,13 @@ export function openContentForm(item, bookId, settings = {}) {
 
   loadBooks().then(books => {
     renderContentFormBody(body, books, item, bookId, settings);
+  }).catch((err) => {
+    console.error('[DB] loadBooks for content form error:', err);
+    body.innerHTML = '<div class="empty-state">⚠️ Не удалось загрузить книги<br><span class="small text-muted">Ошибка базы данных</span></div>';
   });
 
   overlay.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
+  trackOverlay(overlay, { onClose: () => closeContentForm() });
 }
 
 function renderContentFormBody(body, books, item, preselectedBookId, settings = {}) {
@@ -498,7 +544,7 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
     </div>
     <div class="form-group">
       <label>${icon('link', 13)} Ссылка на публикацию</label>
-      <input type="url" id="cf-url" value="${esc(c.publishedUrl || '')}" placeholder="https://youtube.com/watch?v=..."/>
+      <input type="url" id="cf-url" value="${escAttr(c.publishedUrl || '')}" placeholder="https://youtube.com/watch?v=..."/>
       <div class="form-hint">Превью подтянется автоматически (Microlink)</div>
     </div>
     <div class="form-group">
@@ -582,7 +628,7 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       status: body.querySelector('#cf-status').value,
       plannedDate: body.querySelector('#cf-planned').value,
       publishedDate: body.querySelector('#cf-published').value,
-      publishedUrl: body.querySelector('#cf-url').value.trim(),
+      publishedUrl: safeLinkUrl(body.querySelector('#cf-url').value.trim()),
       notes: body.querySelector('#cf-notes').value.trim(),
       reportSent: isReportSent,
       reportDate: isReportSent ? body.querySelector('#cf-report-date').value : '',
@@ -590,25 +636,31 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       updatedAt: new Date().toISOString(),
       bookId: bookId || null,
     };
+    // 🆕 P1-5: проверяем результат каждой записи — если «not found» (false) или
+    // операция отклонена (rejection), показываем ошибку и НЕ закрываем форму.
     try {
       const finalBookId = bookId || '__no_book__';
       if (item) {
         const oldBookId = item.bookId || c.bookId || bookId;
         if (oldBookId && oldBookId !== finalBookId) {
-          await removeContentFromBook(oldBookId, contentData.id);
-          await addContentToBook(finalBookId, contentData);
+          // 🆕 P1-7: атомарный перенос — одна транзакция по books,
+          // при сбое элемент не может пропасть или продублироваться.
+          const moved = await moveContentItem(oldBookId, finalBookId, contentData.id, contentData);
+          if (!moved) throw new Error('перенос контента не применён');
         } else {
-          await updateContentInBook(finalBookId, contentData.id, contentData);
+          const saved = await updateContentInBook(finalBookId, contentData.id, contentData);
+          if (!saved) throw new Error('контент не найден');
         }
         showToast('✅ Контент обновлён', 'success');
       } else {
-        await addContentToBook(finalBookId, contentData);
+        const saved = await addContentToBook(finalBookId, contentData);
+        if (!saved) throw new Error('книга не найдена');
         showToast('✅ Контент добавлен', 'success');
       }
       closeContentForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
     } catch (e) {
-      showToast('❌ Ошибка сохранения', 'error');
+      showToast('❌ Ошибка сохранения: база данных', 'error');
       console.error('[Content] Save error:', e);
     }
   });
@@ -620,11 +672,12 @@ function renderContentFormBody(body, books, item, preselectedBookId, settings = 
       if (!ok) return;
       try {
         const bookId = body.querySelector('#cf-book').value || c.bookId;
-        await removeContentFromBook(bookId, c.id);
+        const deleted = await removeContentFromBook(bookId, c.id);
+        if (!deleted) throw new Error('content item not found');
         showToast('🗑️ Контент удалён', 'info');
         closeContentForm();
         document.dispatchEvent(new CustomEvent('data-changed'));
-      } catch { showToast('❌ Ошибка удаления', 'error'); }
+      } catch { showToast('❌ Ошибка удаления: база данных', 'error'); }
     });
   }
 }
@@ -633,7 +686,7 @@ function closeContentForm() {
   const overlay = document.getElementById('content-overlay');
   if (overlay) {
     overlay.classList.add('hidden');
-    document.body.style.overflow = '';
+    untrackOverlay(overlay);
   }
 }
 

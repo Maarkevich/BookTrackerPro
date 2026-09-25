@@ -1,0 +1,15 @@
+{
+  "name": "booktrackerpro",
+  "version": "3.8.6",
+  "private": true,
+  "description": "BookTrackerPro — offline-first PWA для управления личной библиотекой",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.0.1",
+    "vitest": "^3.0.0"
+  }
+}

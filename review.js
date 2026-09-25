@@ -25,7 +25,7 @@
 //      — Копирование отзыва для описания видео
 // ─────────────────────────────────────────────
 import { saveReviewForBook, removeReviewFromBook, loadBooks } from './db.js';
-import { esc, showToast } from './utils.js'; // 🆕 v3.8.4: было из './app.js'
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев; 🆕 P2-18: keyboard карточек
 import { captureQuoteByPhoto } from './ocr.js';
 import { icon } from './icons.js';
 import { attachCustomSelect, showConfirm } from './uikit.js'; // 🆕 showConfirm
@@ -105,6 +105,8 @@ export function renderReviewsTab(container, books, callbacks) {
       if (e.target.closest('button')) return;
       callbacks.onOpenBook(card.dataset.bookId);
     });
+    // 🆕 P2-18: keyboard-доступность карточки отзыва
+    makeCardKeyboardAccessible(card);
   });
   container.querySelectorAll('[data-edit-review]').forEach(btn => {
     btn.addEventListener('click', (e) => { e.stopPropagation(); callbacks.onEdit(btn.dataset.editReview); });
@@ -133,7 +135,7 @@ function renderReviewCard(book) {
     <div class="review-card" data-book-id="${book.id}">
       <div class="review-header">
         ${book.coverUrl
-          ? `<img class="review-cover" src="${book.coverUrl}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
+          ? `<img class="review-cover" src="${esc(safeUrl(book.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
           : `<div class="review-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
         <div style="flex:1;min-width:0">
           <div class="review-title">${esc(book.title)}</div>
@@ -174,7 +176,12 @@ export function openReviewForm(bookId) {
     title.innerHTML = `${icon('pen', 18)} Отзыв: ${esc(book.title)}`;
     renderReviewFormBody(body, book);
     overlay.classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
+    // 🆕 P2-17: review-форма в back-стеке (Android back / Escape закрывают её),
+    // scroll-lock и фокус — единый lifecycle из utils.js.
+    trackOverlay(overlay, { onClose: () => closeReviewForm() });
+  }).catch((err) => {
+    console.error('[DB] loadBooks for review form error:', err);
+    showToast('❌ Не удалось загрузить книгу: база данных', 'error');
   });
 }
 
@@ -186,7 +193,7 @@ function renderReviewFormBody(body, book) {
     <!-- Книга -->
     <div class="flex gap-8 items-center mb-16">
       ${book.coverUrl
-        ? `<img src="${book.coverUrl}" referrerpolicy="no-referrer" style="width:48px;height:72px;border-radius:6px;object-fit:cover;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>`
+        ? `<img src="${esc(safeUrl(book.coverUrl))}" referrerpolicy="no-referrer" style="width:48px;height:72px;border-radius:6px;object-fit:cover;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>`
         : `<div style="width:48px;height:72px;border-radius:6px;background:var(--bg-input);display:flex;align-items:center;justify-content:center">${icon('bookClosed', 22)}</div>`}
       <div>
         <div style="font-weight:700;font-size:.95rem">${esc(book.title)}</div>
@@ -414,12 +421,13 @@ function renderReviewFormBody(body, book) {
       updatedAt: new Date().toISOString(),
     };
     try {
-      await saveReviewForBook(book.id, review);
+      const saved = await saveReviewForBook(book.id, review);
+      if (!saved) throw new Error('book not found');
       showToast('✅ Отзыв сохранён', 'success');
       closeReviewForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
     } catch (e) {
-      showToast('❌ Ошибка сохранения', 'error');
+      showToast('❌ Ошибка сохранения: база данных', 'error');
       console.error('[Review] Save error:', e);
     }
   });
@@ -443,11 +451,12 @@ function renderReviewFormBody(body, book) {
     const ok = await showConfirm('Удалить отзыв?', { danger: true, okText: 'Удалить' });
     if (!ok) return;
     try {
-      await removeReviewFromBook(book.id);
+      const deleted = await removeReviewFromBook(book.id);
+      if (!deleted) throw new Error('book not found');
       showToast('🗑️ Отзыв удалён', 'info');
       closeReviewForm();
       document.dispatchEvent(new CustomEvent('data-changed'));
-    } catch { showToast('❌ Ошибка удаления', 'error'); }
+    } catch { showToast('❌ Ошибка удаления: база данных', 'error'); }
   });
 }
 
@@ -550,6 +559,6 @@ function closeReviewForm() {
   const overlay = document.getElementById('review-overlay');
   if (overlay) {
     overlay.classList.add('hidden');
-    document.body.style.overflow = '';
+    untrackOverlay(overlay);
   }
 }

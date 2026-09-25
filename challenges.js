@@ -33,7 +33,7 @@
 import { loadChallenges, putChallenge, delChallenge,
          addBookToChallenge, removeBookFromChallenge,
          BOOK_STATUSES } from './db.js';
-import { esc, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: trackOverlay из utils
+import { esc, safeUrl, showToast, trackOverlay, untrackOverlay } from './utils.js'; // 🆕 v3.8.4: trackOverlay из utils
 import { attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, GOAL_ICONS } from './icons.js';
 
@@ -422,7 +422,7 @@ function renderChallengeBook(b) {
   return `
     <div class="content-list-item" data-chd-book="${b.id}" style="cursor:pointer">
       ${b.coverUrl
-        ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+        ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
         : `<span style="display:flex;align-items:center;justify-content:center;width:32px;height:48px">${icon('bookClosed', 18)}</span>`}
       <div class="content-list-info">
         <div class="content-list-title">${esc(b.title)}</div>
@@ -548,15 +548,13 @@ export function openChallengeForm(challenge, books, onSave) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   let goalType = c.goalType || 'books';
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.ch-form-close').addEventListener('click', close);
@@ -597,7 +595,7 @@ export function openChallengeForm(challenge, books, onSave) {
   });
 
   // Сохранение
-  overlay.querySelector('#ch-f-save').addEventListener('click', () => {
+  overlay.querySelector('#ch-f-save').addEventListener('click', async () => {
     const name = overlay.querySelector('#ch-f-name').value.trim();
     if (!name) {
       showToast('⚠️ Введите название', 'error');
@@ -619,8 +617,16 @@ export function openChallengeForm(challenge, books, onSave) {
       notes: c.notes || [],
       createdAt: c.createdAt || new Date().toISOString(),
     };
-    onSave(data);
-    close();
+    // 🆕 P1-5: форма закрывается ТОЛЬКО после подтверждённой записи.
+    // onSave возвращает true при успехе; при ошибке — false/throw.
+    let ok = false;
+    try {
+      ok = await onSave(data);
+    } catch (err) {
+      console.error('[DB] challenge form save error:', err);
+      showToast('❌ Ошибка сохранения челленджа: база данных', 'error');
+    }
+    if (ok) close();
   });
 }
 
@@ -657,7 +663,7 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
               <label class="picker-row" data-search="${(b.title + ' ' + b.author).toLowerCase()}">
                 <input type="checkbox" data-book-id="${b.id}"/>
                 ${b.coverUrl
-                  ? `<img src="${b.coverUrl}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
+                  ? `<img src="${esc(safeUrl(b.coverUrl))}" referrerpolicy="no-referrer" alt="" style="width:32px;height:48px;border-radius:4px;object-fit:cover"/>`
                   : `<span style="width:32px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-input);border-radius:4px">${icon('bookClosed', 18)}</span>`}
                 <span class="picker-name" style="flex:1">${esc(b.title)}</span>
               </label>
@@ -672,13 +678,11 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
   `;
 
   document.body.appendChild(overlay);
-  document.body.style.overflow = 'hidden';
-  trackOverlay(overlay);
+  trackOverlay(overlay, { onClose: () => close() });
 
   const close = () => {
     overlay.remove();
     untrackOverlay(overlay);
-    document.body.style.overflow = '';
   };
 
   overlay.querySelector('.ch-books-close').addEventListener('click', close);
@@ -698,10 +702,19 @@ export function openAddBooksToChallenge(challengeId, challenge, books, onDone) {
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
       const checked = overlay.querySelectorAll('#ch-books-list input:checked');
-      for (const cb of checked) {
-        await addBookToChallenge(challengeId, cb.dataset.bookId);
+      // 🆕 P1-5: считаем РЕАЛЬНО записанные книги; при ошибке БД — error toast
+      let added = 0;
+      try {
+        for (const cb of checked) {
+          const ok = await addBookToChallenge(challengeId, cb.dataset.bookId);
+          if (ok) added++;
+        }
+      } catch (err) {
+        console.error('[DB] add books to challenge error:', err);
+        showToast('❌ Не удалось добавить книги: база данных', 'error');
+        return;
       }
-      showToast(`✅ Добавлено: ${checked.length}`, 'success');
+      showToast(added > 0 ? `✅ Добавлено: ${added}` : '⚠️ Книги не добавлены', added > 0 ? 'success' : 'error');
       close();
       if (onDone) onDone();
     });

@@ -7,11 +7,11 @@
 //      worker.min.js
 //      tesseract-core-simd.wasm.js
 //      rus.traineddata.gz   (русский)
-//      eng.traineddata.gz   (английский, опционально)
+//      eng.traineddata.gz   (английский, НЕ поставляется — см. P1-12)
 //
 //    Флоу:
 //      📷 Фото страницы → предобработка (canvas)
-//      → Tesseract (rus+eng) → текст → правка → в цитату
+//      → Tesseract (rus) → текст → правка → в цитату
 //
 //    Точность для печатного текста: ~90-95%
 //
@@ -26,19 +26,34 @@
 //      — showToast импортируется из utils.js (разрыв цикла)
 //      — SVG-иконки из icons.js в хроме оверлея
 // ─────────────────────────────────────────────
-import { showToast } from './utils.js';
+import { showToast, trackOverlay, untrackOverlay, releaseOverlay } from './utils.js';
 import { icon } from './icons.js';
+// 🆕 P2-15: конкуренция камер OCR↔scanner централизуется здесь —
+// при старте камеры OCR останавливаем активный ISBN-сканер
+// (запрет одновременного camera flow).
+import { isScannerActive, stopScanner } from './scanner.js';
 
 // Базовый путь к файлам Tesseract (в корне проекта)
 const BASE = '/BookTrackerPro';
 
-// Языки распознавания (rus — русский, eng — английский)
-const OCR_LANGS = 'rus+eng';
+// Языки распознавания.
+// 🆕 P1-12: только русский — `eng.traineddata.gz` НЕ поставляется в проекте
+// (проверенный `rus.traineddata.gz` = 8 634 337 bytes, eng отсутствует).
+// Раньше `rus+eng` заставлял Tesseract при каждом createWorker запрашивать
+// eng-модель → 404 → cold-start OCR падал даже для русского текста.
+const OCR_LANGS = 'rus';
 
-// Кеш воркера (не пересоздаём каждый раз)
+// Кеш воркера (не пересоздаём каждый раз).
+// 🆕 P2-15: политика terminate/recreate — pagehide/terminateOcrWorker()
+// увеличивают _workerEpoch; создающийся в этот момент worker НЕ кешируется
+// и немедленно завершается; следующий запуск OCR создаёт новый воркер.
 let _worker = null;
 let _workerPromise = null;
 let _loadProgress = 0;
+let _workerEpoch = 0;
+
+// 🆕 P2-15: запрет одновременного OCR-флоу (один оверлей за раз).
+let _ocrOpen = false;
 
 // ═══════════════════════════════════════════════
 //  1. ГЛАВНАЯ ФУНКЦИЯ
@@ -59,10 +74,16 @@ let _loadProgress = 0;
  * @returns {Promise<string|null>}
  */
 export function captureQuoteByPhoto() {
+  // 🆕 P2-15: запрет одновременного OCR-флоу (один оверлей + одна камера за раз).
+  if (_ocrOpen) return Promise.resolve(null);
+  _ocrOpen = true;
+
   return new Promise((resolve) => {
     const overlay = buildOverlay();
     document.body.appendChild(overlay);
-    document.body.style.overflow = 'hidden';
+    // 🆕 P2-17: OCR-оверлей в back-стеке (Android back закрывает его),
+    // scroll-lock с refcount, фокус/trap — единый lifecycle из utils.js.
+    trackOverlay(overlay, { onClose: () => close(null) });
 
     const video = overlay.querySelector('#ocr-video');
     const canvas = overlay.querySelector('#ocr-canvas');
@@ -86,7 +107,10 @@ export function captureQuoteByPhoto() {
     async function startCamera() {
       try {
         statusEl.textContent = '📷 Наведите камеру на страницу книги';
-        stream = await navigator.mediaDevices.getUserMedia({
+        // 🆕 P2-15: один camera flow — если ISBN-сканер уже захватил камеру,
+        // останавливаем его (конкуренция OCR↔scanner централизована здесь).
+        if (isScannerActive()) stopScanner();
+        const s = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
             width: { ideal: 1920 },
@@ -94,12 +118,24 @@ export function captureQuoteByPhoto() {
           },
           audio: false,
         });
+        // 🆕 P2-15: оверлей закрыт, пока камера запускалась — не держим поток.
+        if (cancelled) {
+          s.getTracks().forEach(t => t.stop());
+          return;
+        }
+        stream = s;
         video.srcObject = stream;
         video.muted = true;
         video.playsInline = true;
         await video.play();
+        // 🆕 P2-15: отмена во время play — освобождаем камеру сразу.
+        if (cancelled) {
+          stopCamera();
+          return;
+        }
         captureBtn.disabled = false;
       } catch (e) {
+        if (cancelled) return; // 🆕 P2-15: ошибка/отмена после закрытия — UI не трогаем
         console.warn('[OCR] Camera error:', e.message);
         statusEl.textContent = '⚠️ Камера недоступна — выберите фото из галереи';
         captureBtn.disabled = true;
@@ -123,13 +159,46 @@ export function captureQuoteByPhoto() {
 
     // ── Закрытие ──
     function close(result) {
+      if (cancelled) return; // 🆕 P2-15: защита от двойного закрытия/resolve
       cancelled = true;
       stopCamera();
       revokePreview(); // 🆕 v3.8.3: фикс утечки
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('visibilitychange', onVisHidden);
       overlay.remove();
-      document.body.style.overflow = '';
+      // 🆕 P2-17: единый lifecycle — снимаем оверлей из back-стека и
+      // разблокируем скролл/фокус (при жесте «назад» history.back() подавляется).
+      untrackOverlay(overlay);
+      _ocrOpen = false;
       resolve(result);
     }
+
+    // 🆕 P2-15: централизованный lifecycle при навигации/видимости страницы.
+    // pagehide — страница уходит (навигация/закрытие): закрываем оверлей,
+    // камера и воркер освобождаются (SW продолжает жить, но JS-страница — нет).
+    const onPageHide = () => {
+      if (cancelled) return;
+      cancelled = true;
+      stopCamera();
+      revokePreview();
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('visibilitychange', onVisHidden);
+      overlay.remove();
+      releaseOverlay(overlay); // без history.back(): навигацию делает браузер
+      _ocrOpen = false;
+      resolve(null);
+    };
+    // visibilitychange — уход в фон (переключение приложения/вкладки):
+    // освобождаем камеру и воркер, но оверлей держим открытым — пользователь
+    // вернётся и нажмёт «Заново», либо выберет фото из галереи.
+    const onVisHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        stopCamera();
+        terminateOcrWorker();
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('visibilitychange', onVisHidden);
 
     cancelBtn.addEventListener('click', () => close(null));
     overlay.addEventListener('click', (e) => {
@@ -143,6 +212,7 @@ export function captureQuoteByPhoto() {
       canvas.height = video.videoHeight;
       canvas.getContext('2d').drawImage(video, 0, 0);
       canvas.toBlob((blob) => {
+        if (cancelled) return; // 🆕 P2-15: закрыто во время toBlob — не используем
         capturedBlob = blob;
         showPreview(blob);
       }, 'image/jpeg', 0.92);
@@ -151,12 +221,13 @@ export function captureQuoteByPhoto() {
     // ── Выбор из галереи ──
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
-      if (!file) return;
+      if (!file || cancelled) return; // 🆕 P2-15: позднее изменение
       capturedBlob = file;
       showPreview(file);
     });
 
     function showPreview(blob) {
+      if (cancelled) return; // 🆕 P2-15: оверлей закрыт — не трогаем DOM
       stopCamera();
       revokePreview(); // 🆕 v3.8.3: очищаем предыдущий URL
       previewUrl = URL.createObjectURL(blob);
@@ -171,6 +242,7 @@ export function captureQuoteByPhoto() {
     }
 
     retakeBtn.addEventListener('click', () => {
+      if (cancelled) return; // 🆕 P2-15
       capturedBlob = null;
       revokePreview(); // 🆕 v3.8.3
       overlay.querySelector('#ocr-preview').classList.add('hidden');
@@ -184,7 +256,7 @@ export function captureQuoteByPhoto() {
 
     // ── Распознавание ──
     overlay.querySelector('#ocr-run').addEventListener('click', async () => {
-      if (!capturedBlob) return;
+      if (!capturedBlob || cancelled) return; // 🆕 P2-15
 
       overlay.querySelector('#ocr-run').classList.add('hidden');
       overlay.querySelector('#ocr-progress').classList.remove('hidden');
@@ -193,6 +265,8 @@ export function captureQuoteByPhoto() {
       try {
         // Предобработка изображения
         const processed = await preprocessImage(capturedBlob);
+        // 🆕 P2-15: оверлей закрыт во время предобработки — результат не нужен
+        if (cancelled) return;
 
         const worker = await getWorker((p) => {
           // Прогресс загрузки модели / распознавания
@@ -202,9 +276,17 @@ export function captureQuoteByPhoto() {
           if (p < 0.5) statusEl.textContent = '⏳ Загружаю языковую модель...';
           else statusEl.textContent = '🔍 Распознаю текст...';
         });
+        // 🆕 P2-15: закрыто во время загрузки модели — воркер завершаем,
+        // чтобы не оставлять тяжёлый процесс без потребителя
+        if (cancelled) {
+          await terminateOcrWorker();
+          return;
+        }
 
         statusEl.textContent = '🔍 Распознаю текст...';
         const { data } = await worker.recognize(processed);
+        // 🆕 P2-15: поздний результат распознавания после закрытия — игнорируем
+        if (cancelled) return;
         const text = (data.text || '').trim();
 
         if (!text) {
@@ -221,6 +303,7 @@ export function captureQuoteByPhoto() {
         statusEl.textContent = '✏️ Проверьте и поправьте текст, затем «Использовать»';
         useBtn.classList.remove('hidden');
       } catch (e) {
+        if (cancelled) return; // 🆕 P2-15: ошибка после закрытия — не показываем
         console.error('[OCR] Recognition error:', e);
         statusEl.textContent = '❌ Ошибка распознавания: ' + e.message;
         overlay.querySelector('#ocr-run').classList.add('hidden');
@@ -268,6 +351,12 @@ function loadTesseractLib() {
  * Модель кэшируется в IndexedDB (cacheMethod: 'indexeddb'),
  * поэтому повторные запуски OCR не требуют повторной загрузки.
  *
+ * 🆕 P2-15: политика terminate/recreate — getWorker привязывается к
+ * текущему _workerEpoch. Если во время создания воркера был вызван
+ * terminateOcrWorker (pagehide/visibilitychange/отмена), поколение
+ * меняется, и новый воркер НЕ кешируется, а сразу завершается.
+ * Следующий запуск OCR создаёт воркер заново.
+ *
  * @param {function} onProgress — колбэк прогресса (0..1)
  * @returns {Promise<object>} — Tesseract worker
  */
@@ -277,12 +366,13 @@ async function getWorker(onProgress) {
   // Если воркер уже создаётся — ждём тот же Promise
   if (_workerPromise) return _workerPromise;
 
+  const epoch = _workerEpoch; // 🆕 P2-15: поколение, в котором стартуем
   _workerPromise = (async () => {
     const Tesseract = await loadTesseractLib();
     const worker = await Tesseract.createWorker(OCR_LANGS, 1, {
       workerPath: `${BASE}/worker.min.js`,
       corePath: `${BASE}/tesseract-core-simd.wasm.js`,
-      langPath: BASE,              // ищет rus.traineddata.gz / eng.traineddata.gz
+      langPath: BASE,              // ищет rus.traineddata.gz (P1-12: только rus)
       cacheMethod: 'indexeddb',    // кеширует модель в IndexedDB
       gzip: true,                  // traineddata в формате .gz
       logger: (m) => {
@@ -293,11 +383,28 @@ async function getWorker(onProgress) {
       },
     });
 
+    // 🆕 P2-15: воркер создался, но его поколение устарело (terminate
+    // случился во время загрузки модели) — завершаем и не кешируем.
+    if (epoch !== _workerEpoch) {
+      if (worker && typeof worker.terminate === 'function') {
+        try { await worker.terminate(); } catch { /* best effort */ }
+      }
+      throw new Error('OCR worker terminated');
+    }
+
     // Настройки для лучшего распознавания книжного текста
     await worker.setParameters({
       tessedit_pageseg_mode: '3',   // авто-сегментация
       preserve_interword_spaces: '1',
     });
+
+    // 🆕 P2-15: повторная проверка после setParameters.
+    if (epoch !== _workerEpoch) {
+      if (worker && typeof worker.terminate === 'function') {
+        try { await worker.terminate(); } catch { /* best effort */ }
+      }
+      throw new Error('OCR worker terminated');
+    }
 
     _worker = worker;
     return worker;
@@ -312,8 +419,48 @@ async function getWorker(onProgress) {
 }
 
 /**
+ * 🆕 P2-15: завершает OCR-воркер и сбрасывает кеш/прогресс.
+ *
+ * Политика terminate/recreate:
+ *   — при pagehide (навигация/закрытие PWA) и уходе в фон
+ *     (visibilitychange→hidden) вызывается автоматически;
+ *   — при отмене OCR в момент загрузки модели — тоже;
+ *   — после terminate следующий запуск OCR создаст новый воркер
+ *     (модель по-прежнему берётся из IndexedDB — без повторной сети).
+ *
+ * Безопасен для повторного вызова и при отсутствии воркера.
+ *
+ * @returns {Promise<void>}
+ */
+export async function terminateOcrWorker() {
+  _workerEpoch++; // инвалидируем создающиеся воркеры
+  const w = _worker;
+  _worker = null;
+  _workerPromise = null;
+  _loadProgress = 0;
+  if (w && typeof w.terminate === 'function') {
+    try { await w.terminate(); } catch (e) { console.warn('[OCR] terminate error:', e); }
+  }
+}
+
+/**
+ * 🆕 P2-15: активен ли сейчас OCR-оверлей (захвачена ли камера).
+ * Используется app.js, чтобы не запускать ISBN-сканер одновременно с OCR
+ * (запрет одновременного camera flow с обеих сторон).
+ * @returns {boolean}
+ */
+export function isOcrActive() {
+  return _ocrOpen;
+}
+
+/**
  * Предварительная проверка доступности OCR.
  * Проверяет наличие критичных файлов через HEAD-запросы.
+ *
+ * 🆕 P1-12: проверяет РОВНО те языки, которые фактически используются в
+ * runtime (OCR_LANGS). Раньше проверка была захардкожена на rus, хотя
+ * createWorker запрашивал rus+eng — «поддержка ок» могла быть, а
+ * распознавание падало из-за отсутствующего eng-файла.
  *
  * @returns {Promise<{ok: boolean, error?: string}>}
  */
@@ -322,11 +469,132 @@ export async function checkOcrSupport() {
     const r = await fetch(`${BASE}/tesseract.min.js`, { method: 'HEAD' });
     if (!r.ok) return { ok: false, error: 'tesseract.min.js не найден' };
 
-    const r2 = await fetch(`${BASE}/rus.traineddata.gz`, { method: 'HEAD' });
-    if (!r2.ok) return { ok: false, error: 'rus.traineddata.gz не найден' };
+    // Проверяем каждый язык из OCR_LANGS (согласовано с createWorker)
+    const langs = OCR_LANGS.split('+').map(s => s.trim()).filter(Boolean);
+    for (const lang of langs) {
+      const rl = await fetch(`${BASE}/${lang}.traineddata.gz`, { method: 'HEAD' });
+      if (!rl.ok) return { ok: false, error: `${lang}.traineddata.gz не найден` };
+    }
 
     return { ok: true };
   } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  2.1 ПОДГОТОВКА OCR ДЛЯ ПОЛНОГО OFFLINE (🆕 P1-13)
+// ═══════════════════════════════════════════════
+
+// Имя runtime-кеша OCR — должно совпадать с OCR_CACHE_NAME в sw.js.
+// P1-13: страница кладёт полный набор сюда, SW читает из того же кеша.
+const OCR_CACHE_NAME = 'btp-ocr-v1';
+
+// 🆕 P1-13: полный проверенный набор OCR-ресурсов для cold offline.
+// Соответствует ровно тем файлам, которые реально запрашивает Tesseract:
+//   — tesseract.min.js            (loadTesseractLib → <script src>)
+//   — worker.min.js               (workerPath в createWorker)
+//   — tesseract-core-simd.wasm.js (corePath в createWorker)
+//   — rus.traineddata.gz          (langPath; P1-12: только rus — eng не поставляется)
+const OCR_OFFLINE_ASSETS = [
+  `${BASE}/tesseract.min.js`,
+  `${BASE}/worker.min.js`,
+  `${BASE}/tesseract-core-simd.wasm.js`,
+  `${BASE}/rus.traineddata.gz`,
+];
+
+/**
+ * Проверяет, что весь набор OCR-ресурсов уже лежит в runtime-кеше
+ * (`btp-ocr-v1`). Используется для подтверждения готовности после
+ * подготовки. Чисто локальная проверка — сети не требует.
+ *
+ * @returns {Promise<{ok: boolean, missing: string[]}>}
+ */
+export async function isOcrReadyOffline() {
+  try {
+    const cache = await caches.open(OCR_CACHE_NAME);
+    const results = await Promise.all(
+      OCR_OFFLINE_ASSETS.map((url) => cache.match(url).then((r) => Boolean(r)))
+    );
+    const missing = OCR_OFFLINE_ASSETS.filter((_, i) => !results[i]);
+    return { ok: missing.length === 0, missing };
+  } catch (e) {
+    return { ok: false, missing: [...OCR_OFFLINE_ASSETS], error: e.message };
+  }
+}
+
+/**
+ * Подготавливает OCR для полного offline-использования: атомарно качает
+ * весь проверенный набор OCR-ресурсов во runtime-кеш `btp-ocr-v1`.
+ *
+ * 🆕 P1-13: раньше тяжёлые OCR-ресурсы попадали в кеш ТОЛЬКО после
+ * первого онлайн-OCR-запроса (runtime cache-first у SW). Пользователь,
+ * установивший PWA, но не запускавший OCR с сетью, получал сломанное
+ * распознавание при первом офлайн-запуске. Теперь по кнопке «Подготовить
+ * OCR офлайн» набор скачивается заранее, а готовность подтверждается
+ * проверкой кеша (isOcrReadyOffline).
+ *
+ * Атомарность: если хоть один запрос не ок (404/сеть) или упал
+ * cache.put (quota) — уже положенные в ЭТОМ запуске URL удаляются,
+ * подготовка возвращает {ok:false}.
+ *
+ * @param {object} [opts]
+ * @param {(p: {current: number, total: number, sizeBytes: number}) => void} [opts.onProgress]
+ * @returns {Promise<{ok: boolean, sizeBytes?: number, error?: string}>}
+ */
+export async function prepareOcrOffline({ onProgress } = {}) {
+  const added = [];
+  const rollback = async (cache) => {
+    await Promise.allSettled(added.map((url) => cache.delete(url).catch(() => false)));
+  };
+
+  try {
+    const cache = await caches.open(OCR_CACHE_NAME);
+    let sizeBytes = 0;
+
+    for (let i = 0; i < OCR_OFFLINE_ASSETS.length; i++) {
+      const url = OCR_OFFLINE_ASSETS[i];
+
+      // Уже лежит в кеше — пропускаем (повторная подготовка не перекачивает).
+      const cached = await cache.match(url).catch(() => null);
+      if (cached) {
+        if (onProgress) {
+          const cl = Number(cached.headers?.get?.('content-length')) || 0;
+          sizeBytes += cl;
+          onProgress({ current: i + 1, total: OCR_OFFLINE_ASSETS.length, sizeBytes });
+        }
+        continue;
+      }
+
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        await rollback(cache);
+        return { ok: false, error: `${url}: HTTP ${resp.status}` };
+      }
+      try {
+        await cache.put(url, resp.clone());
+      } catch (e) {
+        await rollback(cache);
+        return { ok: false, error: `Не удалось записать в кеш: ${e.message}` };
+      }
+      added.push(url);
+      sizeBytes += Number(resp.headers.get('content-length')) || 0;
+      if (onProgress) onProgress({ current: i + 1, total: OCR_OFFLINE_ASSETS.length, sizeBytes });
+    }
+
+    // Подтверждение готовности ТОЛЬКО после проверки кеша.
+    const verify = await isOcrReadyOffline();
+    if (!verify.ok) {
+      await rollback(cache);
+      return { ok: false, error: `Кеш неполный: ${verify.missing.join(', ')}` };
+    }
+
+    return { ok: true, sizeBytes };
+  } catch (e) {
+    try {
+      const cache = await caches.open(OCR_CACHE_NAME);
+      await rollback(cache);
+    } catch { /* кеш недоступен — best effort */ }
     return { ok: false, error: e.message };
   }
 }
