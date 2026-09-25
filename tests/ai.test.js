@@ -1,24 +1,30 @@
 // ═══════════════════════════════════════════════════════════════════
-// 🔖 3.8.6 — тесты сетевого клиента xKiro (ai.js).
+// 🔖 3.8.7 — тесты сетевого клиента xKiro (ai.js).
 //
 // Что симулируется (РЕАЛЬНЫЕ fetch-вызовы через vi.stubGlobal):
 //   — GET /v1/models c Bearer-авторизацией и модальностью chat;
+//     реальные поля xKiro: display_name → name, access_tier → tier;
 //   — POST /v1/chat/completions с корректным телом (OpenAI-совместимо,
 //     response_format json_object при json=true);
 //   — POST /v1/search с телом {model:'xkiro/web-search', query, max_results};
-//   — сетевые сбои (fetch бросает) и статусы 401/5xx → человекочитаемая
-//     ошибка AiApiError (а не «сырой» JSON/fetch);
+//     реальные поля ответа: publishedDate / faviconUrl / thumbnailUrl;
+//   — baseUrl (CORS-прокси) подставляется во все URL; хвостовой слеш
+//     нормализуется; пустой baseUrl → api.xkiro.com;
+//   — сетевые сбои (fetch бросает — CORS/оффлайн) → понятное сообщение
+//     с подсказкой про прокси; статусы 400/401/403/402/429/502/503/5xx →
+//     человекочитаемая ошибка AiApiError (а не «сырой» JSON/fetch);
 //   — извлечение JSON из ответов LLM (фенсы ```json, окружение текстом);
 //   — контракт БЕЗОПАСНОСТИ: в исходнике ai.js НЕТ захардкоженных ключей.
 // ═══════════════════════════════════════════════════════════════════
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  AiApiError, listModels, chatXkiro, searchXkiro, extractJson, isAiConfigured,
+  AiApiError, listModels, chatXkiro, searchXkiro, extractJson, isAiConfigured, AI_BASE,
 } from '../ai.js';
 
 const KEY = 'test-key-123';
 const MODEL = 'openai/gpt-5.6-sol';
+const PROXY = 'https://worker.example.com';
 
 function stubFetch(impl) {
   const fn = vi.fn(impl);
@@ -40,7 +46,7 @@ afterEach(() => {
 describe('listModels', () => {
   it('GET /v1/models?modality=chat с Bearer-ключом; плоский массив → нормализация', async () => {
     const fn = stubFetch(() => jsonResponse([
-      { id: 'openai/gpt-5.6-sol', name: 'GPT-5.6 Sol', access_tier: 'free' },
+      { id: 'openai/gpt-5.6-sol', display_name: 'GPT-5.6 Sol', access_tier: 'free' },
       { id: 'anthropic/claude-x', description: 'Claude X' },
     ]));
     const res = await listModels(KEY);
@@ -52,8 +58,23 @@ describe('listModels', () => {
       })
     );
     expect(res).toEqual([
-      { id: 'openai/gpt-5.6-sol', name: 'GPT-5.6 Sol', description: '', tier: 'free' },
-      { id: 'anthropic/claude-x', name: '', description: 'Claude X', tier: '' },
+      { id: 'openai/gpt-5.6-sol', name: 'GPT-5.6 Sol', description: '', tier: 'free', modality: '' },
+      { id: 'anthropic/claude-x', name: '', description: 'Claude X', tier: '', modality: '' },
+    ]);
+  });
+
+  it('display_name / access_tier — реальные поля xKiro (docs.xkiro.com/api/list-models)', async () => {
+    stubFetch(() => jsonResponse({
+      data: [
+        { id: 'vendor/model-a', display_name: 'Модель A', access_tier: 'premium', modality: 'chat' },
+        { id: 'vendor/model-b', name: 'Старое поле name', access_tier: 'free' },
+      ],
+    }));
+    const res = await listModels(KEY);
+    // display_name приоритетнее name; access_tier → tier; modality копируется
+    expect(res).toEqual([
+      { id: 'vendor/model-a', name: 'Модель A', description: '', tier: 'premium', modality: 'chat' },
+      { id: 'vendor/model-b', name: 'Старое поле name', description: '', tier: 'free', modality: '' },
     ]);
   });
 
@@ -61,8 +82,20 @@ describe('listModels', () => {
     stubFetch(() => jsonResponse({ data: [{ id: 'a/x' }, {}] }));
     const res = await listModels(KEY);
     expect(res).toEqual([
-      { id: 'a/x', name: '', description: '', tier: '' },
+      { id: 'a/x', name: '', description: '', tier: '', modality: '' },
     ]);
+  });
+
+  it('baseUrl CORS-прокси подставляется в URL; хвостовой слеш нормализуется', async () => {
+    const fn = stubFetch(() => jsonResponse([]));
+    await listModels(KEY, { baseUrl: `${PROXY}/` });
+    expect(fn).toHaveBeenCalledWith(
+      `${PROXY}/v1/models?modality=chat`,
+      expect.anything()
+    );
+    // пустой baseUrl → api.xkiro.com по умолчанию
+    await listModels(KEY, { baseUrl: '' });
+    expect(fn).toHaveBeenCalledWith(`${AI_BASE}/v1/models?modality=chat`, expect.anything());
   });
 
   it('401 → AiApiError «Неверный API-ключ»', async () => {
@@ -74,9 +107,23 @@ describe('listModels', () => {
     });
   });
 
-  it('сеть недоступна (fetch бросает) → AiApiError «Нет связи»', async () => {
+  it('403 → AiApiError «Неверный API-ключ»', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'forbidden' } }, 403));
+    await expect(listModels(KEY)).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringContaining('Неверный API-ключ'),
+    });
+  });
+
+  it('сеть/CORS недоступна (fetch бросает) → понятная ошибка с подсказкой про прокси', async () => {
     stubFetch(() => { throw new TypeError('Failed to fetch'); });
-    await expect(listModels(KEY)).rejects.toMatchObject({ status: 0, message: expect.stringContaining('Нет связи') });
+    await expect(listModels(KEY)).rejects.toMatchObject({
+      status: 0,
+      message: expect.stringContaining('Не удалось связаться с xKiro'),
+    });
+    await expect(listModels(KEY)).rejects.toMatchObject({
+      message: expect.stringContaining('CORS'),
+    });
   });
 
   it('ключ не задан → ошибка до запроса (fetch не вызывается)', async () => {
@@ -112,6 +159,12 @@ describe('chatXkiro', () => {
     });
   });
 
+  it('baseUrl CORS-прокси подставляется в URL', async () => {
+    const fn = stubFetch(() => jsonResponse({ choices: [{ message: { content: 'ok' } }] }));
+    await chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }], baseUrl: PROXY });
+    expect(fn).toHaveBeenCalledWith(`${PROXY}/v1/chat/completions`, expect.anything());
+  });
+
   it('json=true → response_format json_object', async () => {
     const fn = stubFetch(() => jsonResponse({ choices: [{ message: { content: '{}' } }] }));
     await chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }], json: true });
@@ -125,10 +178,40 @@ describe('chatXkiro', () => {
       .rejects.toThrow('AI не вернул текст ответа');
   });
 
-  it('500 → AiApiError «временно недоступен»', async () => {
-    stubFetch(() => jsonResponse({}, 500));
+  it('500 → AiApiError «временно недоступен» (с деталями сервера при наличии)', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'upstream exploded' } }, 500));
     await expect(chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }] }))
-      .rejects.toMatchObject({ status: 500, message: expect.stringContaining('временно недоступен') });
+      .rejects.toMatchObject({ status: 500, message: expect.stringContaining('upstream exploded') });
+  });
+
+  it('503 → AiApiError «временно недоступен», повтор позже', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'service_unavailable' } }, 503));
+    await expect(chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ status: 503, message: expect.stringContaining('временно недоступен') });
+  });
+
+  it('429 → AiApiError «Слишком много запросов»', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'rate limited' } }, 429));
+    await expect(chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ status: 429, message: expect.stringContaining('Слишком много запросов') });
+  });
+
+  it('402 → AiApiError «Недостаточно средств»', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'insufficient balance' } }, 402));
+    await expect(chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ status: 402, message: expect.stringContaining('Недостаточно средств') });
+  });
+
+  it('ошибка тела запроса 400 → деталь сервера', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'model not found', code: 'model_not_found' } }, 400));
+    await expect(chatXkiro({ apiKey: KEY, model: 'нет-такой', messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ status: 400, message: expect.stringContaining('model not found') });
+  });
+
+  it('400 без деталей → «неверный запрос (HTTP 400)»', async () => {
+    stubFetch(() => jsonResponse({}, 400));
+    await expect(chatXkiro({ apiKey: KEY, model: MODEL, messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toThrow('неверный запрос (HTTP 400)');
   });
 
   it('защита от пустых параметров: нет модели / нет сообщений', async () => {
@@ -143,10 +226,10 @@ describe('chatXkiro', () => {
 });
 
 describe('searchXkiro', () => {
-  it('POST /v1/search: тело {model, query, max_results}, маппинг полей', async () => {
+  it('POST /v1/search: тело {model, query, max_results}; реальные поля xKiro маппятся', async () => {
     const fn = stubFetch(() => jsonResponse({
       results: [
-        { title: 'Книга', url: 'https://litres.ru/x', snippet: 'Описание', source: 'ЛитРес', publicationDate: '2024', favicon: 'f', thumbnail: 't' },
+        { title: 'Книга', url: 'https://litres.ru/x', snippet: 'Описание', source: 'ЛитРес', publishedDate: '2024-03-01', faviconUrl: 'https://x/f.ico', thumbnailUrl: 'https://x/t.jpg' },
       ],
     }));
     const res = await searchXkiro({ apiKey: KEY, query: 'Мастер и Маргарита', maxResults: 3 });
@@ -156,10 +239,33 @@ describe('searchXkiro', () => {
       query: 'Мастер и Маргарита',
       max_results: 3,
     });
+    // 🔖 3.8.7: publishedDate/faviconUrl/thumbnailUrl (docs.xkiro.com/api/web-search)
     expect(res).toEqual([{
       title: 'Книга', url: 'https://litres.ru/x', snippet: 'Описание', source: 'ЛитРес',
-      publicationDate: '2024', favicon: 'f', thumbnail: 't',
+      publicationDate: '2024-03-01', favicon: 'https://x/f.ico', thumbnail: 'https://x/t.jpg',
     }]);
+  });
+
+  it('старые поля publicationDate/favicon/thumbnail тоже принимаются (обратная совместимость)', async () => {
+    stubFetch(() => jsonResponse({ data: [
+      { title: 'A', url: 'u', publicationDate: '2019', favicon: 'f', thumbnail: 't' },
+    ] }));
+    const res = await searchXkiro({ apiKey: KEY, query: 'q' });
+    expect(res[0]).toMatchObject({
+      publicationDate: '2019', favicon: 'f', thumbnail: 't',
+    });
+  });
+
+  it('baseUrl CORS-прокси подставляется в URL', async () => {
+    const fn = stubFetch(() => jsonResponse({ results: [] }));
+    await searchXkiro({ apiKey: KEY, query: 'q', baseUrl: PROXY });
+    expect(fn).toHaveBeenCalledWith(`${PROXY}/v1/search`, expect.anything());
+  });
+
+  it('502 no_search_performed → AiApiError «переформулируйте»', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'no search', code: 'no_search_performed' } }, 502));
+    await expect(searchXkiro({ apiKey: KEY, query: 'q' }))
+      .rejects.toMatchObject({ status: 502, code: 'no_search_performed', message: expect.stringContaining('переформулируйте') });
   });
 
   it('пустой запрос → AiApiError без сети', async () => {
@@ -213,11 +319,13 @@ describe('isAiConfigured', () => {
 });
 
 describe('AiApiError', () => {
-  it('instanceof Error с name и status', () => {
-    const e = new AiApiError('msg', { status: 401 });
+  it('instanceof Error с name и status/code', () => {
+    const e = new AiApiError('msg', { status: 401, code: 'bad_key' });
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe('AiApiError');
     expect(e.status).toBe(401);
+    expect(e.code).toBe('bad_key');
     expect(new AiApiError('x').status).toBe(0);
+    expect(new AiApiError('x').code).toBe('');
   });
 });
