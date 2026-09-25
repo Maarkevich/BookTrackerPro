@@ -1,10 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════
-// 🔖 3.8.6 — AI-функциональность через API xKiro (https://docs.xkiro.com).
+// 🔖 3.8.7 — AI-функциональность через API xKiro (https://docs.xkiro.com).
+// 🔖 3.8.7: CORS. Прямые запросы из браузера к api.xkiro.com невозможны:
+//   у API НЕТ заголовков Access-Control-Allow-* (проверено 2026-09-25).
+//   Поэтому ai.js принимает настраиваемый baseUrl — URL CORS-прокси
+//   (например Cloudflare Worker), который проксирует /v1/* в xKiro.
+//   Если baseUrl пуст — используется напрямую api.xkiro.com (работает
+//   только без браузерного CORS: локальный клиент, расширение, и т.п.).
 //
 // Модуль — ЧИСТЫЙ СЕТЕВОЙ КЛИЕНТ: без UI и без IndexedDB.
-//   — настройки (ключ/модель) хранит приложение (app.js → db.js settings,
-//     аналогично microlinkApiKey). Ключ НИКОГДА НЕ попадает в исходный код
-//     и в localStorage — только в IndexedDB settings;
+//   — настройки (ключ/модель/прокси) хранит приложение (app.js → db.js
+//     settings, аналогично microlinkApiKey). Ключ НИКОГДА НЕ попадает
+//     в исходный код и в localStorage — только в IndexedDB settings;
 //   — все функции выбрасывают AiApiError с человекочитаемым сообщением;
 //   — offline-first не нарушается: AI-фичи — единственные online-only
 //     функции (ключ не задан → UI показывает подсказку, кнопки disabled).
@@ -13,7 +19,7 @@
 //   https://docs.xkiro.com/api/chat-completions/,
 //   https://docs.xkiro.com/api/web-search/,
 //   https://docs.xkiro.com/api/list-models/):
-//   GET  /v1/models            → каталог моделей (?modality=chat)
+//   GET  /v1/models            → каталог моделей (по умолчанию chat)
 //   POST /v1/chat/completions  → OpenAI-совместимый чат
 //   POST /v1/search            → веб-поиск (модель xkiro/web-search)
 // ═══════════════════════════════════════════════════════════════════
@@ -27,13 +33,20 @@ export class AiApiError extends Error {
   /**
    * @param {string} message — сообщение для пользователя
    * @param {object} [opts]
-   * @param {number} [opts.status] — HTTP-статус (0 = сеть/нет ответа)
+   * @param {number} [opts.status] — HTTP-статус (0 = сеть/CORS/нет ответа)
+   * @param {string} [opts.code] — code ошибки от сервера (если пришёл)
    */
-  constructor(message, { status = 0 } = {}) {
+  constructor(message, { status = 0, code = '' } = {}) {
     super(message);
     this.name = 'AiApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/** Нормализует baseUrl: без хвостового слеша. */
+function normalizeBase(baseUrl) {
+  return String(baseUrl || AI_BASE).replace(/\/+$/, '');
 }
 
 /** Единый fetch с Bearer-авторизацией и разбором ошибок. */
@@ -50,44 +63,67 @@ async function requestJson(url, { method = 'GET', apiKey, body } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
-    // Сеть недоступна / CORS / DNS.
-    throw new AiApiError('Нет связи с сервером xKiro. Проверьте интернет.', { status: 0 });
+    // Сеть недоступна / CORS / DNS. У xKiro нет CORS-заголовков —
+    // из обычного браузера прямой запрос будет заблокирован.
+    throw new AiApiError(
+      'Не удалось связаться с xKiro. Если приложение открыто в браузере — ' +
+      'xKiro не поддерживает CORS: укажите URL CORS-прокси в Настройках → AI.',
+      { status: 0 }
+    );
   }
 
   if (!resp.ok) {
     let detail = '';
+    let code = '';
     try {
       const j = await resp.json();
-      detail = j?.error?.message || j?.message || '';
+      detail = typeof j?.error?.message === 'string' ? j.error.message
+             : typeof j?.message === 'string' ? j.message : '';
+      code = typeof j?.error?.code === 'string' ? j.error.code
+           : typeof j?.code === 'string' ? j.code : '';
     } catch { /* тело не JSON — не критично */ }
     const status = resp.status;
+    if (status === 400) {
+      throw new AiApiError(detail ? `xKiro: ${detail}` : 'xKiro: неверный запрос (HTTP 400).', { status, code });
+    }
     if (status === 401 || status === 403) {
-      throw new AiApiError(`Неверный API-ключ xKiro (HTTP ${status}).`, { status });
+      throw new AiApiError(`Неверный API-ключ xKiro (HTTP ${status}).`, { status, code });
     }
     if (status === 402) {
-      throw new AiApiError('Недостаточно средств на балансе xKiro.', { status });
+      throw new AiApiError('Недостаточно средств на балансе xKiro.', { status, code });
     }
     if (status === 429) {
-      throw new AiApiError('Слишком много запросов к xKiro. Подождите немного.', { status });
+      throw new AiApiError('Слишком много запросов к xKiro. Подождите немного.', { status, code });
+    }
+    if (status === 502 && code === 'no_search_performed') {
+      throw new AiApiError('Поиск xKiro не выполнился для этого запроса — переформулируйте.', { status, code });
+    }
+    if (status === 503) {
+      throw new AiApiError('Сервис xKiro временно недоступен (HTTP 503). Повторите чуть позже.', { status, code });
     }
     if (status >= 500) {
-      throw new AiApiError('Сервер xKiro временно недоступен. Попробуйте позже.', { status });
+      throw new AiApiError(
+        detail ? `Сервис xKiro: ${detail} (HTTP ${status}).` : `Сервис xKiro временно недоступен (HTTP ${status}). Повторите позже.`,
+        { status, code }
+      );
     }
-    throw new AiApiError(detail ? `Сервис xKiro: ${detail}` : `Ошибка сервиса xKiro (HTTP ${status}).`, { status });
+    throw new AiApiError(detail ? `Сервис xKiro: ${detail}` : `Ошибка сервиса xKiro (HTTP ${status}).`, { status, code });
   }
 
   return resp.json();
 }
 
 /**
- * Список доступных моделей (модальность chat).
+ * Список доступных моделей (модальность chat, уже по умолчанию).
  * @param {string} apiKey
+ * @param {object} [opts]
+ * @param {string} [opts.baseUrl] — URL CORS-прокси (по умолчанию api.xkiro.com)
  * @returns {Promise<Array<{id: string, name?: string, description?: string, tier?: string}>>}
  */
-export async function listModels(apiKey) {
+export async function listModels(apiKey, { baseUrl = AI_BASE } = {}) {
   if (!apiKey) throw new AiApiError('Не задан API-ключ xKiro.');
   const json = await requestJson(
-    `${AI_BASE}/v1/models?modality=${encodeURIComponent(AI_MODELS_MODALITY)}`,
+    `${normalizeBase(baseUrl)}/v1/models?modality=${encodeURIComponent(AI_MODELS_MODALITY)}`,
     { apiKey }
   );
   const raw = Array.isArray(json) ? json : (json?.data || json?.models || []);
@@ -95,11 +131,13 @@ export async function listModels(apiKey) {
     throw new AiApiError('Сервис xKiro вернул неожиданный ответ при загрузке моделей.');
   }
   return raw
-    .map((m, i) => ({
+    .map((m) => ({
       id: String(m?.id ?? m?.model ?? m?.name ?? ''),
-      name: typeof m?.name === 'string' ? m.name : '',
+      name: typeof m?.display_name === 'string' ? m.display_name
+          : typeof m?.name === 'string' ? m.name : '',
       description: typeof m?.description === 'string' ? m.description : '',
       tier: typeof m?.access_tier === 'string' ? m.access_tier : '',
+      modality: typeof m?.modality === 'string' ? m.modality : '',
     }))
     .filter((m) => m.id);
 }
@@ -113,10 +151,11 @@ export async function listModels(apiKey) {
  * @param {number} [opts.temperature]
  * @param {number} [opts.maxTokens]
  * @param {boolean} [opts.json] — response_format json_object
+ * @param {string} [opts.baseUrl] — URL CORS-прокси (по умолчанию api.xkiro.com)
  * @returns {Promise<string>} — текст ответа модели
  */
 export async function chatXkiro({
-  apiKey, model, messages, temperature = 0.3, maxTokens = 1024, json = false,
+  apiKey, model, messages, temperature = 0.3, maxTokens = 1024, json = false, baseUrl = AI_BASE,
 }) {
   if (!apiKey) throw new AiApiError('Не задан API-ключ xKiro.');
   if (!model) throw new AiApiError('Не выбрана AI-модель.');
@@ -130,7 +169,7 @@ export async function chatXkiro({
     max_tokens: maxTokens,
   };
   if (json) body.response_format = { type: 'json_object' };
-  const jsonResp = await requestJson(`${AI_BASE}/v1/chat/completions`, {
+  const jsonResp = await requestJson(`${normalizeBase(baseUrl)}/v1/chat/completions`, {
     method: 'POST', apiKey, body,
   });
   const content = jsonResp?.choices?.[0]?.message?.content;
@@ -146,13 +185,14 @@ export async function chatXkiro({
  * @param {string} opts.apiKey
  * @param {string} opts.query
  * @param {number} [opts.maxResults]
+ * @param {string} [opts.baseUrl] — URL CORS-прокси (по умолчанию api.xkiro.com)
  * @returns {Promise<Array<{title: string, url: string, snippet: string, source: string,
  *   publicationDate: string, favicon: string, thumbnail: string}>>}
  */
-export async function searchXkiro({ apiKey, query, maxResults = 5 }) {
+export async function searchXkiro({ apiKey, query, maxResults = 5, baseUrl = AI_BASE }) {
   if (!apiKey) throw new AiApiError('Не задан API-ключ xKiro.');
   if (!query || !String(query).trim()) throw new AiApiError('Пустой поисковый запрос.');
-  const jsonResp = await requestJson(`${AI_BASE}/v1/search`, {
+  const jsonResp = await requestJson(`${normalizeBase(baseUrl)}/v1/search`, {
     method: 'POST', apiKey,
     body: { model: AI_SEARCH_MODEL, query: String(query).trim(), max_results: maxResults },
   });
@@ -160,14 +200,15 @@ export async function searchXkiro({ apiKey, query, maxResults = 5 }) {
   if (!Array.isArray(raw)) {
     throw new AiApiError('Сервис xKiro вернул неожиданный ответ при поиске.');
   }
+  // 🔖 3.8.7: реальные поля ответа — publishedDate / faviconUrl / thumbnailUrl.
   return raw.map((r) => ({
     title: String(r?.title ?? ''),
     url: String(r?.url ?? ''),
     snippet: String(r?.snippet ?? r?.description ?? ''),
     source: String(r?.source ?? r?.site ?? ''),
-    publicationDate: String(r?.publicationDate ?? r?.date ?? ''),
-    favicon: String(r?.favicon ?? ''),
-    thumbnail: String(r?.thumbnail ?? ''),
+    publicationDate: String(r?.publishedDate ?? r?.publicationDate ?? r?.date ?? ''),
+    favicon: String(r?.faviconUrl ?? r?.favicon ?? ''),
+    thumbnail: String(r?.thumbnailUrl ?? r?.thumbnail ?? ''),
   })).filter((r) => r.title || r.url);
 }
 

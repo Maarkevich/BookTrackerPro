@@ -1,6 +1,12 @@
 // 📦 BookTrackerPro — app.js
-// 🔖 v3.8.6 | 2026-09-25
+// 🔖 v3.8.7 | 2026-09-25
 // 📝 Точка входа: навигация, рендеринг, события
+//
+//    Новое в 3.8.7:
+//      — AI (xKiro): исправлен CORS. Прямой вызов api.xkiro.com из браузера
+//        невозможен (нет Access-Control-Allow-*), добавлена настройка
+//        «URL CORS-прокси»; исправлены поля моделей (display_name) и
+//        результатов поиска (faviconUrl/thumbnailUrl/publishedDate)
 //
 //    Новое в 3.8.6:
 //      — Офлайн: добавление книги при отсутствии сети ставится
@@ -57,10 +63,10 @@ import { captureQuoteByPhoto, checkOcrSupport, prepareOcrOffline, isOcrReadyOffl
 import {
   extractBookPreview, checkMicrolinkStatus, clearPreviewCache, setMicrolinkApiKey
 } from './microlink.js';
-// 🔖 3.8.6: AI-функциональность через API xKiro
-// (ключ/модель хранятся в IndexedDB-настройках, сетевой клиент — ai.js).
+// 🔖 3.8.7: AI через xKiro исправлен — настраиваемый URL CORS-прокси
+// (xKiro не отдаёт Access-Control-Allow-*: из браузера нужен прокси).
 import {
-  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError
+  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError, AI_BASE
 } from './ai.js';
 import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
@@ -89,7 +95,7 @@ const S = {
   settings: {
     lrAppId: '', lrSecret: '', lrPartnerId: '', lrPartnerSecret: '',
     microlinkApiKey: '',
-    xkiroApiKey: '', xkiroModel: '',
+    xkiroApiKey: '', xkiroModel: '', xkiroBaseUrl: '', // 🔖 3.8.7: xkiroBaseUrl — URL CORS-прокси
     confetti: true, sound: true,
     defaultPlatform: 'youtube',
     bloggerMode: true,
@@ -1287,6 +1293,7 @@ function openAiRecommendations() {
         apiKey: S.settings.xkiroApiKey, model: S.settings.xkiroModel,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         json: true,
+        baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
       });
       const data = extractJson(content);
       const recs = Array.isArray(data?.recommendations) ? data.recommendations : [];
@@ -2351,7 +2358,7 @@ async function handleAiBookSearch(fb) {
 
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
   try {
-    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 5 });
+    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 5, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
     if (results.length === 0) {
       resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px">Ничего не найдено. Попробуйте другой запрос.</div>';
       return;
@@ -2393,6 +2400,7 @@ async function fillAiFormFromSearch(fb, result, query) {
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: 0.2,
       json: true,
+      baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
     });
     const data = extractJson(content);
     if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
@@ -2441,6 +2449,7 @@ async function aiExtractBookFields(query, searchResult, extraHints = '') {
     messages: [{ role: 'system', content: AI_BOOK_FIELDS_SYSTEM }, { role: 'user', content: user }],
     temperature: 0.2,
     json: true,
+    baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
   });
   const data = extractJson(content);
   if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
@@ -2536,7 +2545,7 @@ async function fillBookViaAi(bookId) {
   showToast('✨ Заполняю карточку через AI...', 'info');
   try {
     const hasFields = Boolean(book.title || book.author || book.genre || book.description || book.isbn);
-    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 3 });
+    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 3, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
     const top = results[0];
     if (!top) { showToast('⚠️ AI ничего не нашёл по этому запросу', 'error'); return; }
     const data = await aiExtractBookFields(query, top, hasFields ? JSON.stringify({
@@ -3350,6 +3359,12 @@ function renderSettingsTab() {
           <option value="">— сначала сохраните ключ —</option>
         </select>
       </div>
+      <!-- 🔖 3.8.7: xKiro не поддерживает CORS — нужен URL прокси -->
+      <div class="form-group">
+        <label>URL CORS-прокси <span class="badge">обязательно в браузере</span></label>
+        <input type="url" id="set-xkiro-base" value="${escAttr(s.xkiroBaseUrl || '')}" placeholder="https://api.xkiro.com" autocomplete="off" spellcheck="false"/>
+        <div class="form-hint">xKiro не отдаёт CORS-заголовки: из браузера прямой запрос заблокирован. Укажите адрес вашего прокси (например, Cloudflare Worker), который пересылает /v1/* в api.xkiro.com. Пусто — прямое обращение (для внебраузерных клиентов).</div>
+      </div>
       <div class="flex gap-8" style="flex-wrap:wrap">
         <button id="set-xkiro-load" class="btn-secondary">Загрузить список моделей</button>
         <button id="set-xkiro-clear" class="btn-secondary">Удалить ключ</button>
@@ -3411,7 +3426,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.6 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.8.7 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
@@ -3551,7 +3566,7 @@ function renderSettingsTab() {
     select.disabled = true;
     select.innerHTML = '<option value="">— загрузка —</option>';
     try {
-      const models = await listModels(key);
+      const models = await listModels(key, { baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
       if (models.length === 0) {
         status.textContent = '⚠️ xKiro не вернул ни одной модели';
         select.innerHTML = '<option value="">— модели не найдены —</option>';
@@ -3577,6 +3592,16 @@ function renderSettingsTab() {
     if (!S.settings.xkiroApiKey) { S.settings.xkiroModel = ''; }
     await saveAppSettings();
     await loadXkiroModels();
+  });
+
+  // 🔖 3.8.7: изменение URL прокси xKiro
+  const xkiroBase = mc.querySelector('#set-xkiro-base');
+  xkiroBase?.addEventListener('change', async function() {
+    let v = this.value.trim().replace(/\/+$/, '');
+    S.settings.xkiroBaseUrl = v;
+    await saveAppSettings();
+    if (S.settings.xkiroApiKey) loadXkiroModels(); // перезагрузит модели через новый прокси
+    showToast('💾 URL прокси сохранён', 'success');
   });
 
   bind('#set-xkiro-load', () => loadXkiroModels());

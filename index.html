@@ -4,16 +4,16 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
     <title>Book Tracker Pro</title>
-    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.6: офлайн-синхронизация добавленных книг, подсказка установки для iPhone/iPad, a11y. Работает полностью оффлайн."/>
+    <meta name="description" content="Book Tracker Pro — трекер книг для бук-блогера: серии, подборки, челленджи, поиск по ISBN, цитаты по фото, глобальный поиск, извлечение книги по ссылке (Microlink), 8 площадок с Pinterest и Threads. Новое в 3.8.7: AI (xKiro) — настраиваемый CORS-прокси и понятные ошибки. Работает полностью оффлайн."/>
 
-    <!-- v3.8.3: CSP -->
+    <!-- v3.8.7: CSP (https: в connect-src — для пользовательского CORS-прокси xKiro) -->
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self';
                    img-src 'self' data: blob: https:;
                    script-src 'self';
                    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                    font-src 'self' https://fonts.gstatic.com data:;
-                   connect-src 'self' https://www.googleapis.com https://openlibrary.org https://covers.openlibrary.org https://api.microlink.io https://pro-api.microlink.io https://catalit.litres.ru https://corsproxy.io https://open.er-api.com https://cv0.litres.ru https://cv1.litres.ru https://cv2.litres.ru https://cv3.litres.ru https://cv4.litres.ru https://cv5.litres.ru https://cv6.litres.ru https://cv7.litres.ru https://cv8.litres.ru https://cv9.litres.ru https://api.litres.ru https://api.xkiro.com;
+                   connect-src 'self' https:;
                    media-src 'self' blob:;
                    worker-src 'self' blob:;"/>
 
@@ -33,14 +33,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
 
-    <link rel="modulepreload" href="utils.js?v=3.8.6"/>
-    <link rel="modulepreload" href="icons.js?v=3.8.6"/>
-    <link rel="modulepreload" href="uikit.js?v=3.8.6"/>
-    <link rel="modulepreload" href="db.js?v=3.8.6"/>
-    <link rel="modulepreload" href="microlink.js?v=3.8.6"/>
-    <link rel="modulepreload" href="app.js?v=3.8.6"/>
-    <link rel="stylesheet" href="app.css?v=3.8.6"/>
-    <link rel="stylesheet" href="style.css?v=3.8.6"/>
+    <link rel="modulepreload" href="utils.js?v=3.8.7"/>
+    <link rel="modulepreload" href="icons.js?v=3.8.7"/>
+    <link rel="modulepreload" href="uikit.js?v=3.8.7"/>
+    <link rel="modulepreload" href="db.js?v=3.8.7"/>
+    <link rel="modulepreload" href="microlink.js?v=3.8.7"/>
+    <link rel="modulepreload" href="app.js?v=3.8.7"/>
+    <link rel="stylesheet" href="app.css?v=3.8.7"/>
+    <link rel="stylesheet" href="style.css?v=3.8.7"/>
 </head>
 <body>
     <a href="#main-content" class="skip-link">Перейти к содержимому</a>
@@ -221,6 +221,6 @@
         <button class="icon-btn" id="install-ios-dismiss" aria-label="Скрыть">✕</button>
     </div>
 
-    <script type="module" src="app.js?v=3.8.6"></script>
+    <script type="module" src="app.js?v=3.8.7"></script>
 </body>
 </html>

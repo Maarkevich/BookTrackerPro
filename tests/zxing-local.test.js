@@ -72,8 +72,14 @@ describe('P1-14: ZXing fallback локализован (self + precache, без 
       'zxing/dist/reader/zxing_reader.wasm': 843343,
     };
     for (const [file, expected] of Object.entries(sizes)) {
-      const stats = require('node:fs').statSync(path.join(ROOT, file));
-      expect(stats.size, `${file} должен существовать`).toBe(expected);
+      const buf = require('node:fs').readFileSync(path.join(ROOT, file));
+      // Размеры @1.2.12 зафиксированы для LF-блобов репозитория. На Windows
+      // (core.autocrlf) рабочие копии текстовых файлов приходят с CRLF и
+      // «раздуваются» на число строк — нормализуем, чтобы проверка оставалась
+      // детерминированной на любой ОС (wasm — бинарный, без нормализации).
+      const isText = !file.endsWith('.wasm');
+      const size = isText ? buf.toString('utf8').replace(/\r\n/g, '\n').length : buf.length;
+      expect(size, `${file} должен существовать`).toBe(expected);
     }
   });
 

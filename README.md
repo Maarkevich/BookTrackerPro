@@ -40,6 +40,47 @@ Service Worker `BASE` и все абсолютные пути PWA).
   с `CACHE_NAME` в `sw.js`; расхождение обнаруживается `verifyCacheFreshness()`
   и принудительно обновляет service worker.
 
+## AI (xKiro) — настройка CORS-прокси
+
+AI-функции (поиск книг, автозаполнение карточек, рекомендации, исправление
+отзывов) работают через API **xKiro**: `https://api.xkiro.com/v1`
+(документация: https://docs.xkiro.com).
+
+**Важно (3.8.7):** xKiro не отдаёт CORS-заголовки, поэтому из браузера
+прямой запрос к `api.xkiro.com` браузер блокирует («Сервер xKiro временно
+недоступен» при живом ключе — это CORS, а не сбой сервиса). Решение —
+личный CORS-прокси, его URL указывается в **Настройки → AI (xKiro) → URL
+CORS-прокси** (пустое поле — прямое обращение, подходит для
+внебраузерных клиентов).
+
+Минимальный прокси — Cloudflare Worker (код можно вставить в
+https://dash.cloudflare.com → Workers & Pages → Create Worker):
+
+```js
+// CORS-прокси для xKiro API (baseUrl приложения: https://ВАШ_worker.workers.dev)
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const target = 'https://api.xkiro.com' + url.pathname + url.search;
+    const headers = new Headers(request.headers);
+    headers.set('Host', 'api.xkiro.com');
+    const resp = await fetch(new Request(target, { method: request.method, headers, body: request.body }));
+    const out = new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+    out.headers.set('Access-Control-Allow-Origin', '*');
+    out.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    out.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
+    out.headers.set('Vary', 'Origin, Access-Control-Request-Headers');
+    return out;
+  },
+};
+```
+
+После создания Workers добавьте route (например `api.ВАШ-домен/*` → worker),
+либо используйте адрес вида `https://ВАШ_worker.workers.dev` прямо в поле
+«URL CORS-прокси». Ключ xKiro хранится только в IndexedDB-настройках и
+отправляется только на ваш обработчик (Bearer) — в исходный код ключ
+не попадает.
+
 ## Тесты
 
 Проект использует **Vitest** (jsdom + fake-indexeddb) без сборки приложения:
