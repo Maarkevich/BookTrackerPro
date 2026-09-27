@@ -1779,6 +1779,8 @@ function openBookForm(book = null) {
     </div>
     <div class="form-section">
       <h3>${icon('coin', 15)} Цена</h3>
+      <input type="hidden" id="bf-price-offers" value="${escAttr(JSON.stringify(Array.isArray(b.priceOffers) ? b.priceOffers : []))}"/>
+      <input type="hidden" id="bf-source-urls" value="${escAttr(JSON.stringify(Array.isArray(b.sourceUrls) ? b.sourceUrls : []))}"/>
       <div class="form-row">
         <div class="form-group"><label>Цена</label><input type="number" id="bf-price" value="${b.price?.amount || ''}" min="0" placeholder="599"/></div>
         <div class="form-group"><label>Валюта</label>
@@ -2123,6 +2125,10 @@ async function saveBookForm(selectedTags, selectedFormats) {
       amount: parseFloat(f.querySelector('#bf-price').value) || 0,
       currency: f.querySelector('#bf-currency').value,
     },
+    priceOffers: parseJsonArrayField(f.querySelector('#bf-price-offers')?.value)
+      .filter(p => Number(p.amount) > 0)
+      .map(p => ({ amount: Number(p.amount), currency: String(p.currency || 'RUB').toUpperCase(), type: String(p.type || 'unknown'), source: String(p.source || ''), url: safeLinkUrl(p.url || '') })),
+    sourceUrls: parseJsonArrayField(f.querySelector('#bf-source-urls')?.value).map(u => safeLinkUrl(u)).filter(Boolean),
     status: f.querySelector('#bf-status').value,
     currentPage: parseInt(f.querySelector('#bf-page').value) || 0,
     rating: parseInt(f.querySelector('#bf-rating').value) || 0,
@@ -2464,12 +2470,17 @@ async function handleAiBookSearch(fb) {
 
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
   try {
-    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 5, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+    // Для ISBN ищем шире: каталоги и магазины часто дают разные поля и цены.
+    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 10, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
     if (results.length === 0) {
       resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px">Ничего не найдено. Попробуйте другой запрос.</div>';
       return;
     }
-    resultsEl.innerHTML = results.map((r, i) => `
+    const isIsbnQuery = /^\d{10,13}$/.test(cleanISBN(query));
+    resultsEl.innerHTML = `
+      ${isIsbnQuery ? `<div class="form-hint" style="padding:8px 10px">ISBN найден в ${results.length} источниках. Нажмите «Собрать данные из всех источников», чтобы получить сводную карточку и все цены.</div>
+      <button type="button" id="bf-ai-merge" class="btn-primary" style="width:100%;margin:6px 0 10px">${icon('sparkles', 14)} Собрать данные из всех источников</button>` : ''}
+      ${results.map((r, i) => `
       <div class="web-result" data-idx="${i}" role="button" tabindex="0">
         ${r.thumbnail
           ? `<img class="web-result-cover" src="${esc(safeUrl(r.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
@@ -2479,8 +2490,24 @@ async function handleAiBookSearch(fb) {
           <div class="web-result-meta">${esc(r.snippet || '').slice(0, 160)}${r.source ? ' · ' + esc(r.source) : ''}${r.publicationDate ? ' · ' + esc(r.publicationDate) : ''}</div>
         </div>
       </div>
-    `).join('');
+    `).join('')}`;
 
+    resultsEl.querySelector('#bf-ai-merge')?.addEventListener('click', async () => {
+      const mergeBtn = resultsEl.querySelector('#bf-ai-merge');
+      mergeBtn.disabled = true;
+      mergeBtn.textContent = '⏳ Собираю данные и цены...';
+      try {
+        const data = await aiExtractBookFields(query, results, 'Это ISBN-запрос. Собери одну карточку книги, все подтверждённые цены и все URL источников.');
+        const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '' });
+        resultsEl.querySelector('.form-hint')?.insertAdjacentHTML('afterend', applied
+          ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Сводные данные применены — проверьте и сохраните.</div>'
+          : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, данные не изменены.</div>');
+      } catch (e) {
+        mergeBtn.disabled = false;
+        mergeBtn.textContent = '✨ Собрать данные из всех источников';
+        showToast(`❌ ${e instanceof AiApiError ? e.message : 'Ошибка сводного парсинга'}`, 'error');
+      }
+    });
     resultsEl.querySelectorAll('.web-result').forEach(el => {
       const pick = () => {
         const r = results[parseInt(el.dataset.idx)];
@@ -2556,6 +2583,34 @@ async function fillAiFormFromSearch(fb, result, query) {
  *   cover — готовый URL обложки (fallback из результата поиска).
  * 🔖 3.8.8: прозрачное применение выбранных в предпросмотре полей.
  */
+function parseJsonArrayField(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function normalizeAiPriceOffers(offers) {
+  if (!Array.isArray(offers)) return [];
+  const seen = new Set();
+  return offers.map(p => ({
+    amount: Number(p?.amount) || 0,
+    currency: String(p?.currency || 'RUB').toUpperCase(),
+    type: String(p?.type || 'unknown'),
+    source: String(p?.source || ''),
+    url: safeLinkUrl(p?.url || ''),
+  })).filter(p => p.amount > 0 && (p.currency || p.source)).filter(p => {
+    const key = `${p.amount}|${p.currency}|${p.type}|${p.source}|${p.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  }).slice(0, 30);
+}
+
+function normalizeAiSourceUrls(urls) {
+  if (!Array.isArray(urls)) return [];
+  return [...new Set(urls.map(u => safeLinkUrl(u)).filter(Boolean))].slice(0, 30);
+}
+
 function fillFormFromAi(fb, d, opts = {}) {
   const chosen = opts.chosen || null;
   const want = (id) => !chosen || chosen[id];
@@ -2577,6 +2632,16 @@ function fillFormFromAi(fb, d, opts = {}) {
   if (want('price') && Number(d.priceAmount) > 0) {
     set('#bf-price', Number(d.priceAmount));
     if (d.priceCurrency) set('#bf-currency', d.priceCurrency);
+  }
+  // Все найденные цены сохраняются в метаданные формы и попадут в книгу
+  // при сохранении; основная цена остаётся совместимой со старой схемой.
+  if (want('prices')) {
+    const pricesEl = fb.querySelector('#bf-price-offers');
+    if (pricesEl) pricesEl.value = JSON.stringify(normalizeAiPriceOffers(d.priceOffers));
+  }
+  if (want('sourceUrls')) {
+    const sourcesEl = fb.querySelector('#bf-source-urls');
+    if (sourcesEl) sourcesEl.value = JSON.stringify(normalizeAiSourceUrls(d.sourceUrls));
   }
   const coverSrc = opts.cover !== undefined ? opts.cover : d.coverUrl;
   if (want('cover')) {
@@ -2612,6 +2677,8 @@ function openAiDataPreview(fb, data, opts = {}) {
       { id: 'ageRating', label: 'Возраст', value: data.ageRating },
       { id: 'series', label: 'Серия', value: data.series ? `${data.series}${data.seriesNumber ? ' · №' + data.seriesNumber : ''}${data.seriesTotal ? ' из ' + data.seriesTotal : ''}` : '' },
       { id: 'price', label: 'Цена', value: Number(data.priceAmount) > 0 ? `${data.priceAmount} ${data.priceCurrency || 'RUB'}` : '' },
+      { id: 'prices', label: 'Все цены', value: Array.isArray(data.priceOffers) && data.priceOffers.length ? data.priceOffers.map(p => `${p.amount || 0} ${p.currency || ''}${p.type && p.type !== 'unknown' ? ` · ${p.type}` : ''}${p.source ? ` · ${p.source}` : ''}`).join(' | ') : '' },
+      { id: 'sourceUrls', label: 'Источники', value: Array.isArray(data.sourceUrls) ? data.sourceUrls.join(' | ') : '' },
       { id: 'description', label: 'Описание', value: data.description },
     ].filter(f => f.value !== undefined && f.value !== null && f.value !== '');
     const hasCover = Boolean(cover) && /^https?:\/\//i.test(cover);
@@ -2694,12 +2761,16 @@ function openAiDataPreview(fb, data, opts = {}) {
 /** Промпт для извлечения полей книги (общий для формы и карточки).
  *  🔖 3.8.8: максимум информации — серия (название/номер/всего), цена с
  *  валютой, возраст, теги, обложка. */
-const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога. По данным поиска о книге вытащи МАКСИМУМ информации и верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"seriesTotal":0,"priceAmount":0,"priceCurrency":"","coverUrl":"","tags":[]}. title — название; author — автор(ы); isbn — ISBN-13/ISBN-10; genre — жанр; publisher — издательство; publishedDate — год выпуска или дата; pageCount — количество страниц; ageRating — возрастное ограничение (напр. «16+»); description — аннотация; series — название серии, ЕСЛИ книга входит в серию (иначе пустая строка); seriesNumber — номер книги в серии; seriesTotal — сколько всего книг в серии (если известно); priceAmount — цена числом; priceCurrency — валюта (RUB, USD...); coverUrl — прямая ссылка на обложку из данных поиска; tags — до 5 тегов. Если данных нет — пустая строка или 0. Используй ТОЛЬКО факты из данных поиска, ничего не выдумывай.';
+const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога и библиографический парсер. По ВСЕМ данным веб-поиска вытащи МАКСИМУМ проверяемой информации и верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"seriesTotal":0,"priceAmount":0,"priceCurrency":"","priceOffers":[],"coverUrl":"","sourceUrls":[],"tags":[]}. priceOffers — массив всех найденных предложений о покупке/электронной/аудиоверсии: [{"amount":0,"currency":"RUB","type":"paper|ebook|audio|unknown","source":"","url":""}]. Не объединяй разные цены в одну: сохраняй каждую цену отдельным элементом, дубли удаляй. sourceUrls — URL страниц-источников, на которых найдены данные. title — название; author — автор(ы); isbn — ISBN-13/ISBN-10; genre — жанр; publisher — издательство; publishedDate — год выпуска или дата; pageCount — количество страниц; ageRating — возрастное ограничение (напр. «16+»); description — аннотация; series — название серии, ЕСЛИ книга входит в серию (иначе пустая строка); seriesNumber — номер книги в серии; seriesTotal — сколько всего книг в серии (если известно); priceAmount/priceCurrency — основная цена для совместимости; coverUrl — прямая ссылка на обложку из данных поиска; tags — до 5 тегов. Если данных нет — пустая строка, 0 или []; используй ТОЛЬКО факты из данных поиска, ничего не выдумывай. Если источники противоречат друг другу, не угадывай: выбери значение, подтверждённое большинством, а сомнительное оставь пустым.';
 
 /** Вызывает chatXkiro и надёжно разбирает JSON-ответ модели. */
 async function aiExtractBookFields(query, searchResult, extraHints = '') {
-  const thumb = searchResult?.thumbnail ? '\nURL обложки: ' + searchResult.thumbnail : '';
-  const user = `Запрос: ${query}\n\nДанные веб-поиска:\nНазвание: ${searchResult.title}\nURL: ${searchResult.url}\nОписание: ${searchResult.snippet}\nИсточник: ${searchResult.source}${searchResult.publicationDate ? '\nДата: ' + searchResult.publicationDate : ''}${thumb}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
+  const results = Array.isArray(searchResult) ? searchResult : [searchResult];
+  const blocks = results.filter(Boolean).map((r, i) => {
+    const thumb = r.thumbnail ? '\nURL обложки: ' + r.thumbnail : '';
+    return `Источник #${i + 1}:\nНазвание: ${r.title || ''}\nURL: ${r.url || ''}\nОписание: ${r.snippet || ''}\nИсточник: ${r.source || ''}${r.publicationDate ? '\nДата: ' + r.publicationDate : ''}${thumb}`;
+  }).join('\n\n');
+  const user = `Запрос: ${query}\n\nДанные веб-поиска (используй ВСЕ источники):\n${blocks}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
   const content = await chatXkiro({
     apiKey: S.settings.xkiroApiKey,
     model: S.settings.xkiroModel,
@@ -2738,6 +2809,10 @@ function applyAiFieldsToBook(book, d, searchResult) {
   if (Number.isFinite(amount) && amount > 0) {
     book.price = { amount, currency: d.priceCurrency || 'RUB' };
   }
+  const offers = normalizeAiPriceOffers(d.priceOffers);
+  if (offers.length) book.priceOffers = offers;
+  const sources = normalizeAiSourceUrls(d.sourceUrls);
+  if (sources.length) book.sourceUrls = sources;
   return book;
 }
 
@@ -2966,6 +3041,18 @@ function openBookDetail(bookId) {
       ${book.series ? meta('Серия', book.series + (book.seriesNumber ? ' #' + book.seriesNumber : '')) : ''}
       ${(S.settings.showPriceInDetail && book.price?.amount > 0) ? meta('Цена', formatPrice(book.price)) : ''}
     </div>
+    ${(S.settings.showPriceInDetail && Array.isArray(book.priceOffers) && book.priceOffers.length) ? `
+      <div class="detail-section">
+        <h3>${icon('coin', 14)} Найденные цены</h3>
+        <div class="book-meta">
+          ${book.priceOffers.map(p => `<span class="book-badge badge-price">${esc(formatPrice({ amount: Number(p.amount), currency: p.currency }))}${p.type && p.type !== 'unknown' ? ' · ' + esc(p.type) : ''}${p.source ? ' · ' + esc(p.source) : ''}</span>`).join('')}
+        </div>
+      </div>` : ''}
+    ${Array.isArray(book.sourceUrls) && book.sourceUrls.length ? `
+      <div class="detail-section">
+        <h3>${icon('link', 14)} Источники</h3>
+        <div class="book-meta">${book.sourceUrls.map(u => `<a class="text-small" href="${esc(safeLinkUrl(u))}" target="_blank" rel="noopener noreferrer">${esc(new URL(u).hostname)}</a>`).join(' · ')}</div>
+      </div>` : ''}
     ${formatsHtml}
     ${book.status === 'reading' && book.pageCount > 0 ? `
       <div class="reading-progress">
@@ -3831,7 +3918,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.8.8 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.9.0 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 

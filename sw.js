@@ -11,7 +11,7 @@ const BASE = '/BookTrackerPro';
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
 // Должно совпадать с полем "cache" в version.json
-const CACHE_NAME = 'btp-v3.8.8';
+const CACHE_NAME = 'btp-v3.9.0';
 
 const COVER_CACHE_NAME = 'btp-covers-v1';
 // 🔖 3.8.6: btp-ocr-v1 → btp-ocr-v2 — в v1 на устройствах могли

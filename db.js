@@ -1358,6 +1358,8 @@ export function ensureBookFields(book) {
   if (book.cover === undefined) book.cover = '';
   if (book.coverUrl === undefined) book.coverUrl = '';
   if (book.price === undefined) book.price = { amount: 0, currency: 'RUB' };
+  if (book.priceOffers === undefined) book.priceOffers = [];
+  if (book.sourceUrls === undefined) book.sourceUrls = [];
   if (book.isPR === undefined) book.isPR = false;
   if (book.currentPage === undefined) book.currentPage = 0;
   if (book.pageCount === undefined) book.pageCount = 0;
