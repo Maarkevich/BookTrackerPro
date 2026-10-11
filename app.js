@@ -86,7 +86,9 @@ import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-regi
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
 import {
-  esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
+   esc, safeUrl, safeLinkUrl, escAttr, showToast, debounce, sanitizeColor,
+   coverPlaceholderHtml, applyCoverFallback,
+
   trackOverlay, untrackOverlay,
   consumePoppingState, hasOverlays, pushSentinel, closeTopOverlay, closeTopOverlayForBack,
   makeCardKeyboardAccessible,
@@ -117,6 +119,7 @@ const S = {
     bloggerMode: true,
     defaultCurrency: 'RUB',
     showPriceInCards: true, showPriceInDetail: true, showPriceInStats: true,
+    showSaleInCards: true, showSaleInDetail: true, showSaleInStats: true, // 🆕 v3.9.1
     exchangeRates: { USD: 90, EUR: 98, KZT: 0.18, UAH: 2.2, GBP: 115 },
     ratesUpdated: '',
   },
@@ -1098,19 +1101,10 @@ export function renderBookList(container, books, limit, handlers = {}) {
       if (e.target.closest('.status-btn')) return;
       if (e.target.closest('.tag-chip')) return;
       if (e.target.closest('.tag-more-btn')) return;
-      if (e.target.closest('.btn-ai-card')) return;
       (handlers.onOpenBook || openBookDetail)(card.dataset.id);
     });
     // 🆕 P2-18: keyboard-доступность карточки (Enter/Space)
     makeCardKeyboardAccessible(card);
-  });
-
-  // 🔖 3.8.6: кнопка «Заполнить через AI» на карточке
-  container.querySelectorAll('.btn-ai-card').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      (handlers.onAiFill || fillBookViaAi)(btn.dataset.aiBookId);
-    });
   });
 
   container.querySelectorAll('.status-btn').forEach(btn => {
@@ -1162,6 +1156,7 @@ function renderBooksTab() {
     { id: 'finished', label: 'Прочитано', ic: 'checkCircle' },
     { id: 'paused', label: 'Пауза', ic: 'pause' },
     { id: 'dropped', label: 'Брошено', ic: 'xCircle' },
+    { id: 'sold', label: 'Продано', ic: 'coin' },
     { id: 'pr', label: 'PR', ic: 'box' },
   ];
 
@@ -1213,9 +1208,11 @@ function renderBooksTab() {
 
   const listHost = document.createElement('div');
   mc.appendChild(listHost);
-  renderBookList(listHost, books, S.booksLimit);
+   renderBookList(listHost, books, S.booksLimit);
+   applyCoverFallback(listHost);
 
-  mc.querySelectorAll('.filter-chip').forEach(chip => {
+   mc.querySelectorAll('.filter-chip').forEach(chip => {
+
     chip.addEventListener('click', () => {
       S.activeFilter = null;
       S.bookFilter = chip.dataset.filter;
@@ -1440,18 +1437,25 @@ function renderBookCard(book) {
   const statusClass = {
     wishlist: 'badge-wishlist', added: 'badge-added', reading: 'badge-reading',
     paused: 'badge-paused', finished: 'badge-finished', dropped: 'badge-dropped',
+    sold: 'badge-sold', // 🆕 v3.9.1
   }[book.status] || 'badge-status';
 
   const contentCount = (book.contentItems || []).length;
   const publishedCount = (book.contentItems || []).filter(c => c.status === 'published').length;
   const progress = book.pageCount > 0 ? Math.round((book.currentPage / book.pageCount) * 100) : 0;
 
-  const coverHtml = book.coverUrl
-    ? `<img class="book-cover" src="${esc(safeUrl(book.coverUrl))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
-    : `<div class="book-cover-placeholder">${icon('bookClosed', 32)}<span class="cover-ph-title">${esc(book.title)}</span></div>`;
+  const coverUrl = safeUrl(book.coverUrl);
+  const coverHtml = coverUrl
+    ? `<img class="book-cover" src="${esc(coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-cover-fallback data-cover-title="${escAttr(book.title || '')}" data-cover-placeholder-class="book-cover-placeholder"/>`
+    : coverPlaceholderHtml(book.title);
 
   const priceHtml = (S.settings.showPriceInCards && book.price?.amount > 0)
     ? `<span class="book-badge badge-price">${icon('coin', 11)} ${formatPrice(book.price)}</span>` : '';
+  // 🆕 v3.9.1: бейдж продажи в карточке (настройка showSaleInCards)
+  const saleHtml = (book.status === 'sold' && book.sale && S.settings.showSaleInCards)
+    ? `<span class="book-badge badge-sale">${icon('coin', 11)} ${book.sale.amount > 0
+        ? formatPrice({ amount: Number(book.sale.amount), currency: book.sale.currency || 'RUB' })
+        : 'Продана'}</span>` : '';
   const seriesHtml = book.series
     ? `<span class="book-badge badge-series">${icon('layers', 11)} ${esc(book.series)}${book.seriesNumber ? ' #' + book.seriesNumber : ''}</span>` : '';
   const formatsHtml = (book.formats || []).map(f => {
@@ -1480,10 +1484,6 @@ function renderBookCard(book) {
         <div class="book-title-row">
           <div class="book-title">${esc(book.title)}</div>
           ${markHtml}
-          ${isAiConfigured(S.settings) ? `
-            <button class="book-badge badge-ai btn-ai-card" data-ai-book-id="${escAttr(book.id)}" aria-label="Заполнить через AI" title="Заполнить карточку через AI">
-              ${icon('sparkles', 11)} AI
-            </button>` : ''}
         </div>
         <div class="book-author">${esc(book.author)}</div>
         <div class="book-meta">
@@ -1493,6 +1493,7 @@ function renderBookCard(book) {
           ${book.isPR ? `<span class="book-badge badge-pr">${icon('box', 11)} PR</span>` : ''}
           ${seriesHtml}
           ${priceHtml}
+          ${saleHtml}
           ${formatsHtml}
           ${contentCount > 0 ? `<span class="book-badge badge-content">${icon('film', 11)} ${contentCount}${publishedCount ? ' · ' + icon('send', 10) + publishedCount : ''}</span>` : ''}
           ${book.review?.rating > 0 ? `<span class="book-badge badge-rating">${starsRow(book.review.rating)}</span>` : ''}
@@ -1511,6 +1512,74 @@ function renderBookCard(book) {
 //  DROPDOWN СТАТУСА (🆕 SVG)
 // ═══════════════════════════════════════════════
 let _statusDropdown = null;
+
+// 🆕 v3.9.1 §13: форма быстрой продажи при выборе статуса «Продана».
+// Возвращает:
+//   sale    — { amount, currency, date, note } (сумма может быть 0/пустой);
+//   null    — «Пропустить» (продажа без указанных полей);
+//   undefined — отмена (статус НЕ меняется).
+function openSaleModal(book) {
+  return new Promise((resolve) => {
+    const cur = book.sale?.currency || S.settings.defaultCurrency || 'RUB';
+    const modal = document.createElement('div');
+    modal.className = 'ui-confirm-overlay'; // reuse: центрированный оверлей
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Быстрая продажа');
+    modal.innerHTML = `
+      <div class="ui-confirm-panel" style="max-width:340px;width:100%">
+        <div class="ui-confirm-icon" style="background:var(--green-dim);color:var(--green)">${icon('coin', 36)}</div>
+        <div class="ui-confirm-msg"><b>Продажа книги</b><div class="text-small text-muted mt-4" style="font-weight:400">«${esc(book.title)}»</div></div>
+        <div class="sale-modal-fields">
+          <label class="form-group" style="margin-bottom:8px"><label>Сумма (${cur})</label>
+          <input id="sale-amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0" value="${book.sale?.amount ? Number(book.sale.amount) : ''}"/>
+          <label class="form-group" style="margin-bottom:8px"><label>Валюта</label>
+          <select id="sale-currency">
+            ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${c.symbol} ${c.name}</option>`).join('')}
+          </select>
+          <label class="form-group" style="margin-bottom:8px"><label>Дата продажи</label>
+          <input id="sale-date" type="date" value="${book.sale?.date || new Date().toISOString().slice(0, 10)}"/>
+          <label class="form-group" style="margin-bottom:8px"><label>Заметка (необязательно)</label>
+          <textarea id="sale-note" rows="2" placeholder="Кому продали, где..."></textarea>
+        </div>
+        <div class="btn-group" style="margin-top:0">
+          <button type="button" class="ui-confirm-cancel" id="sale-skip">Без полей</button>
+          <button type="button" class="ui-confirm-ok" id="sale-save" style="background:var(--green);color:#fff">${icon('check', 13)} Сохранить</button>
+        </div>
+        <div class="text-small text-muted" style="text-align:center;margin-top:8px">Пропуск просто сменит статус на «Продана»</div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const lastFocused = document.activeElement;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done(undefined); }
+      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'BUTTON') {
+        e.preventDefault(); save();
+      }
+    };
+    const cleanup = () => {
+      modal.remove();
+      document.removeEventListener('keydown', onKey);
+      if (lastFocused && lastFocused.focus) lastFocused.focus();
+    };
+    const done = (val) => { cleanup(); resolve(val !== undefined && (val ?? null)); };
+    const save = () => {
+      const amount = Math.max(0, parseFloat(modal.querySelector('#sale-amount').value) || 0);
+      const currency = modal.querySelector('#sale-currency').value || cur;
+      const date = modal.querySelector('#sale-date').value || new Date().toISOString().slice(0, 10);
+      const note = modal.querySelector('#sale-note').value.trim();
+      done({ amount, currency, date, note });
+    };
+
+    modal.querySelector('#sale-amount').focus();
+    modal.querySelector('#sale-save').addEventListener('click', save);
+    modal.querySelector('#sale-skip').addEventListener('click', () => done(null));
+    modal.addEventListener('click', (e) => { if (e.target === modal) done(undefined); });
+    document.addEventListener('keydown', onKey);
+  });
+}
+
 function openStatusDropdown(anchor, bookId) {
   closeStatusDropdown();
   const book = S.books.find(b => b.id === bookId);
@@ -1541,10 +1610,18 @@ function openStatusDropdown(anchor, bookId) {
       closeStatusDropdown();
       if (newStatus === book.status) return;
 
+      // 🆕 v3.9.1 §13: при выборе статуса «Продана» — форма быстрой продажи.
+      // Сумма необязательна: отмена/пропуск → статус меняется без sale-полей.
+      let sale = null;
+      if (newStatus === 'sold') {
+        sale = await openSaleModal(book);
+        if (sale === undefined) return; // отмена → статус не меняется
+      }
+
       // 🆕 P1-5: при ошибке IndexedDB — нет success toast
       let result;
       try {
-        result = await changeBookStatus(bookId, newStatus);
+        result = await changeBookStatus(bookId, newStatus, sale);
       } catch (err) {
         console.error('[DB] changeBookStatus error:', err);
         showToast('❌ Не удалось обновить статус: ошибка базы данных', 'error');
@@ -1801,6 +1878,21 @@ function openBookForm(book = null) {
         <div class="form-group"><label>Текущая страница</label><input type="number" id="bf-page" value="${b.currentPage || 0}" min="0"/></div>
         <div class="form-group"><label>Оценка (1–5)</label><input type="number" id="bf-rating" value="${b.rating || b.review?.rating || 0}" min="0" max="5"/></div>
       </div>
+      <div id="bf-sale-fields" class="${(b.status || 'wishlist') === 'sold' ? '' : 'hidden'}">
+        <div class="form-hint mb-8" style="margin-top:10px">${icon('coin', 13)} Продажа (сумма не обязательна)</div>
+        <div class="form-row">
+          <div class="form-group"><label>Сумма</label><input type="number" id="bf-sale-amount" value="${b.sale?.amount || ''}" min="0" step="0.01" placeholder="1200"/></div>
+          <div class="form-group"><label>Валюта</label>
+            <select id="bf-sale-currency">
+              ${Object.entries(CURRENCIES).map(([k, c]) => `<option value="${k}" ${(b.sale?.currency || 'RUB') === k ? 'selected' : ''}>${c.symbol} ${c.name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Дата продажи</label><input type="date" id="bf-sale-date" value="${b.sale?.date || ''}"/></div>
+          <div class="form-group"><label>Заметка</label><input type="text" id="bf-sale-note" value="${esc(b.sale?.note || '')}" placeholder="Продано на Авито"/></div>
+        </div>
+      </div>
     </div>
     <div class="form-section">
       <h3>${icon('fire', 15)} Дополнительные оценки</h3>
@@ -1994,6 +2086,15 @@ function openBookForm(book = null) {
     renderOption: (opt) => `<span style="display:flex;align-items:center;gap:8px">${statusIcon(opt.value, 14)} ${esc(BOOK_STATUSES[opt.value]?.label || opt.textContent)}</span>`,
     renderTrigger: (opt) => `<span style="display:flex;align-items:center;gap:8px">${statusIcon(opt.value, 14)} ${esc(BOOK_STATUSES[opt.value]?.label || opt.textContent)}</span>`,
   });
+  // 🆕 v3.9.1: пристатус «Продана» — показываем поля продажи
+  const statusSel = fb.querySelector('#bf-status');
+  const updateSaleFields = () => {
+    const show = statusSel.value === 'sold';
+    const saleFields = fb.querySelector('#bf-sale-fields');
+    if (saleFields) saleFields.classList.toggle('hidden', !show);
+  };
+  statusSel.addEventListener('change', updateSaleFields);
+  updateSaleFields();
   // 🆕 v3.8.5: дата-пикер для даты получения PR
   attachDatePicker(fb.querySelector('#bf-received-date'));
 
@@ -2130,6 +2231,13 @@ async function saveBookForm(selectedTags, selectedFormats) {
       .map(p => ({ amount: Number(p.amount), currency: String(p.currency || 'RUB').toUpperCase(), type: String(p.type || 'unknown'), source: String(p.source || ''), url: safeLinkUrl(p.url || '') })),
     sourceUrls: parseJsonArrayField(f.querySelector('#bf-source-urls')?.value).map(u => safeLinkUrl(u)).filter(Boolean),
     status: f.querySelector('#bf-status').value,
+    // 🆕 v3.9.1: продажа книги (статус «Продана»)
+    sale: {
+      amount: parseFloat(f.querySelector('#bf-sale-amount')?.value) || 0,
+      currency: f.querySelector('#bf-sale-currency')?.value || 'RUB',
+      date: f.querySelector('#bf-sale-date')?.value || '',
+      note: f.querySelector('#bf-sale-note')?.value.trim() || '',
+    },
     currentPage: parseInt(f.querySelector('#bf-page').value) || 0,
     rating: parseInt(f.querySelector('#bf-rating').value) || 0,
     tags, tropes, formats, shelfMark,
@@ -2422,7 +2530,10 @@ async function handleWebSearch() {
     const src = sourceMeta[r.source] || { label: r.source, cls: 'badge-source', ic: 'globe' };
     return `
       <div class="web-result" data-idx="${i}">
-        ${r.cover ? `<img class="web-result-cover" src="${esc(safeUrl(r.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
+         ${safeUrl(r.cover)
+           ? `<img class="web-result-cover" src="${esc(safeUrl(r.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer" data-cover-fallback data-cover-title="${escAttr(r.title || '')}" data-cover-placeholder-class="web-result-cover web-result-cover-placeholder"/>`
+           : coverPlaceholderHtml(r.title, 'web-result-cover web-result-cover-placeholder')}
+
         <div class="web-result-info">
           <div class="web-result-title">${esc(r.title)}</div>
           <div class="web-result-meta">${esc(r.author)}${r.publisher ? ' · ' + esc(r.publisher) : ''}${r.pageCount ? ' · ' + r.pageCount + ' стр.' : ''}</div>
@@ -2455,17 +2566,19 @@ function fillFormFromResult(r) {
 // ═══════════════════════════════════════════════
 //  🔖 3.8.6: AI-ПОИСК КНИГИ (xKiro)
 // ═══════════════════════════════════════════════
-async function handleAiBookSearch(fb) {
+async function handleAiBookSearch(fb, options = {}) {
   const query = (fb.querySelector('#bf-ai-query')?.value || '').trim();
   const resultsEl = fb.querySelector('#bf-ai-results');
+  const previewOptions = options.previewOptions || {};
   if (!query) { showToast('⚠️ Введите запрос', 'error'); return; }
   if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
   if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
 
   // 🔖 3.8.8: ссылка http(s): обрабатывается через Microlink + AI-обогащение
   if (/^https?:\/\//i.test(query) || /^www\./i.test(query)) {
-    await handleAiBookLink(fb, /^https?:\/\//i.test(query) ? query : 'https://' + query);
+    await handleAiBookLink(fb, /^https?:\/\//i.test(query) ? query : 'https://' + query, previewOptions);
     return;
+
   }
 
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
@@ -2482,9 +2595,10 @@ async function handleAiBookSearch(fb) {
       <button type="button" id="bf-ai-merge" class="btn-primary" style="width:100%;margin:6px 0 10px">${icon('sparkles', 14)} Собрать данные из всех источников</button>` : ''}
       ${results.map((r, i) => `
       <div class="web-result" data-idx="${i}" role="button" tabindex="0">
-        ${r.thumbnail
-          ? `<img class="web-result-cover" src="${esc(safeUrl(r.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer"/>`
-          : `<div class="web-result-cover" style="display:flex;align-items:center;justify-content:center">${icon('bookClosed', 18)}</div>`}
+         ${safeUrl(r.thumbnail)
+           ? `<img class="web-result-cover" src="${esc(safeUrl(r.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer" data-cover-fallback data-cover-title="${escAttr(r.title || '')}" data-cover-placeholder-class="web-result-cover web-result-cover-placeholder"/>`
+           : coverPlaceholderHtml(r.title, 'web-result-cover web-result-cover-placeholder')}
+
         <div class="web-result-info">
           <div class="web-result-title">${esc(r.title)}</div>
           <div class="web-result-meta">${esc(r.snippet || '').slice(0, 160)}${r.source ? ' · ' + esc(r.source) : ''}${r.publicationDate ? ' · ' + esc(r.publicationDate) : ''}</div>
@@ -2492,13 +2606,16 @@ async function handleAiBookSearch(fb) {
       </div>
     `).join('')}`;
 
+    applyCoverFallback(resultsEl);
     resultsEl.querySelector('#bf-ai-merge')?.addEventListener('click', async () => {
+
       const mergeBtn = resultsEl.querySelector('#bf-ai-merge');
       mergeBtn.disabled = true;
       mergeBtn.textContent = '⏳ Собираю данные и цены...';
       try {
         const data = await aiExtractBookFields(query, results, 'Это ISBN-запрос. Собери одну карточку книги, все подтверждённые цены и все URL источников.');
-        const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '' });
+        const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '', ...previewOptions });
+
         resultsEl.querySelector('.form-hint')?.insertAdjacentHTML('afterend', applied
           ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Сводные данные применены — проверьте и сохраните.</div>'
           : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, данные не изменены.</div>');
@@ -2511,7 +2628,8 @@ async function handleAiBookSearch(fb) {
     resultsEl.querySelectorAll('.web-result').forEach(el => {
       const pick = () => {
         const r = results[parseInt(el.dataset.idx)];
-        fillAiFormFromSearch(fb, r, query);
+        fillAiFormFromSearch(fb, r, query, previewOptions);
+
       };
       el.addEventListener('click', pick);
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
@@ -2527,7 +2645,7 @@ async function handleAiBookSearch(fb) {
  * цена, теги...) → прозрачный предпросмотр. Если Microlink не справился —
  * фолбэк на xKiro web-поиск по адресу.
  */
-async function handleAiBookLink(fb, url) {
+async function handleAiBookLink(fb, url, previewOptions = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Обрабатываю ссылку (Microlink + AI)...</div>';
   try {
@@ -2551,7 +2669,8 @@ async function handleAiBookLink(fb, url) {
     }
     const data = await aiExtractBookFields(url, pseudo);
     if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
-    const applied = await openAiDataPreview(fb, data, { fallbackCover: pseudo.thumbnail });
+     const applied = await openAiDataPreview(fb, data, { fallbackCover: pseudo.thumbnail, ...previewOptions });
+
     resultsEl.innerHTML = applied
       ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
       : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
@@ -2560,14 +2679,15 @@ async function handleAiBookLink(fb, url) {
   }
 }
 
-async function fillAiFormFromSearch(fb, result, query) {
+async function fillAiFormFromSearch(fb, result, query, previewOptions = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Извлекаю данные книги...</div>';
   try {
     const data = await aiExtractBookFields(query, result);
     if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
     // 🔖 3.8.8: прозрачность — показываем, что AI нашёл, и что применить
-    const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail });
+     const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail, ...previewOptions });
+
     resultsEl.innerHTML = applied
       ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
       : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
@@ -2666,7 +2786,10 @@ function openAiDataPreview(fb, data, opts = {}) {
   return new Promise((resolve) => {
     const fallbackCover = opts.fallbackCover || '';
     const cover = data.coverUrl || fallbackCover || '';
+    const allowedFields = opts.allowedFields || null;
+    const fieldAllowed = (id) => !allowedFields || Boolean(allowedFields[id]);
     const FIELDS = [
+
       { id: 'title', label: 'Название', value: data.title },
       { id: 'author', label: 'Автор', value: data.author },
       { id: 'isbn', label: 'ISBN', value: data.isbn },
@@ -2680,8 +2803,10 @@ function openAiDataPreview(fb, data, opts = {}) {
       { id: 'prices', label: 'Все цены', value: Array.isArray(data.priceOffers) && data.priceOffers.length ? data.priceOffers.map(p => `${p.amount || 0} ${p.currency || ''}${p.type && p.type !== 'unknown' ? ` · ${p.type}` : ''}${p.source ? ` · ${p.source}` : ''}`).join(' | ') : '' },
       { id: 'sourceUrls', label: 'Источники', value: Array.isArray(data.sourceUrls) ? data.sourceUrls.join(' | ') : '' },
       { id: 'description', label: 'Описание', value: data.description },
-    ].filter(f => f.value !== undefined && f.value !== null && f.value !== '');
-    const hasCover = Boolean(cover) && /^https?:\/\//i.test(cover);
+    ].filter(f => fieldAllowed(f.id) && f.value !== undefined && f.value !== null && f.value !== '');
+    const hasCover = fieldAllowed('cover') && Boolean(cover) && /^https?:\/\//i.test(cover);
+
+
 
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
@@ -2714,7 +2839,10 @@ function openAiDataPreview(fb, data, opts = {}) {
                   <input type="checkbox" class="ai-prev-check" checked data-prev-id="cover" style="margin-top:3px"/>
                   <span style="flex:1">
                     <span class="text-small text-muted" style="display:block">Обложка</span>
-                    <img src="${esc(safeUrl(cover))}" alt="" referrerpolicy="no-referrer" loading="lazy" style="max-width:96px;max-height:128px;border-radius:6px;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>
+                     ${safeUrl(cover)
+                       ? `<img src="${esc(safeUrl(cover))}" alt="" referrerpolicy="no-referrer" loading="lazy" data-cover-fallback data-cover-title="${escAttr(data.title || '')}" data-cover-placeholder-class="ai-preview-cover-placeholder" style="max-width:96px;max-height:128px;border-radius:6px;box-shadow:2px 2px 8px rgba(0,0,0,.35)"/>`
+                       : coverPlaceholderHtml(data.title, 'ai-preview-cover-placeholder')}
+
                   </span>
                 </label>
               </div>` : ''}
@@ -2730,8 +2858,10 @@ function openAiDataPreview(fb, data, opts = {}) {
         </div>
       </div>
     `;
-    document.body.appendChild(overlay);
-    trackOverlay(overlay, { onClose: () => done(false) });
+     document.body.appendChild(overlay);
+     applyCoverFallback(overlay);
+     trackOverlay(overlay, { onClose: () => done(false) });
+
 
     const done = (ok) => {
       overlay.remove();
@@ -2902,6 +3032,75 @@ async function fillBookViaAi(bookId) {
 }
 
 // ═══════════════════════════════════════════════
+//  AI-ПОИСК ИЗ ДЕТАЛЕЙ
+// ═══════════════════════════════════════════════
+function openDetailAiFieldPicker(book) {
+  const fields = [
+    ['title', 'Название'], ['author', 'Автор'], ['isbn', 'ISBN'],
+    ['genre', 'Жанр'], ['publisher', 'Издательство'], ['publishedDate', 'Год'],
+    ['pageCount', 'Страницы'], ['description', 'Описание'], ['series', 'Серия'],
+    ['price', 'Цена'], ['cover', 'Обложка'],
+  ];
+  const modal = document.createElement('div');
+  modal.className = 'overlay';
+  modal.innerHTML = `
+    <div class="overlay-panel ai-detail-picker-panel" role="dialog" aria-modal="true">
+      <div class="overlay-header">
+        <h2>${icon('sparkles', 16)} Обновить через AI</h2>
+        <button class="icon-btn detail-ai-picker-close" aria-label="Закрыть">${icon('close', 16)}</button>
+      </div>
+      <div class="overlay-body">
+        <p class="text-small text-muted">Выберите поля, которые нужно найти и показать в предпросмотре. Книга не будет сохранена автоматически.</p>
+        <div class="ai-detail-fields">
+          ${fields.map(([id, label]) => `<label><input type="checkbox" data-detail-ai-field="${id}" checked/> <span>${label}</span></label>`).join('')}
+        </div>
+        <div class="form-group mt-16">
+          <label for="detail-ai-query">Запрос</label>
+          <input id="detail-ai-query" type="text" value="${escAttr([book.title, book.author, book.isbn].filter(Boolean).join(' — '))}" />
+        </div>
+        <div class="btn-group mt-16">
+          <button id="detail-ai-go" class="btn-primary">${icon('search', 14)} Найти и показать</button>
+          <button id="detail-ai-cancel" class="btn-secondary">Отмена</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  trackOverlay(modal, { onClose: () => modal.remove() });
+
+  const close = () => {
+    untrackOverlay(modal);
+    modal.remove();
+  };
+  modal.querySelector('.detail-ai-picker-close').addEventListener('click', close);
+  modal.querySelector('#detail-ai-cancel').addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('#detail-ai-query').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') modal.querySelector('#detail-ai-go').click();
+    if (e.key === 'Escape') close();
+  });
+  modal.querySelector('#detail-ai-go').addEventListener('click', () => {
+    const chosen = {};
+    modal.querySelectorAll('[data-detail-ai-field]').forEach(input => {
+      if (input.checked) chosen[input.dataset.detailAiField] = true;
+    });
+    const query = modal.querySelector('#detail-ai-query').value.trim();
+    close();
+    if (!query) { showToast('⚠️ Введите запрос', 'error'); return; }
+    closeOverlay(DOM.detailOverlay);
+    openBookForm(book);
+    setTimeout(() => {
+      const queryEl = document.querySelector('#bf-ai-query');
+      const aiBtn = document.querySelector('#bf-ai-search');
+      if (!queryEl || !aiBtn || !DOM.formBody) return;
+      queryEl.value = query;
+      handleAiBookSearch(DOM.formBody, { previewOptions: { allowedFields: chosen } });
+    }, 250);
+  });
+  setTimeout(() => modal.querySelector('#detail-ai-query')?.focus(), 50);
+}
+
+// ═══════════════════════════════════════════════
 //  ISBN ПОИСК
 // ═══════════════════════════════════════════════
 async function handleIsbnLookup(isbnInput) {
@@ -3015,13 +3214,15 @@ function openBookDetail(bookId) {
 
   DOM.detailBody.innerHTML = `
     <div class="detail-hero">
-      ${book.coverUrl
-        ? `<img class="detail-cover" id="detail-cover-img" src="${esc(safeUrl(book.coverUrl))}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer"/>`
-        : `<div class="detail-cover-placeholder" id="detail-cover-ph" style="cursor:pointer" title="Добавить обложку">${icon('bookClosed', 52)}<span class="cover-ph-title">${esc(book.title)}</span></div>`}
+      ${safeUrl(book.coverUrl)
+        ? `<img class="detail-cover" id="detail-cover-img" src="${esc(safeUrl(book.coverUrl))}" alt="" style="cursor:zoom-in" referrerpolicy="no-referrer" data-cover-fallback data-cover-title="${escAttr(book.title || '')}" data-cover-placeholder-class="detail-cover-placeholder"/>`
+        : `<div class="detail-cover-placeholder" id="detail-cover-ph" style="cursor:pointer" title="Добавить обложку">${coverPlaceholderHtml(book.title, 'detail-cover-placeholder-inner')}</div>`}
       <div style="flex:1;min-width:0">
         <div class="detail-title-row">
           <div class="detail-title">${esc(book.title)}</div>
           ${markHtml}
+          ${isAiConfigured(S.settings) ? `
+            <button id="detail-ai" class="book-badge badge-ai" aria-label="Заполнить через AI" title="Найти данные о книге через AI">${icon('sparkles', 12)} AI</button>` : ''}
         </div>
         <div class="detail-author">${esc(book.author)}</div>
         <div class="book-meta">
@@ -3040,7 +3241,21 @@ function openBookDetail(bookId) {
       ${book.isbn ? meta('ISBN', formatISBN(book.isbn)) : ''}
       ${book.series ? meta('Серия', book.series + (book.seriesNumber ? ' #' + book.seriesNumber : '')) : ''}
       ${(S.settings.showPriceInDetail && book.price?.amount > 0) ? meta('Цена', formatPrice(book.price)) : ''}
+      ${book.status === 'sold' && book.sale && S.settings.showSaleInDetail ? (
+        book.sale.amount > 0
+          ? meta('Продана за', `${formatPrice({ amount: Number(book.sale.amount), currency: book.sale.currency || 'RUB' })}${book.sale.date ? ' · ' + book.sale.date : ''}`)
+          : meta('Продана', book.sale.date || 'сумма не указана')
+      ) : ''}
     </div>
+    ${book.status === 'sold' && book.sale && S.settings.showSaleInDetail ? `
+      <div class="detail-section">
+        <h3>${icon('coin', 14)} Продажа</h3>
+        <div class="book-meta">
+          ${book.sale.amount > 0 ? `<span class="book-badge badge-price">${esc(formatPrice({ amount: Number(book.sale.amount), currency: book.sale.currency || 'RUB' }))}</span>` : '<span class="text-muted text-small">Сумма не указана</span>'}
+          ${book.sale.date ? `<span class="text-small text-muted">${icon('calendar', 11)} ${esc(book.sale.date)}</span>` : ''}
+          ${book.sale.note ? `<span class="text-small text-muted">${icon('message', 11)} ${esc(book.sale.note)}</span>` : ''}
+        </div>
+      </div>` : ''}
     ${(S.settings.showPriceInDetail && Array.isArray(book.priceOffers) && book.priceOffers.length) ? `
       <div class="detail-section">
         <h3>${icon('coin', 14)} Найденные цены</h3>
@@ -3143,13 +3358,22 @@ function openBookDetail(bookId) {
   const db = DOM.detailBody;
   const coverImg = db.querySelector('#detail-cover-img');
   if (coverImg) coverImg.addEventListener('click', () => openCoverViewer(book));
-  const coverPh = db.querySelector('#detail-cover-ph');
-  if (coverPh) coverPh.addEventListener('click', () => openCoverViewer(book));
+   const coverPh = db.querySelector('#detail-cover-ph');
+   if (coverPh) coverPh.addEventListener('click', () => openCoverViewer(book));
+   applyCoverFallback(db);
+
   db.querySelector('.status-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     openStatusDropdown(e.currentTarget, book.id);
   });
   db.querySelector('#detail-edit').addEventListener('click', () => { closeOverlay(DOM.detailOverlay); openBookForm(book); });
+  // 🔖 3.9.1: AI-кнопка в деталях книги (справа сверху).
+  // Поток «выбор полей → поиск → предпросмотр» реализуется в v3.9.1 (этап 6);
+  // сейчас ведёт на существующий AI-поиск с предпросмотром применяемых полей.
+  const detailAiBtn = db.querySelector('#detail-ai');
+  if (detailAiBtn) {
+    detailAiBtn.addEventListener('click', () => openDetailAiFieldPicker(book));
+  }
   db.querySelector('#detail-delete').addEventListener('click', async () => {
     const ok = await showConfirm('Удалить эту книгу?', { danger: true, okText: 'Удалить' });
     if (ok) {
@@ -3807,6 +4031,10 @@ function renderSettingsTab() {
       <div class="toggle-row"><span class="toggle-label">Показывать цену в карточках</span><div class="toggle ${s.showPriceInCards ? 'active' : ''}" id="set-price-cards" role="switch" tabindex="0"></div></div>
       <div class="toggle-row"><span class="toggle-label">Показывать цену на странице книги</span><div class="toggle ${s.showPriceInDetail ? 'active' : ''}" id="set-price-detail" role="switch" tabindex="0"></div></div>
       <div class="toggle-row"><span class="toggle-label">Показывать цену в статистике</span><div class="toggle ${s.showPriceInStats ? 'active' : ''}" id="set-price-stats" role="switch" tabindex="0"></div></div>
+      <div class="hint mt-8" style="border-top:1px dashed var(--bg-input);padding-top:10px">🚀 ${icon('coin', 12)} Видимость цены продажи (статус «Продана»)</div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену продажи в карточках</span><div class="toggle ${s.showSaleInCards ? 'active' : ''}" id="set-sale-cards" role="switch" tabindex="0"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену продажи на странице книги</span><div class="toggle ${s.showSaleInDetail ? 'active' : ''}" id="set-sale-detail" role="switch" tabindex="0"></div></div>
+      <div class="toggle-row"><span class="toggle-label">Показывать цену продажи в статистике</span><div class="toggle ${s.showSaleInStats ? 'active' : ''}" id="set-sale-stats" role="switch" tabindex="0"></div></div>
       <div class="hint mt-8">Курсы валют обновлены: ${s.ratesUpdated || 'никогда'} · 1 USD = ${s.exchangeRates.USD} ₽</div>
       <button id="set-rates-update" class="btn-secondary mt-8">${icon('refresh', 13)} Обновить курсы</button>
     </div>
@@ -3941,6 +4169,9 @@ function renderSettingsTab() {
   bindToggle('#set-price-cards', 'showPriceInCards');
   bindToggle('#set-price-detail', 'showPriceInDetail');
   bindToggle('#set-price-stats', 'showPriceInStats');
+  bindToggle('#set-sale-cards', 'showSaleInCards');
+  bindToggle('#set-sale-detail', 'showSaleInDetail');
+  bindToggle('#set-sale-stats', 'showSaleInStats');
   bindToggle('#set-confetti', 'confetti');
   bindToggle('#set-sound', 'sound');
 

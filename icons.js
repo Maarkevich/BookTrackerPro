@@ -160,6 +160,7 @@ export const STATUS_ICONS = {
   paused:   'pause',
   finished: 'checkCircle',
   dropped:  'xCircle',
+  sold:     'coin', // v3.9.1: статус «Продана»
 };
 
 // Типы контента → контурные иконки

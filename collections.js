@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────
 import { loadCollections, putCollection, delCollection,
          addBookToCollection, removeBookFromCollection } from './db.js';
-import { esc, safeUrl, applyCoverFallback, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: из utils; 🆕 P2-18: keyboard карточек
+import { esc, safeUrl, coverPlaceholderHtml, applyCoverFallback, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: из utils; 🆕 P2-18: keyboard карточек
 import { icon } from './icons.js';
 import { showConfirm } from './uikit.js';
 
@@ -174,10 +174,11 @@ export function renderCollectionDetail(container, collection, books, callbacks) 
         ${colBooks.map(b => `
           <div class="book-card" data-book-id="${b.id}">
             ${b.coverUrl
-              ? `<img class="book-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy"
-                      referrerpolicy="no-referrer"
-                      data-cover-fallback/>`
-              : `<div class="book-cover-placeholder">${icon('bookClosed', 24)}</div>`}
+               ? `<img class="book-cover" src="${esc(safeUrl(b.coverUrl))}" alt="" loading="lazy"
+                       referrerpolicy="no-referrer"
+                       data-cover-fallback data-cover-title="${esc(b.title || '')}"/>`
+
+              : coverPlaceholderHtml(b.title)}
             <div class="book-info">
               <div class="book-title">${esc(b.title)}</div>
               <div class="book-author">${esc(b.author)}</div>

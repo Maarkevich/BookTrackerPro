@@ -121,14 +121,43 @@ export function escAttr(s) {
  *
  * @param {HTMLElement} scope — контейнер после innerHTML
  */
+export function coverPlaceholderHtml(title = '', className = 'book-cover-placeholder') {
+  const label = String(title || 'Без названия');
+  const classes = String(className || 'book-cover-placeholder')
+    .split(/\s+/)
+    .filter(token => /^[A-Za-z][A-Za-z0-9_-]*$/.test(token))
+    .join(' ') || 'book-cover-placeholder';
+  return `<div class="${esc(classes)}" data-cover-placeholder aria-label="Обложка: ${esc(label)}">
+    <svg class="cover-placeholder-svg" viewBox="0 0 64 96" aria-hidden="true" focusable="false">
+      <path d="M10 8h34c6.6 0 10 3.4 10 10v68c0 2.2-1.8 4-4 4H16c-3.3 0-6-2.7-6-6V12c0-2.2 1.8-4 4-4Z" fill="currentColor" opacity=".22"/>
+      <path d="M10 8h34c6.6 0 10 3.4 10 10v68H16c-3.3 0-6-2.7-6-6V12c0-2.2 1.8-4 4-4Z" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M18 26h25M18 33h20M18 70h28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".7"/>
+      <path d="M10 80c0-3.3 2.7-6 6-6h38v8H16c-3.3 0-6 2.7-6 6Z" fill="currentColor" opacity=".5"/>
+    </svg>
+    <span class="cover-placeholder-title">${esc(label)}</span>
+  </div>`;
+}
+
+/**
+ * Привязывает обработчики 'error' к обложкам с атрибутом
+ * data-cover-fallback и заменяет битую картинку единой SVG-заглушкой.
+ * @param {HTMLElement} scope — контейнер после innerHTML
+ */
 export function applyCoverFallback(scope) {
   if (!scope || typeof scope.querySelectorAll !== 'function') return;
   scope.querySelectorAll('img[data-cover-fallback]').forEach(img => {
     if (img.dataset.coverFallbackBound) return;
     img.dataset.coverFallbackBound = '1';
     img.addEventListener('error', () => {
-      img.style.display = 'none';
-    });
+      const className = img.dataset.coverPlaceholderClass || 'book-cover-placeholder';
+      const title = img.dataset.coverTitle || img.alt || '';
+      const range = document.createRange();
+      range.selectNode(img);
+      const replacement = range.createContextualFragment(coverPlaceholderHtml(title, className)).firstElementChild;
+      if (!replacement) return;
+      if (img.id) replacement.id = img.id;
+      img.replaceWith(replacement);
+    }, { once: true });
   });
 }
 

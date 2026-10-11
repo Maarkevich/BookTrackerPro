@@ -1,5 +1,5 @@
 // 📦 BookTrackerPro — db.js
-// 🔖 v3.8.6 | 2026-09-25
+// 🔖 v3.9.1 | 2026-10-10
 // 📝 IndexedDB: книги, обложки, настройки,
 //    подборки, челленджи, теги, превью ссылок
 //    Версия БД: 6
@@ -7,7 +7,14 @@
 //            collections, challenges, tags, previews,
 //            pending-sync
 //
-//    Новое в 3.8.6: без функциональных изменений.
+//    Новое в 3.9.1:
+//      — 🏷️ Статус «Продана» (sold) + продажа sale{amount,currency,date,note}
+//      — 💰 Расширенная цена price{...,source,label,type,url,collectedAt}
+//      — 📚 Источники sources[] (домен, тип, дата, статус, поля, конфликты)
+//    Сохранено из 3.9.0:
+//      — priceOffers[] / sourceUrls[] (AI ISBN-парсер)
+//      — importAll = СИНХРОНИЗАЦИЯ (merge)
+//      — putBooks (batch) / pending-sync / repairCovers()
 //    Сохранено из 3.8.5:
 //      — importAll = СИНХРОНИЗАЦИЯ (merge):
 //        добавляет только отсутствующие записи (по id/name),
@@ -34,6 +41,7 @@ export const BOOK_STATUSES = {
   paused:   { icon: '⏸️', label: 'Пауза',         order: 3 },
   finished: { icon: '✅', label: 'Прочитано',     order: 4 },
   dropped:  { icon: '❌', label: 'Брошено',       order: 5 },
+  sold:     { icon: '💰', label: 'Продана',       order: 6 }, // 🆕 v3.9.1
 };
 
 // ═══════════════════════════════════════════════
@@ -47,6 +55,12 @@ export const CURRENCIES = {
   UAH: { symbol: '₴', name: 'Гривна' },
   GBP: { symbol: '£', name: 'Фунт' },
 };
+
+// ═══════════════════════════════════════════════
+//  ТИПЫ ЦЕНЫ И ИСТОЧНИКОВ (v3.9.1)
+// ═══════════════════════════════════════════════
+export const PRICE_TYPES = ['paper', 'ebook', 'audio', 'unknown'];
+export const SOURCE_TYPES = ['publisher', 'shop', 'library', 'catalog'];
 
 // ═══════════════════════════════════════════════
 //  1. ОТКРЫТИЕ / МИГРАЦИЯ
@@ -267,6 +281,11 @@ export function applyStatusTransition(book, oldStatus, newStatus, nowIso = new D
     if (!book.dateFinished) book.dateFinished = today;
     askRating = true;
   }
+  // 🆕 v3.9.1: «Продана» — дата продажи подставляется, если не указана
+  if (newStatus === 'sold') {
+    if (!book.sale) book.sale = { amount: 0, currency: 'RUB', date: '', note: '' };
+    if (!book.sale.date) book.sale.date = today;
+  }
   if (oldStatus === 'finished' && newStatus !== 'finished') {
     book.dateFinished = '';
     book.readingDays = undefined;
@@ -274,12 +293,20 @@ export function applyStatusTransition(book, oldStatus, newStatus, nowIso = new D
   return { confetti, askRating };
 }
 
-export async function changeBookStatus(bookId, newStatus) {
+export async function changeBookStatus(bookId, newStatus, sale = null) {
   const book = await getBook(bookId);
   if (!book) return null;
   const oldStatus = book.status;
   const now = new Date().toISOString();
   book.updatedAt = now;
+  // 🆕 v3.9.1: быстрая продажа из dropdown — sale применяется до смены статуса,
+  // чтобы applyStatusTransition корректно подставил дату продажи для «Продана».
+  if (sale) book.sale = {
+    amount: Math.max(0, Number(sale.amount) || 0),
+    currency: (sale.currency || book.sale?.currency || 'RUB').slice(0, 8),
+    date: sale.date || book.sale?.date || '',
+    note: String(sale.note || '').slice(0, 300),
+  };
   const { confetti, askRating } = applyStatusTransition(book, oldStatus, newStatus, now);
   await putBook(book);
   return { confetti, askRating, book };
@@ -1007,6 +1034,8 @@ export function sanitizeSettingsForExport(settings) {
   const SAFE_SETTINGS_KEYS = [
     'confetti', 'sound', 'defaultPlatform', 'bloggerMode',
     'defaultCurrency', 'showPriceInCards', 'showPriceInDetail', 'showPriceInStats',
+    // 🆕 v3.9.1: настройки видимости продажи — переносятся через экспорт/импорт
+    'showSaleInCards', 'showSaleInDetail', 'showSaleInStats',
     'exchangeRates', 'ratesUpdated',
   ];
   if (!settings || typeof settings !== 'object') return {};
@@ -1135,7 +1164,19 @@ export async function importAll(data) {
   const challengeIds = new Set(existingChallenges.map(c => c.id));
   const tagNames = new Set(existingTags.map(t => t.name));
 
-  const newBooks = data.books.filter(b => !bookIds.has(b.id));
+  // 🆕 v3.9.1: ISBN — дополнительная проверка на дубль.
+  // Стабильный id — основной ключ; если у импортируемой книги другой id,
+  // но ISBN совпадает с существующей — это та же книга, дубль пропускаем.
+  const booksByIsbn = new Map();
+  for (const b of existingBooks) {
+    const isbn = cleanIsbnKey(b.isbn);
+    if (isbn && !booksByIsbn.has(isbn)) booksByIsbn.set(isbn, b.id);
+  }
+  const newBooks = data.books.filter(b => {
+    if (bookIds.has(b.id)) return false;
+    const isbn = cleanIsbnKey(b.isbn);
+    return !(isbn && booksByIsbn.has(isbn));
+  });
   const newCols = rawCols.filter(c => !colIds.has(c.id));
   const newChallenges = rawChallenges.filter(c => !challengeIds.has(c.id));
   const newTags = rawTags.filter(t => !tagNames.has(t.name));
@@ -1178,7 +1219,9 @@ export async function importAll(data) {
   const storeNames = ['books', 'covers', 'collections', 'challenges', 'tags', 'settings']
     .filter(name => db.objectStoreNames.contains(name));
 
-  // obложки новых книг (P1-3): base64 → Blob, повреждённый base64 молча пропускаем
+  // Обложки: для новых книг (P1-3) + для существующих БЕЗ локальной
+  // обложки (v3.9.1 §16: «отсутствующая локальная обложка дополняется
+  // импортированной»; существующая хорошая обложка НЕ затирается).
   const coversToPut = [];
   if (storeNames.includes('covers')) {
     const coversByBook = new Map();
@@ -1187,8 +1230,22 @@ export async function importAll(data) {
         coversByBook.set(c.bookId, c);
       }
     }
-    for (const book of booksToPut) {
-      const coverData = coversByBook.get(book.id);
+    // локальные Blob-обложки существующих книг (ключ bookId → наличие)
+    // 🆕 v3.9.1: множество ТОЛЬКО bookId с реальной обложкой в store,
+    // чтобы книга существующая, но БЕЗ обложки, дополнялась из импорта.
+    const existingCoverKeys = new Set();
+    const coversStore = await new Promise((resolve, reject) => {
+      const tx = db.transaction('covers', 'readonly');
+      const req = tx.objectStore('covers').getAllKeys();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error || new Error('read covers keys failed'));
+      tx.onerror = () => reject(tx.error || new Error('read covers keys failed'));
+      tx.onabort = () => reject(tx.error || new Error('read covers keys aborted'));
+    });
+    for (const key of coversStore) existingCoverKeys.add(key);
+    const needsCover = (bookId) => existingCoverKeys.has(bookId) ? null : coversByBook.get(bookId);
+    for (const book of [...booksToPut, ...data.books]) {
+      const coverData = needsCover(book.id);
       if (!coverData) continue;
       try {
         const blob = base64ToBlob(coverData.base64, coverData.mime || 'image/jpeg');
@@ -1240,7 +1297,23 @@ function validateImportBooks(books) {
       if (!b.price || typeof b.price !== 'object' || Array.isArray(b.price)) throw new Error('Неверный тип price');
       if (b.price.amount !== undefined && typeof b.price.amount !== 'number') throw new Error('Неверный тип price.amount');
       if (b.price.currency !== undefined && typeof b.price.currency !== 'string') throw new Error('Неверный тип price.currency');
+      if (b.price.source !== undefined && typeof b.price.source !== 'string') throw new Error('Неверный тип price.source');
+      if (b.price.label !== undefined && typeof b.price.label !== 'string') throw new Error('Неверный тип price.label');
+      if (b.price.type !== undefined && typeof b.price.type !== 'string') throw new Error('Неверный тип price.type');
+      if (b.price.url !== undefined && typeof b.price.url !== 'string') throw new Error('Неверный тип price.url');
+      if (b.price.collectedAt !== undefined && typeof b.price.collectedAt !== 'string') throw new Error('Неверный тип price.collectedAt');
     }
+    // 🆕 v3.9.1: продажа / источники / ценовые предложения
+    if (b.sale !== undefined) {
+      if (!b.sale || typeof b.sale !== 'object' || Array.isArray(b.sale)) throw new Error('Неверный тип sale');
+      if (b.sale.amount !== undefined && typeof b.sale.amount !== 'number') throw new Error('Неверный тип sale.amount');
+      if (b.sale.currency !== undefined && typeof b.sale.currency !== 'string') throw new Error('Неверный тип sale.currency');
+      if (b.sale.date !== undefined && typeof b.sale.date !== 'string') throw new Error('Неверный тип sale.date');
+      if (b.sale.note !== undefined && typeof b.sale.note !== 'string') throw new Error('Неверный тип sale.note');
+    }
+    if (b.sources !== undefined && !Array.isArray(b.sources)) throw new Error('Неверный тип sources');
+    if (b.priceOffers !== undefined && !Array.isArray(b.priceOffers)) throw new Error('Неверный тип priceOffers');
+    if (b.sourceUrls !== undefined && !Array.isArray(b.sourceUrls)) throw new Error('Неверный тип sourceUrls');
     if (b.review !== undefined && !isPlainObject(b.review)) throw new Error('Неверный тип review');
     if (b.jointReading !== undefined && !isPlainObject(b.jointReading)) throw new Error('Неверный тип jointReading');
     if (b.shelfMark !== undefined && !isPlainObject(b.shelfMark)) throw new Error('Неверный тип shelfMark');
@@ -1315,6 +1388,14 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** Нормализует ISBN для сравнения при импорте (v3.9.1): цифры или EAN-13. */
+function cleanIsbnKey(v) {
+  if (typeof v !== 'string') return '';
+  const digits = v.replace(/[-\s]/g, '');
+  if (/^\d{10}$/.test(digits) || /^\d{13}$/.test(digits)) return digits;
+  return '';
+}
+
 /** Клонирует книгу и прогоняет ensureBookFields (дефолты + санитизация URL). */
 function makeValidBook(b) {
   const clone = JSON.parse(JSON.stringify(b));
@@ -1360,6 +1441,81 @@ export function ensureBookFields(book) {
   if (book.price === undefined) book.price = { amount: 0, currency: 'RUB' };
   if (book.priceOffers === undefined) book.priceOffers = [];
   if (book.sourceUrls === undefined) book.sourceUrls = [];
+  // 🆕 v3.9.1: санитизация priceOffers (не-доверенный источник из веба)
+  if (Array.isArray(book.priceOffers)) {
+    const seen = new Set();
+    book.priceOffers = book.priceOffers
+      .filter(p => p && typeof p === 'object' && !Array.isArray(p))
+      .map(p => ({
+        amount: (typeof p.amount === 'number' && Number.isFinite(p.amount) && p.amount > 0) ? Math.round(p.amount * 100) / 100 : 0,
+        currency: (typeof p.currency === 'string' && p.currency) ? p.currency.toUpperCase().slice(0, 8) : 'RUB',
+        type: (typeof p.type === 'string' && PRICE_TYPES.includes(p.type)) ? p.type : 'unknown',
+        source: (typeof p.source === 'string' && p.source) ? p.source.slice(0, 200) : '',
+        url: typeof p.url === 'string' ? safeLinkUrl(p.url) : '',
+      }))
+      .filter(p => p.amount > 0)
+      .filter(p => {
+        const key = `${p.amount}|${p.currency}|${p.type}|${p.source}|${p.url}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      })
+      .slice(0, 200);
+  }
+  // 🆕 v3.9.1: санитизация sourceUrls
+  if (Array.isArray(book.sourceUrls)) {
+    book.sourceUrls = [...new Set(book.sourceUrls
+      .map(u => (typeof u === 'string' ? safeLinkUrl(u) : ''))
+      .filter(Boolean))]
+      .slice(0, 50);
+  }
+  // 🆕 v3.9.1: единая выбранная цена с метаданными источника
+  if (book.price !== undefined && typeof book.price === 'object' && !Array.isArray(book.price)) {
+    if (book.price.source === undefined) book.price.source = '';
+    if (book.price.label === undefined) book.price.label = '';
+    if (book.price.type === undefined) book.price.type = 'unknown';
+    if (book.price.url === undefined) book.price.url = '';
+    if (book.price.collectedAt === undefined) book.price.collectedAt = '';
+    if (typeof book.price.type !== 'string' || !PRICE_TYPES.includes(book.price.type)) book.price.type = 'unknown';
+    if (typeof book.price.amount !== 'number' || !Number.isFinite(book.price.amount) || book.price.amount < 0) book.price.amount = 0;
+    if (typeof book.price.url === 'string') book.price.url = safeLinkUrl(book.price.url);
+  }
+  // 🆕 v3.9.1: продажа
+  if (book.sale === undefined) {
+    book.sale = { amount: 0, currency: 'RUB', date: '', note: '' };
+  } else if (book.sale && typeof book.sale === 'object' && !Array.isArray(book.sale)) {
+    if (book.sale.amount === undefined) book.sale.amount = 0;
+    if (book.sale.currency === undefined) book.sale.currency = 'RUB';
+    if (book.sale.date === undefined) book.sale.date = '';
+    if (book.sale.note === undefined) book.sale.note = '';
+  } else {
+    book.sale = { amount: 0, currency: 'RUB', date: '', note: '' };
+  }
+  // санитизация продажи: amount — неотрицательное число, currency — текст
+  if (typeof book.sale.amount !== 'number' || !Number.isFinite(book.sale.amount) || book.sale.amount < 0) book.sale.amount = 0;
+  if (typeof book.sale.currency !== 'string' || !book.sale.currency) book.sale.currency = 'RUB';
+  // 🆕 v3.9.1: источники книги
+  if (book.sources === undefined) book.sources = [];
+  if (Array.isArray(book.sources)) {
+    book.sources = book.sources
+      .filter(s => s && typeof s === 'object' && !Array.isArray(s))
+      .map(s => {
+        const out = { ...s };
+        if (typeof out.url !== 'string' || !out.url) out.url = '';
+        out.url = safeLinkUrl(out.url);
+        if (typeof out.originalUrl !== 'string') out.originalUrl = out.url;
+        out.originalUrl = safeLinkUrl(out.originalUrl);
+        if (typeof out.domain !== 'string') out.domain = '';
+        if (typeof out.type !== 'string' || !SOURCE_TYPES.includes(out.type)) out.type = 'catalog';
+        if (typeof out.fetchedAt !== 'string') out.fetchedAt = '';
+        if (typeof out.status !== 'string') out.status = '';
+        if (!Array.isArray(out.fields)) out.fields = [];
+        if (!Array.isArray(out.warnings)) out.warnings = [];
+        if (!Array.isArray(out.conflicts)) out.conflicts = [];
+        if (typeof out.snippet !== 'string') out.snippet = '';
+        return out;
+      })
+      .filter(s => s.url);
+  }
   if (book.isPR === undefined) book.isPR = false;
   if (book.currentPage === undefined) book.currentPage = 0;
   if (book.pageCount === undefined) book.pageCount = 0;

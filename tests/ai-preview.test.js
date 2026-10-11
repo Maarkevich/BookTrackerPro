@@ -27,6 +27,7 @@ import {
   attachAiCover,
   AI_BOOK_FIELDS_SYSTEM,
 } from '../app.js';
+import { coverPlaceholderHtml, applyCoverFallback } from '../utils.js';
 
 const FORM_IDS = [
   '#bf-title', '#bf-author', '#bf-isbn', '#bf-genre', '#bf-publisher', '#bf-year',
@@ -50,6 +51,31 @@ function fakeForm() {
 afterEach(() => {
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
+});
+
+describe('единая SVG-заглушка обложки', () => {
+  it('рендерит SVG, название книги и безопасно экранирует текст', () => {
+    document.body.innerHTML = coverPlaceholderHtml('<Книга>', 'book-cover-placeholder');
+    const placeholder = document.querySelector('[data-cover-placeholder]');
+    expect(placeholder.querySelector('svg.cover-placeholder-svg')).toBeTruthy();
+    expect(placeholder.textContent).toContain('<Книга>');
+    expect(placeholder.innerHTML).not.toContain('<Книга>');
+  });
+
+  it('не вставляет произвольные классы из пользовательского значения', () => {
+    const html = coverPlaceholderHtml('Книга', 'book-cover-placeholder" data-x="1');
+    expect(html).not.toContain('data-x="1"');
+  });
+
+  it('заменяет битую обложку той же SVG-заглушкой', () => {
+    document.body.innerHTML = '<img data-cover-fallback data-cover-title="Тест" data-cover-placeholder-class="book-cover-placeholder" src="https://example.com/broken.jpg">';
+    const img = document.querySelector('img');
+    applyCoverFallback(document.body);
+    img.dispatchEvent(new Event('error'));
+    expect(document.querySelector('img')).toBeNull();
+    expect(document.querySelector('[data-cover-placeholder]')).toBeTruthy();
+    expect(document.querySelector('.cover-placeholder-title').textContent).toBe('Тест');
+  });
 });
 
 describe('openAiDataPreview (прозрачное окно ответа AI)', () => {
@@ -84,6 +110,19 @@ describe('openAiDataPreview (прозрачное окно ответа AI)', ()
     expect(document.querySelector('#bf-series').value).toBe('');
     expect(document.querySelector('#bf-series-num').value).toBe('');
     expect(document.querySelector('#bf-cover').value).toBe('');
+  });
+
+  it('allowedFields ограничивает поля до выбора из деталей книги', async () => {
+    const p = openAiDataPreview(realForm(), {
+      title: 'Название', author: 'Автор', genre: 'Жанр', description: 'Описание',
+    }, { allowedFields: { title: true, author: true } });
+    const ids = [...document.querySelectorAll('.ai-prev-check')].map(input => input.dataset.prevId);
+    expect(ids).toEqual(['title', 'author']);
+    document.querySelector('#ai-prev-apply').click();
+    await expect(p).resolves.toBe(true);
+    expect(document.querySelector('#bf-title').value).toBe('Название');
+    expect(document.querySelector('#bf-author').value).toBe('Автор');
+    expect(document.querySelector('#bf-genre').value).toBe('');
   });
 
   it('fallbackCover: обложка из результата поиска, когда модель не дала coverUrl', async () => {

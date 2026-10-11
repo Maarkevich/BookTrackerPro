@@ -288,7 +288,8 @@ function renderContentStats(container, books) {
 //  5. СТАТИСТИКА: ФИНАНСЫ
 // ═══════════════════════════════════════════════
 function renderMoneyStats(container, books, settings) {
-  if (!settings.showPriceInStats) {
+  const showSales = settings.showSaleInStats !== false;
+  if (!settings.showPriceInStats && !showSales) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">${icon('coin', 56)}</div>
@@ -300,12 +301,16 @@ function renderMoneyStats(container, books, settings) {
   }
 
   const priced = books.filter(b => b.price?.amount > 0);
-  if (priced.length === 0) {
+  const sold = showSales ? books.filter(b => b.status === 'sold' && b.sale) : [];
+  const soldWithAmount = sold.filter(b => Number(b.sale.amount) > 0);
+  const soldWithoutAmount = sold.length - soldWithAmount.length;
+
+  if (priced.length === 0 && soldWithAmount.length === 0 && soldWithoutAmount === 0) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">${icon('coin', 56)}</div>
-        <div class="empty-title">Нет данных о ценах</div>
-        <div class="empty-text">Добавьте цену книге в форме редактирования</div>
+        <div class="empty-title">Нет данных о ценах и продажах</div>
+        <div class="empty-text">Добавьте цену книге или отметьте книгу как «Продана»</div>
       </div>
     `;
     return;
@@ -321,13 +326,43 @@ function renderMoneyStats(container, books, settings) {
   }));
 
   const total = converted.reduce((s, c) => s + c.amount, 0);
-  const avg = Math.round(total / converted.length);
-  const mostExpensive = converted.reduce((a, b) => a.amount > b.amount ? a : b);
+  const avg = converted.length ? Math.round(total / converted.length) : 0;
+  const mostExpensive = converted.length ? converted.reduce((a, b) => a.amount > b.amount ? a : b) : null;
 
   const nowKey = new Date().toISOString().slice(0, 7);
   const thisMonth = converted
     .filter(c => (c.book.dateAdded || '').startsWith(nowKey))
     .reduce((s, c) => s + c.amount, 0);
+
+  // 🆕 v3.9.1: продажи
+  const saleConv = soldWithAmount.map(b => ({
+    book: b,
+    amount: convertToDefault({ amount: Number(b.sale.amount), currency: b.sale.currency || 'RUB' }, settings).amount,
+    original: { amount: Number(b.sale.amount), currency: b.sale.currency || 'RUB' },
+  })).filter(s => Number.isFinite(s.amount));
+  const saleTotal = saleConv.reduce((s, c) => s + c.amount, 0);
+  const saleAvg = saleConv.length ? Math.round(saleTotal / saleConv.length) : 0;
+
+  const saleByMonth = {};
+  for (const b of sold) {
+    const m = (b.sale.date || b.dateAdded || '').slice(0, 7);
+    if (!m) continue;
+    const amount = Number(b.sale.amount) > 0
+      ? convertToDefault({ amount: Number(b.sale.amount), currency: b.sale.currency || 'RUB' }, settings).amount
+      : 0;
+    saleByMonth[m] = (saleByMonth[m] || 0) + amount;
+  }
+  const saleMonthEntries = Object.entries(saleByMonth).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+  const maxSaleMonth = Math.max(...saleMonthEntries.map(([, v]) => v), 1);
+
+  // 🆕 v3.9.1: прибыль/убыток по каждой проданной книге (если есть и цена, и продажа)
+  const comparisons = saleConv.map(c => {
+    const price = c.book.price?.amount > 0
+      ? convertToDefault(c.book.price, settings).amount
+      : null;
+    if (price === null) return null;
+    return { book: c.book, cost: price, soldFor: c.amount, diff: c.amount - price };
+  }).filter(Boolean);
 
   const byPub = {};
   for (const c of converted) {
@@ -359,6 +394,7 @@ function renderMoneyStats(container, books, settings) {
   const palette = ['#e8a33d','#94b878','#d98aa8','#7fb8b0','#b092d6','#8aa3c9','#e0955c','#d97b6c'];
 
   container.innerHTML = `
+    ${converted.length > 0 ? `
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-value" data-countup="${total}">0</div>
@@ -377,7 +413,59 @@ function renderMoneyStats(container, books, settings) {
         <div class="stat-label">${icon('bookClosed', 13)} Книг с ценой</div>
       </div>
     </div>
+    ` : ''}
 
+    ${sold.length > 0 ? `
+    <div class="stat-section">
+      <h3>${icon('coin', 14)} Продажи</h3>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" data-countup="${soldWithAmount.length}">0</div>
+          <div class="stat-label">${icon('checkCircle', 13)} Продано (с суммой)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" data-countup="${saleTotal}">0</div>
+          <div class="stat-label">${icon('coin', 13)} Сумма продаж (${defSym})</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" data-countup="${saleAvg}">0</div>
+          <div class="stat-label">${icon('target', 13)} Средняя продажа</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" data-countup="${soldWithoutAmount}">0</div>
+          <div class="stat-label">${icon('xCircle', 13)} Без суммы</div>
+        </div>
+      </div>
+    </div>
+    ` : ''}
+
+    ${saleMonthEntries.length > 0 ? `
+    <div class="stat-section">
+      <h3>${icon('calendar', 14)} Продажи по месяцам</h3>
+      ${saleMonthEntries.map(([m, v]) => barRow(formatMonth(m), v, maxSaleMonth, 'var(--green)', ' ' + defSym)).join('')}
+    </div>
+    ` : ''}
+
+    ${comparisons.length > 0 ? `
+    <div class="stat-section">
+      <h3>${icon('compare', 14)} Стоимость vs продажа</h3>
+      ${comparisons.map(c => `
+        <div class="content-card" style="cursor:default">
+          <div class="content-info">
+            <div class="content-title">${esc(c.book.title)}</div>
+            <div class="content-meta">
+              <span class="text-small text-muted">цена ${Math.round(c.cost).toLocaleString('ru')} ${defSym}</span>
+              <span style="color:var(--text-secondary)">→</span>
+              <span class="text-small text-muted">продана за ${Math.round(c.soldFor).toLocaleString('ru')} ${defSym}</span>
+              <span class="book-badge ${c.diff >= 0 ? 'badge-sale' : 'badge-dropped'}">${c.diff >= 0 ? '＋' : ''}${Math.round(c.diff).toLocaleString('ru')} ${defSym}</span>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+
+    ${mostExpensive ? `
     <!-- Самая дорогая -->
     <div class="stat-section">
       <h3>${icon('trophy', 14)} Самая дорогая книга</h3>
@@ -396,6 +484,7 @@ function renderMoneyStats(container, books, settings) {
         </div>
       </div>
     </div>
+    ` : ''}
 
     <!-- По издательствам -->
     ${pubEntries.length > 0 ? `

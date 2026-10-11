@@ -366,12 +366,19 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
   flex-shrink: 0;
   aspect-ratio: 2 / 3;
+  overflow: hidden;
 }
-.cover-ph-title {
+.cover-placeholder-svg {
+  width: 42%; height: 48%;
+  flex-shrink: 0;
+}
+.cover-placeholder-title {
   font-size: .55rem; text-align: center;
   padding: 0 4px; max-height: 2.2em;
   overflow: hidden; line-height: 1.1;
+  overflow-wrap: anywhere;
 }
+.cover-ph-title { display: none; }
 
 .book-info { flex: 1; min-width: 0; }
 
@@ -424,6 +431,9 @@ a:hover { text-decoration: underline; }
 .badge-paused    { background: var(--orange-dim); color: var(--orange); }
 .badge-finished  { background: var(--purple-dim); color: var(--purple); }
 .badge-dropped   { background: var(--red-dim); color: var(--red); }
+/* 🆕 v3.9.1: статус «Продана» и бейдж продажи */
+.badge-sold      { background: var(--green-dim); color: var(--green); }
+.badge-sale      { background: var(--green-dim); color: var(--green); }
 .badge-pr        { background: var(--pink-dim); color: var(--pink); }
 .badge-price     { background: var(--accent-dim); color: var(--accent); }
 .badge-series    { background: rgba(138,163,201,.15); color: var(--blue); }
@@ -439,6 +449,18 @@ a:hover { text-decoration: underline; }
 
 .status-btn { border: none; cursor: pointer; transition: all .15s var(--ease); }
 .status-btn:hover { filter: brightness(1.15); }
+
+/* ─── v3.9.1: модалка быстрой продажи ─── */
+.sale-modal-fields { text-align: left; margin: 4px 0 12px; }
+.sale-modal-fields label {
+  display: block; font-size: .78rem; font-weight: 700;
+  color: var(--text-secondary); margin-bottom: 4px;
+}
+.sale-modal-fields input,
+.sale-modal-fields select,
+.sale-modal-fields textarea {
+  display: block; width: 100%; margin-bottom: 10px;
+}
 
 /* ─── ПРОГРЕСС ЧТЕНИЯ ─── */
 .book-progress {
@@ -873,6 +895,21 @@ input[type="color"] { border: 1px solid var(--border); border-radius: 6px; paddi
   color: var(--text-muted);
   flex-shrink: 0;
   aspect-ratio: 2 / 3;
+  overflow: hidden;
+}
+.detail-cover-placeholder-inner {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px;
+}
+.detail-cover-placeholder .cover-placeholder-svg,
+.detail-cover-placeholder-inner .cover-placeholder-svg {
+  width: 52%; height: 52%;
+}
+.detail-cover-placeholder .cover-placeholder-title,
+.detail-cover-placeholder-inner .cover-placeholder-title {
+  font-size: .72rem;
+  max-height: 2.4em;
 }
 
 /* 🆕 v3.8.4: строка заголовка + метка полки справа */
@@ -1509,6 +1546,32 @@ details summary:hover { color: var(--accent); }
   flex-shrink: 0;
   background: var(--bg-input);
   aspect-ratio: 2 / 3;
+}
+.web-result-cover-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.web-result-cover-placeholder .cover-placeholder-svg { width: 52%; height: 52%; }
+.web-result-cover-placeholder .cover-placeholder-title,
+.ai-preview-cover-placeholder .cover-placeholder-title { display: none; }
+.ai-preview-cover-placeholder {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 96px; height: 128px; border-radius: 6px;
+  background: var(--bg-input); color: var(--text-muted); overflow: hidden;
+}
+.ai-preview-cover-placeholder .cover-placeholder-svg { width: 52%; height: 52%; }
+.ai-detail-fields {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+  margin-top: 14px;
+}
+.ai-detail-fields label {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text-secondary);
+  font-size: .82rem;
+}
+@media (max-width: 420px) {
+  .ai-detail-fields { grid-template-columns: 1fr; }
 }
 .web-result-info { flex: 1; min-width: 0; }
 .web-result-title {
