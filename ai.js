@@ -247,3 +247,42 @@ export function extractJson(text) {
 export function isAiConfigured(settings) {
   return Boolean(settings?.xkiroApiKey);
 }
+
+/**
+ * 🔖 3.9.1 — Этап 4: запрос страницы российского книжного сайта через
+ * универсальный endpoint Worker (worker/worker.js, маршрут /fetch).
+ * Worker сам валидирует схему/домен, редиректы, таймаут и блокировки;
+ * здесь — только вызов и нормализация ошибок.
+ * @param {object} opts
+ * @param {string} opts.url — ссылка на страницу книги
+ * @param {string} [opts.baseUrl] — URL пользовательского Worker
+ *   (по умолчанию api.xkiro.com — тогда /fetch упадёт с 404, что
+ *   означает «Worker не настроен/не поддерживает /fetch»).
+ * @returns {Promise<{ok: true, url: string, finalUrl: string, domain: string,
+ *   status: number, contentType: string, html: string, truncated: boolean,
+ *   redirected: boolean, warnings: string[]}>}
+ */
+export async function fetchPageViaWorker({ url, baseUrl = AI_BASE }) {
+  if (!url || !String(url).trim()) throw new AiApiError('Пустой URL страницы.');
+  const endpoint = `${normalizeBase(baseUrl)}/fetch`;
+  let resp;
+  try {
+    resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ url: String(url).trim() }),
+    });
+  } catch {
+    throw new AiApiError(
+      'Не удалось связаться с endpoint Worker. Проверьте настройки AI в Настройках → AI (xKiro).',
+      { status: 0 }
+    );
+  }
+  let jsonResp = null;
+  try { jsonResp = await resp.json(); } catch { /* идём в общий статус */ }
+  if (!resp.ok || !jsonResp || jsonResp.ok !== true) {
+    const detail = jsonResp?.error ? `: ${jsonResp.error}` : '';
+    throw new AiApiError(`Endpoint Worker вернул ошибку (HTTP ${resp.status})${detail}`, { status: resp.status });
+  }
+  return jsonResp;
+}
