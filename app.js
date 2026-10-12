@@ -80,8 +80,13 @@ import {
 // 🔖 3.8.7: AI через xKiro исправлен — настраиваемый URL CORS-прокси
 // (xKiro не отдаёт Access-Control-Allow-*: из браузера нужен прокси).
 import {
-  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError, AI_BASE
+  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError, AI_BASE, fetchPageViaWorker
 } from './ai.js';
+// 🔖 3.9.1 этап 5–6: клиентский extractor + AI-нормализация результата
+import { extractPage } from './extract.js';
+import {
+  AI_NORMALIZE_SYSTEM, normalizeAiResult, toPreviewData, isRussianSourceUrl, sourceTypeByDomain,
+} from './normalize.js';
 import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
@@ -1858,6 +1863,8 @@ function openBookForm(book = null) {
       <h3>${icon('coin', 15)} Цена</h3>
       <input type="hidden" id="bf-price-offers" value="${escAttr(JSON.stringify(Array.isArray(b.priceOffers) ? b.priceOffers : []))}"/>
       <input type="hidden" id="bf-source-urls" value="${escAttr(JSON.stringify(Array.isArray(b.sourceUrls) ? b.sourceUrls : []))}"/>
+      <input type="hidden" id="bf-sources" value="${escAttr(JSON.stringify(Array.isArray(b.sources) ? b.sources : []))}"/>
+      <input type="hidden" id="bf-price-meta" value="${escAttr(JSON.stringify(b.price && typeof b.price === 'object' ? { source: b.price.source || '', label: b.price.label || '', type: b.price.type || 'unknown', url: b.price.url || '', collectedAt: b.price.collectedAt || '' } : {}))}"/>
       <div class="form-row">
         <div class="form-group"><label>Цена</label><input type="number" id="bf-price" value="${b.price?.amount || ''}" min="0" placeholder="599"/></div>
         <div class="form-group"><label>Валюта</label>
@@ -2222,14 +2229,25 @@ async function saveBookForm(selectedTags, selectedFormats) {
     series: f.querySelector('#bf-series').value.trim(),
     seriesNumber: parseInt(f.querySelector('#bf-series-num').value) || null,
     seriesTotal: parseInt(f.querySelector('#bf-series-total').value) || null,
-    price: {
-      amount: parseFloat(f.querySelector('#bf-price').value) || 0,
-      currency: f.querySelector('#bf-currency').value,
-    },
+    price: (() => {
+      const meta = parseJsonObjectField(f.querySelector('#bf-price-meta')?.value);
+      return {
+        amount: parseFloat(f.querySelector('#bf-price').value) || 0,
+        currency: f.querySelector('#bf-currency').value,
+        // 🔖 3.9.1 §8: метаданные выбранной цены (источник/тип/URL/дата сбора)
+        source: String(meta.source || ''),
+        label: String(meta.label || ''),
+        type: String(meta.type || 'unknown'),
+        url: meta.url ? safeLinkUrl(meta.url) : '',
+        collectedAt: String(meta.collectedAt || ''),
+      };
+    })(),
     priceOffers: parseJsonArrayField(f.querySelector('#bf-price-offers')?.value)
       .filter(p => Number(p.amount) > 0)
       .map(p => ({ amount: Number(p.amount), currency: String(p.currency || 'RUB').toUpperCase(), type: String(p.type || 'unknown'), source: String(p.source || ''), url: safeLinkUrl(p.url || '') })),
     sourceUrls: parseJsonArrayField(f.querySelector('#bf-source-urls')?.value).map(u => safeLinkUrl(u)).filter(Boolean),
+    // 🔖 3.9.1 §9: источники книги с метаданными (url/domain/type/fields/...)
+    sources: parseJsonArrayField(f.querySelector('#bf-sources')?.value),
     status: f.querySelector('#bf-status').value,
     // 🆕 v3.9.1: продажа книги (статус «Продана»)
     sale: {
@@ -2563,6 +2581,47 @@ function fillFormFromResult(r) {
   if (r.price?.amount > 0) { set('#bf-price', r.price.amount); set('#bf-currency', r.price.currency); }
 }
 
+/**
+ * 🔖 3.9.1 §3B: оставляет результаты только из включённых российских
+ * источников. Если настройка `aiEnabledSources` задана — по ней, иначе по
+ * встроенному allowlist. Если ни один результат не подошёл — возвращает все
+ * (не ломаем поиск, когда источник вне списка).
+ * @param {Array<{url:string}>} results
+ */
+function filterSourceResults(results) {
+  const enabled = Array.isArray(S.settings.aiEnabledSources) && S.settings.aiEnabledSources.length
+    ? S.settings.aiEnabledSources.map((d) => String(d).toLowerCase().replace(/^www\./, ''))
+    : null;
+  const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } };
+  const matches = (r) => {
+    const host = hostOf(r.url || '');
+    if (!host) return false;
+    if (enabled) return enabled.some((d) => host === d || host.endsWith('.' + d));
+    return isRussianSourceUrl(r.url);
+  };
+  const preferred = results.filter(matches);
+  return preferred.length ? preferred : results;
+}
+
+/**
+ * 🔖 3.9.1 §3B: подгружает страницы найденных источников через Worker и
+ * парсит их клиентским extractor. Недоступные страницы молча пропускаются.
+ * @param {Array<{url:string}>} results
+ * @param {number} [limit]
+ */
+async function loadSourcePages(results, limit = 4) {
+  const pages = [];
+  for (const r of results.slice(0, limit)) {
+    if (!isRussianSourceUrl(r.url)) continue;
+    try {
+      const env = await fetchPageViaWorker({ url: r.url, baseUrl: S.settings.xkiroBaseUrl || AI_BASE });
+      pages.push(extractPage(env));
+    } catch { /* страница недоступна — пропускаем */ }
+    if (pages.length >= limit) break;
+  }
+  return pages;
+}
+
 // ═══════════════════════════════════════════════
 //  🔖 3.8.6: AI-ПОИСК КНИГИ (xKiro)
 // ═══════════════════════════════════════════════
@@ -2584,7 +2643,9 @@ async function handleAiBookSearch(fb, options = {}) {
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
   try {
     // Для ISBN ищем шире: каталоги и магазины часто дают разные поля и цены.
-    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 10, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+    let results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 10, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+    // 🔖 3.9.1 §3B: поиск ограничиваем включёнными российскими источниками.
+    results = filterSourceResults(results);
     if (results.length === 0) {
       resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px">Ничего не найдено. Попробуйте другой запрос.</div>';
       return;
@@ -2613,8 +2674,11 @@ async function handleAiBookSearch(fb, options = {}) {
       mergeBtn.disabled = true;
       mergeBtn.textContent = '⏳ Собираю данные и цены...';
       try {
-        const data = await aiExtractBookFields(query, results, 'Это ISBN-запрос. Собери одну карточку книги, все подтверждённые цены и все URL источников.');
-        const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '', ...previewOptions });
+        const queryIsbn = isIsbnQuery ? cleanISBN(query) : '';
+        const pages = await loadSourcePages(results);
+        const result = await aiNormalizeBookFromSources({ query, searchResults: results, pages, queryIsbn });
+        const data = toPreviewData(result, { queryIsbn });
+        const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '', normalized: result, ...previewOptions });
 
         resultsEl.querySelector('.form-hint')?.insertAdjacentHTML('afterend', applied
           ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Сводные данные применены — проверьте и сохраните.</div>'
@@ -2647,6 +2711,33 @@ async function handleAiBookSearch(fb, options = {}) {
  */
 async function handleAiBookLink(fb, url, previewOptions = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
+
+  // 🔖 3.9.1 §3A: основная ветка — Worker /fetch + клиентский extractor +
+  // AI-нормализация единой схемы (§6). Домен обязан входить в разрешённый
+  // список источников; иначе — мягкий фолбэк на прежний путь Microlink + AI.
+  if (isRussianSourceUrl(url)) {
+    resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Загружаю страницу (Worker) и извлекаю данные...</div>';
+    try {
+      const env = await fetchPageViaWorker({ url, baseUrl: S.settings.xkiroBaseUrl || AI_BASE });
+      const page = extractPage(env);
+      const queryIsbn = (page.isbnCandidates || [])[0] || '';
+      const result = await aiNormalizeBookFromSources({ query: url, pages: [page], queryIsbn });
+      const preview = toPreviewData(result, { queryIsbn });
+      const applied = await openAiDataPreview(fb, preview, {
+        fallbackCover: page.meta?.['og:image'] || page.images?.[0]?.url || '',
+        normalized: result,
+        ...previewOptions,
+      });
+      resultsEl.innerHTML = applied
+        ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
+        : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
+      return;
+    } catch (e) {
+      if (!(e instanceof AiApiError)) throw e;
+      // Worker/страница недоступны — продолжаем прежним путём (Microlink + AI).
+    }
+  }
+
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Обрабатываю ссылку (Microlink + AI)...</div>';
   try {
     const mic = await extractBookPreview(url);
@@ -2683,10 +2774,12 @@ async function fillAiFormFromSearch(fb, result, query, previewOptions = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Извлекаю данные книги...</div>';
   try {
-    const data = await aiExtractBookFields(query, result);
-    if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
+    const queryIsbn = /^\d{10,13}$/.test(cleanISBN(query)) ? cleanISBN(query) : '';
+    const pages = await loadSourcePages([result], 1);
+    const norm = await aiNormalizeBookFromSources({ query, searchResults: [result], pages, queryIsbn });
+    const data = toPreviewData(norm, { queryIsbn });
     // 🔖 3.8.8: прозрачность — показываем, что AI нашёл, и что применить
-     const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail, ...previewOptions });
+     const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail, normalized: norm, ...previewOptions });
 
     resultsEl.innerHTML = applied
       ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
@@ -2708,6 +2801,13 @@ function parseJsonArrayField(value) {
     const parsed = JSON.parse(value || '[]');
     return Array.isArray(parsed) ? parsed : [];
   } catch { return []; }
+}
+
+function parseJsonObjectField(value) {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
 }
 
 function normalizeAiPriceOffers(offers) {
@@ -2749,9 +2849,27 @@ function fillFormFromAi(fb, d, opts = {}) {
     set('#bf-series-num', d.seriesNumber || '');
     set('#bf-series-total', d.seriesTotal || '');
   }
-  if (want('price') && Number(d.priceAmount) > 0) {
-    set('#bf-price', Number(d.priceAmount));
-    if (d.priceCurrency) set('#bf-currency', d.priceCurrency);
+  // 🔖 3.9.1 §8: основная цена — выбранный кандидат (если указан индекс).
+  let priceAmount = d.priceAmount;
+  let priceCurrency = d.priceCurrency;
+  let chosenPrice = null;
+  if (Array.isArray(d.priceCandidates) && d.priceCandidates.length) {
+    const idx = Number.isFinite(opts.priceIndex) ? opts.priceIndex : 0;
+    chosenPrice = d.priceCandidates[idx] || d.priceCandidates[0];
+    if (chosenPrice) { priceAmount = chosenPrice.amount; priceCurrency = chosenPrice.currency; }
+  }
+  if (want('price') && Number(priceAmount) > 0) {
+    set('#bf-price', Number(priceAmount));
+    if (priceCurrency) set('#bf-currency', priceCurrency);
+  }
+  // §8: метаданные выбранной цены для сохранения (source/label/type/url).
+  if (chosenPrice) {
+    const metaEl = fb.querySelector('#bf-price-meta');
+    if (metaEl) metaEl.value = JSON.stringify({
+      source: chosenPrice.source || '', label: chosenPrice.label || '',
+      type: chosenPrice.type || 'unknown', url: chosenPrice.url || '',
+      collectedAt: chosenPrice.collectedAt || '',
+    });
   }
   // Все найденные цены сохраняются в метаданные формы и попадут в книгу
   // при сохранении; основная цена остаётся совместимой со старой схемой.
@@ -2763,7 +2881,17 @@ function fillFormFromAi(fb, d, opts = {}) {
     const sourcesEl = fb.querySelector('#bf-source-urls');
     if (sourcesEl) sourcesEl.value = JSON.stringify(normalizeAiSourceUrls(d.sourceUrls));
   }
-  const coverSrc = opts.cover !== undefined ? opts.cover : d.coverUrl;
+  // 🔖 3.9.1 §9: сохраняем источники с метаданными (не зависит от чекбоксов).
+  if (Array.isArray(d.sourcesInfo) && d.sourcesInfo.length) {
+    const sInfoEl = fb.querySelector('#bf-sources');
+    if (sInfoEl) sInfoEl.value = JSON.stringify(d.sourcesInfo);
+  }
+  // 🔖 3.9.1 §10: обложка — выбранный кандидат, если задан индекс.
+  let coverSrc = opts.cover !== undefined ? opts.cover : d.coverUrl;
+  if (Array.isArray(d.coverCandidates) && d.coverCandidates.length && Number.isFinite(opts.coverIndex)) {
+    const c = d.coverCandidates[opts.coverIndex] || d.coverCandidates[0];
+    if (c?.url) coverSrc = c.url;
+  }
   if (want('cover')) {
     if (coverSrc) set('#bf-cover', coverSrc);
     const img = fb.querySelector('#bf-cover-preview-img');
@@ -2788,6 +2916,11 @@ function openAiDataPreview(fb, data, opts = {}) {
     const cover = data.coverUrl || fallbackCover || '';
     const allowedFields = opts.allowedFields || null;
     const fieldAllowed = (id) => !allowedFields || Boolean(allowedFields[id]);
+    // 🔖 3.9.1 §7: нормализованные блоки (кандидаты/конфликты/источники).
+    const priceCandidates = Array.isArray(data.priceCandidates) ? data.priceCandidates : [];
+    const coverCandidates = Array.isArray(data.coverCandidates) ? data.coverCandidates : [];
+    const multiPrice = priceCandidates.length > 1;
+    const multiCover = coverCandidates.length > 1 && fieldAllowed('cover');
     const FIELDS = [
 
       { id: 'title', label: 'Название', value: data.title },
@@ -2803,8 +2936,66 @@ function openAiDataPreview(fb, data, opts = {}) {
       { id: 'prices', label: 'Все цены', value: Array.isArray(data.priceOffers) && data.priceOffers.length ? data.priceOffers.map(p => `${p.amount || 0} ${p.currency || ''}${p.type && p.type !== 'unknown' ? ` · ${p.type}` : ''}${p.source ? ` · ${p.source}` : ''}`).join(' | ') : '' },
       { id: 'sourceUrls', label: 'Источники', value: Array.isArray(data.sourceUrls) ? data.sourceUrls.join(' | ') : '' },
       { id: 'description', label: 'Описание', value: data.description },
-    ].filter(f => fieldAllowed(f.id) && f.value !== undefined && f.value !== null && f.value !== '');
-    const hasCover = fieldAllowed('cover') && Boolean(cover) && /^https?:\/\//i.test(cover);
+    ].filter(f => fieldAllowed(f.id) && f.value !== undefined && f.value !== null && f.value !== ''
+      // 3.9.1 §7: не дублируем строки, если ниже есть нормализованные блоки
+      && !(f.id === 'price' && multiPrice)
+      && !(f.id === 'prices' && priceCandidates.length)
+      && !(f.id === 'sourceUrls' && Array.isArray(data.sourcesInfo) && data.sourcesInfo.length));
+    const hasCover = !multiCover && fieldAllowed('cover') && Boolean(cover) && /^https?:\/\//i.test(cover);
+
+    // 🔖 3.9.1 §8: выбор основной цены, когда кандидатов несколько.
+    const priceChooserHtml = multiPrice && fieldAllowed('price') ? `
+      <div class="ml-field">
+        <span class="text-small text-muted" style="display:block">Цены — выберите основную</span>
+        ${priceCandidates.map((p, i) => `
+          <label style="display:flex;gap:8px;align-items:center;padding:3px 0;cursor:pointer">
+            <input type="radio" class="ai-prev-price-radio" name="ai-prev-price" data-price-idx="${i}" ${i === 0 ? 'checked' : ''}/>
+            <span class="text-small">${esc(`${p.amount} ${p.currency}`)}${p.type && p.type !== 'unknown' ? ` · ${esc(p.type)}` : ''}${p.source ? ` · ${esc(p.source)}` : ''}${p.label ? ` (${esc(p.label)})` : ''}</span>
+          </label>`).join('')}
+      </div>` : '';
+
+    // 🔖 3.9.1 §10: галерея обложек-кандидатов.
+    const coverGalleryHtml = multiCover ? `
+      <div class="ml-field">
+        <span class="text-small text-muted" style="display:block">Обложки — выберите одну</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${coverCandidates.map((c, i) => `
+            <label style="cursor:pointer;text-align:center">
+              <input type="radio" class="ai-prev-cover-radio" name="ai-prev-cover" data-cover-idx="${i}" ${i === 0 ? 'checked' : ''}/>
+              ${safeUrl(c.url)
+                ? `<img src="${esc(safeUrl(c.url))}" alt="" referrerpolicy="no-referrer" loading="lazy" data-cover-fallback data-cover-title="${escAttr(data.title || '')}" data-cover-placeholder-class="ai-preview-cover-placeholder" style="max-width:64px;max-height:86px;border-radius:6px;box-shadow:2px 2px 8px rgba(0,0,0,.35);display:block;margin:4px auto 0"/>`
+                : coverPlaceholderHtml(data.title, 'ai-preview-cover-placeholder')}
+            </label>`).join('')}
+        </div>
+      </div>` : '';
+
+    // 🔖 3.9.1 §6/§9: конфликты, предупреждения и подтверждённые источники.
+    const conflicts = Array.isArray(data.conflicts) ? data.conflicts : [];
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const sourcesInfo = Array.isArray(data.sourcesInfo) ? data.sourcesInfo : [];
+    const confirmedSet = new Set(Array.isArray(data.confirmedSources) ? data.confirmedSources : []);
+    const conflictsHtml = conflicts.length ? `
+      <div class="mt-16" style="padding:10px;border-radius:8px;background:rgba(255,170,0,.12)">
+        <div class="text-small" style="font-weight:600;color:var(--yellow,#f5a623)">⚠️ Расхождения источников (проверьте)</div>
+        ${conflicts.map(c => `<div class="text-small text-muted">${esc(c.field)}: ${esc(c.values.map(v => `${v.value}${v.source ? ` (${v.source})` : ''}`).join(' / '))}</div>`).join('')}
+      </div>` : '';
+    const warningsHtml = warnings.length ? `
+      <div class="mt-16" style="padding:10px;border-radius:8px;background:rgba(255,170,0,.08)">
+        <div class="text-small" style="font-weight:600">Предупреждения</div>
+        ${warnings.map(w => `<div class="text-small text-muted">${esc(w)}</div>`).join('')}
+      </div>` : '';
+    const sourcesHtml = sourcesInfo.length ? `
+      <details class="mt-16">
+        <summary class="text-small text-muted" style="cursor:pointer">Источники (${sourcesInfo.length})</summary>
+        <div style="margin-top:8px">
+          ${sourcesInfo.map(s => `<div class="text-small" style="padding:4px 0;border-bottom:1px solid var(--border-color,#333)">
+            <span>${confirmedSet.has(s.url) ? '✅' : '⚠️'}</span>
+            <span class="text-muted">${esc(s.domain || '')}${s.type ? ` · ${esc(s.type)}` : ''}</span>
+            ${s.url ? ` <a href="${escAttr(safeLinkUrl(s.url))}" target="_blank" rel="noopener noreferrer">открыть</a>` : ''}
+          </div>`).join('')}
+        </div>
+      </details>` : '';
+    const confidenceHtml = Number(data.confidence) > 0 ? `<span class="text-small text-muted"> · уверенность ~${Math.round(Number(data.confidence) * 100)}%</span>` : '';
 
 
 
@@ -2818,7 +3009,7 @@ function openAiDataPreview(fb, data, opts = {}) {
         </div>
         <div class="overlay-body">
           <div class="text-small text-muted mb-16">
-            Найдено полей: <strong>${FIELDS.length + (hasCover ? 1 : 0)}</strong>.
+            Найдено полей: <strong>${FIELDS.length + (hasCover ? 1 : 0)}</strong>${confidenceHtml}.
             Отметьте, что добавить в карточку, и нажмите «Применить выбранное».
           </div>
           <div id="ai-prev-fields">
@@ -2846,7 +3037,12 @@ function openAiDataPreview(fb, data, opts = {}) {
                   </span>
                 </label>
               </div>` : ''}
+            ${priceChooserHtml}
+            ${coverGalleryHtml}
           </div>
+          ${conflictsHtml}
+          ${warningsHtml}
+          ${sourcesHtml}
           <details class="mt-16">
             <summary class="text-small text-muted" style="cursor:pointer">Показать «сырой» ответ AI</summary>
             <pre style="max-height:180px;overflow:auto;background:var(--bg-input,#111);padding:10px;border-radius:8px;font-size:.72rem;white-space:pre-wrap;word-break:break-word;margin-top:8px">${esc(JSON.stringify(data, null, 2))}</pre>
@@ -2877,7 +3073,16 @@ function openAiDataPreview(fb, data, opts = {}) {
       overlay.querySelectorAll('.ai-prev-check').forEach(cb => {
         if (cb.checked) chosen[cb.dataset.prevId] = true;
       });
-      fillFormFromAi(fb, data, { chosen, cover: cover || undefined });
+      const applyOpts = { chosen, cover: cover || undefined };
+      const pricePick = overlay.querySelector('.ai-prev-price-radio:checked');
+      if (pricePick) { applyOpts.priceIndex = Number(pricePick.dataset.priceIdx); chosen.price = true; }
+      const coverPick = overlay.querySelector('.ai-prev-cover-radio:checked');
+      if (coverPick && Array.isArray(data.coverCandidates)) {
+        applyOpts.coverIndex = Number(coverPick.dataset.coverIdx);
+        applyOpts.cover = data.coverCandidates[applyOpts.coverIndex]?.url || applyOpts.cover;
+        chosen.cover = true;
+      }
+      fillFormFromAi(fb, data, applyOpts);
       done(true);
       showToast('✨ AI: выбранные поля применены', 'success');
     });
@@ -2912,6 +3117,63 @@ async function aiExtractBookFields(query, searchResult, extraHints = '') {
   const data = extractJson(content);
   if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
   return data;
+}
+
+/**
+ * 🔖 3.9.1 этап 6 (§3, §6, §9): AI-нормализация по распарсенным страницам
+ * и/или результатам поиска. Возвращает каноническую схему normalizeAiResult
+ * с источниками (url/domain/тип/ISBN), кандидатами цен и обложек.
+ * @param {{query:string, pages?:object[], searchResults?:object[], queryIsbn?:string}} p
+ */
+async function aiNormalizeBookFromSources({ query, pages = [], searchResults = [], queryIsbn = '' }) {
+  const blocks = [];
+  pages.filter(Boolean).forEach((pg, i) => {
+    const isbns = (pg.isbnCandidates || []).slice(0, 5).join(', ');
+    const prices = (pg.priceCandidates || []).slice(0, 15)
+      .map((x) => `${x.amount} ${x.currency}${x.type && x.type !== 'unknown' ? '/' + x.type : ''}`).join(', ');
+    blocks.push(
+      `Источник #${i + 1} (страница):\nURL: ${pg.canonicalUrl || pg.url || ''}\nДомен: ${pg.domain || ''}\n` +
+      `Заголовок: ${pg.title || ''}\nISBN-кандидаты: ${isbns}\nЦены на странице: ${prices}\n` +
+      `JSON-LD: ${JSON.stringify(pg.jsonLd || []).slice(0, 4000)}\nТекст: ${(pg.text || '').slice(0, 6000)}`
+    );
+  });
+  searchResults.filter(Boolean).forEach((r, i) => {
+    blocks.push(
+      `Источник #${pages.length + i + 1} (поиск):\nНазвание: ${r.title || ''}\nURL: ${r.url || ''}\n` +
+      `Описание: ${r.snippet || ''}\nИсточник: ${r.source || ''}`
+    );
+  });
+  const user = `Запрос: ${query}\n${queryIsbn ? `Запрошенный ISBN: ${queryIsbn}\n` : ''}\n` +
+    `Данные (используй ВСЕ источники, каждый — отдельный источник):\n${blocks.join('\n\n')}`;
+  const content = await chatXkiro({
+    apiKey: S.settings.xkiroApiKey,
+    model: S.settings.xkiroModel,
+    messages: [{ role: 'system', content: AI_NORMALIZE_SYSTEM }, { role: 'user', content: user }],
+    temperature: 0.2,
+    json: true,
+    baseUrl: S.settings.xkiroBaseUrl || AI_BASE,
+  });
+  const raw = extractJson(content);
+  if (!raw) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
+
+  // §9: подмешиваем сами страницы как источники, чтобы сохранить url/domain,
+  // ISBN (для подтверждения §3) и предупреждения экстрактора.
+  const pageSources = pages.filter(Boolean).map((pg) => ({
+    url: pg.canonicalUrl || pg.url,
+    originalUrl: pg.url,
+    domain: pg.domain,
+    type: sourceTypeByDomain(pg.domain),
+    isbn: (pg.isbnCandidates || [])[0] || '',
+    snippet: (pg.title || '').slice(0, 200),
+    fields: ['page'],
+    warnings: pg.warnings || [],
+  }));
+  const combined = {
+    ...raw,
+    book: raw.book || raw,
+    sources: [...(Array.isArray(raw.sources) ? raw.sources : []), ...pageSources],
+  };
+  return normalizeAiResult(combined);
 }
 
 /** Применяет извлечённые поля к объекту книги (не сохраняет в БД). */
@@ -4146,7 +4408,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.9.0 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.9.1 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
