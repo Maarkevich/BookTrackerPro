@@ -44,7 +44,7 @@ import {
   exportAll, importAll, getDBSize,
   repairCovers, isValidCoverBlob,
   repairDanglingRefs, DBBlockedError,
-  putPendingSync, getPendingSync
+  putPendingSync, getPendingSync, saveReviewForBook
 } from './db.js';
 import {
   validateISBN, cleanISBN, fetchBookByIsbn, searchBooks,
@@ -103,6 +103,8 @@ import {
 export { esc, showToast, trackOverlay, untrackOverlay, formatPrice, convertToDefault };
 // 🔖 3.8.8: экспорт для тестов (прозрачное AI-превью, заполнение, обложки)
 export { openAiDataPreview, fillFormFromAi, attachAiCover, AI_BOOK_FIELDS_SYSTEM };
+// 🔖 3.9.1 этап 7: AI-отзыв (структура + раздельное применение частей)
+export { AI_REVIEW_SYSTEM, openAiReviewWriter };
 
 // ═══════════════════════════════════════════════
 //  СОСТОЯНИЕ
@@ -3098,6 +3100,89 @@ function openAiDataPreview(fb, data, opts = {}) {
  *  валютой, возраст, теги, обложка. */
 const AI_BOOK_FIELDS_SYSTEM = 'Ты — помощник книжного каталога и библиографический парсер. По ВСЕМ данным веб-поиска вытащи МАКСИМУМ проверяемой информации и верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"title":"","author":"","isbn":"","genre":"","publisher":"","publishedDate":"","pageCount":0,"ageRating":"","description":"","series":"","seriesNumber":0,"seriesTotal":0,"priceAmount":0,"priceCurrency":"","priceOffers":[],"coverUrl":"","sourceUrls":[],"tags":[]}. priceOffers — массив всех найденных предложений о покупке/электронной/аудиоверсии: [{"amount":0,"currency":"RUB","type":"paper|ebook|audio|unknown","source":"","url":""}]. Не объединяй разные цены в одну: сохраняй каждую цену отдельным элементом, дубли удаляй. sourceUrls — URL страниц-источников, на которых найдены данные. title — название; author — автор(ы); isbn — ISBN-13/ISBN-10; genre — жанр; publisher — издательство; publishedDate — год выпуска или дата; pageCount — количество страниц; ageRating — возрастное ограничение (напр. «16+»); description — аннотация; series — название серии, ЕСЛИ книга входит в серию (иначе пустая строка); seriesNumber — номер книги в серии; seriesTotal — сколько всего книг в серии (если известно); priceAmount/priceCurrency — основная цена для совместимости; coverUrl — прямая ссылка на обложку из данных поиска; tags — до 5 тегов. Если данных нет — пустая строка, 0 или []; используй ТОЛЬКО факты из данных поиска, ничего не выдумывай. Если источники противоречат друг другу, не угадывай: выбери значение, подтверждённое большинством, а сомнительное оставь пустым.';
 
+/**
+ * 🔖 3.9.1 этап 7 (§12): промпт AI-отзыва. AI возвращает отдельно текст,
+ * плюсы, минусы, рекомендацию и оценку, чтобы пользователь мог применить
+ * каждую часть независимо.
+ */
+const AI_REVIEW_SYSTEM = 'Ты — профессиональный книжный критик и редактор. Пользователь дал краткое мнение о книге и/или черновик отзыва. На основе КОНКРЕТНОЙ книги (автор, жанр, описание, темы, особенности) напиши развёрнутый, яркий, живой отзыв: погрузи читателя в атмосферу, отметь сильные стороны, уместно упомяни сюжет БЕЗ спойлеров развязки. Сохрани интонацию и оценку пользователя. Верни ТОЛЬКО JSON (без пояснений и markdown-ограждений) по схеме: {"text":"","pros":"","cons":"","recommendation":"","rating":0}. text — связный текст отзыва, 150–300 слов; pros — сильные стороны кратко, через запятую или короткими фразами; cons — слабые стороны или недостатки; recommendation — строго одна из строк: "Да, рекомендую", "Нет, не рекомендую", "С оговорками"; rating — целое число от 1 до 5. Если данных недостаточно — оставь соответствующее поле пустой строкой, а rating = 0. Не выдумывай факты о книге.';
+
+/** Сопоставляет свободный ответ AI с одной из допустимых рекомендаций. */
+function matchRecommendation(value) {
+  const s = String(value || '').toLowerCase();
+  if (!s) return '';
+  if (s.includes('не рекоменд')) return 'Нет, не рекомендую';
+  if (s.includes('оговорк')) return 'С оговорками';
+  if (s.includes('рекоменд')) return 'Да, рекомендую';
+  return '';
+}
+
+/**
+ * 🔖 3.9.1 этап 7: нормализует свободный/JSON-ответ AI об отзыве в
+ * стабильную структуру {text, pros, cons, recommendation, rating}.
+ * Принимает как уже разобранный объект, так и строку (в т.ч. markdown-фенс).
+ * Никогда не бросает: при мусоре возвращает пустую структуру.
+ */
+export function normalizeAiReview(raw) {
+  let obj = raw;
+  if (typeof raw === 'string') obj = extractJson(raw) || raw;
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) obj = {};
+  const text = typeof obj.text === 'string' ? obj.text.trim() : '';
+  const pros = typeof obj.pros === 'string' ? obj.pros.trim() : '';
+  const cons = typeof obj.cons === 'string' ? obj.cons.trim() : '';
+  const recommendation = matchRecommendation(obj.recommendation);
+  let rating = Number(obj.rating);
+  rating = Number.isFinite(rating) ? Math.max(0, Math.min(5, Math.round(rating))) : 0;
+  return { text, pros, cons, recommendation, rating };
+}
+
+/**
+ * 🔖 3.9.1 этап 7: HTML-предпросмотр AI-отзыва с независимыми чекбоксами
+ * применения каждой части. Оценка по умолчанию ОТКЛЮЧЕНА (§12) — она не
+ * меняется без явного выбора пользователя; остальные части включены.
+ */
+export function aiReviewPreviewHtml(ai) {
+  const stars = (n) => [1, 2, 3, 4, 5].map(i => `<span class="star ${i <= n ? 'filled' : ''}">★</span>`).join('');
+  const row = (id, label, checked, body) => `
+    <div class="ai-rv-row" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+        <input type="checkbox" class="ai-rv-check" data-rv="${id}" ${checked ? 'checked' : ''}/>
+        ${icon(id === 'rating' ? 'star' : id === 'recommendation' ? 'target' : id === 'pros' ? 'check' : id === 'cons' ? 'close' : 'pen', 13)} ${esc(label)}
+      </label>
+      <div style="margin-top:8px">${body}</div>
+    </div>`;
+  return row('text', 'Текст отзыва', true, `<div style="white-space:pre-wrap;font-size:.9rem;line-height:1.55">${esc(ai.text || '—')}</div>`)
+    + row('pros', 'Плюсы', true, `<div class="text-small">${esc(ai.pros || '—')}</div>`)
+    + row('cons', 'Минусы', true, `<div class="text-small">${esc(ai.cons || '—')}</div>`)
+    + row('recommendation', 'Рекомендация', true, `<div class="text-small">${esc(ai.recommendation || '—')}</div>`)
+    + row('rating', 'Оценка (не меняется, пока не выберете)', false, `<div class="star-rating">${stars(ai.rating || 0)} ${ai.rating ? esc(String(ai.rating)) + '/5' : '—'}</div>`);
+}
+
+/** 🔖 3.9.1 этап 7: считывает выбор пользователя в предпросмотре отзыва. */
+export function readAiReviewChosen(root) {
+  const out = {};
+  root.querySelectorAll('.ai-rv-check').forEach(cb => { out[cb.dataset.rv] = cb.checked; });
+  return out;
+}
+
+/**
+ * 🔖 3.9.1 этап 7: применяет только выбранные части AI-отзыва к существующему
+ * отзыву. Остальные поля (цитаты, «для кого», без спойлеров, createdAt)
+ * сохраняются. Пустые поля AI не затирают уже введённые значения.
+ */
+export function buildReviewWithAi(existing, ai, chosen = {}) {
+  const base = { ...(existing || {}) };
+  const out = { ...base };
+  if (chosen.text && ai.text) out.text = ai.text;
+  if (chosen.pros && ai.pros) out.pros = ai.pros;
+  if (chosen.cons && ai.cons) out.cons = ai.cons;
+  if (chosen.recommendation && ai.recommendation) out.recommendation = ai.recommendation;
+  if (chosen.rating && ai.rating > 0) out.rating = ai.rating;
+  out.createdAt = base.createdAt || new Date().toISOString();
+  out.updatedAt = new Date().toISOString();
+  return out;
+}
+
 /** Вызывает chatXkiro и надёжно разбирает JSON-ответ модели. */
 async function aiExtractBookFields(query, searchResult, extraHints = '') {
   const results = Array.isArray(searchResult) ? searchResult : [searchResult];
@@ -3983,16 +4068,19 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
 }
 
 /**
- * 🔖 3.8.8: AI-отзыв по книге. Пользователь выбирает книгу и пишет краткое
- * мнение — AI разворачивает его в яркий развёрнутый отзыв с опорой на
- * конкретную книгу (автор, жанр, сюжет, серия). Результат можно сохранить
- * в отзыв книги (форма отзыва откроется с готовым текстом) или скопировать.
+ * 🔖 3.8.8 / 3.9.1: AI-отзыв по книге (§12). Пользователь выбирает книгу и
+ * пишет краткое мнение (или оставляет черновик из отзыва). AI возвращает
+ * отдельно текст, плюсы, минусы, рекомендацию и оценку. Предпросмотр
+ * позволяет применить каждую часть независимо; оценка не меняется без
+ * явного выбора. Сохранение — через saveReviewForBook (форма откроется для
+ * проверки и редактирования).
  */
 function openAiReviewWriter(book) {
   if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
   if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
   if (!book) return;
 
+  const r = book.review || {};
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   overlay.innerHTML = `
@@ -4007,8 +4095,8 @@ function openAiReviewWriter(book) {
         </div>
         <div class="form-group">
           <label>${icon('pen', 13)} Ваше краткое мнение</label>
-          <textarea id="ai-rw-brief" rows="3" placeholder="Напр.: «Эта книга меня зацепила, но вторая половина провисает»">${esc(book.review?.text || '')}</textarea>
-          <div class="form-hint">AI развернёт ваше мнение в яркий отзыв с опорой на книгу: автор, жанр, сюжет, серия. Сохранить → откроется форма отзыва с готовым текстом.</div>
+          <textarea id="ai-rw-brief" rows="3" placeholder="Напр.: «Эта книга меня зацепила, но вторая половина провисает»">${esc(r.text || '')}</textarea>
+          <div class="form-hint">AI развернёт мнение в отзыв и предложит плюсы, минусы, рекомендацию и оценку. Каждую часть можно применить отдельно.</div>
         </div>
         <button id="ai-rw-go" class="btn-primary">${icon('sparkles', 14)} Написать отзыв</button>
         <div id="ai-rw-out" style="margin-top:14px"></div>
@@ -4034,52 +4122,73 @@ function openAiReviewWriter(book) {
         book.series ? `Серия: «${book.series}»${book.seriesNumber ? ' (кн. №' + book.seriesNumber + ')' : ''}` : '',
         book.publishedDate ? `Год: ${book.publishedDate}` : '',
         book.pageCount ? `Страниц: ${book.pageCount}` : '',
-        book.description ? `Аннотация: ${book.description.slice(0, 700)}` : '',
+        book.description ? `Описание: ${book.description.slice(0, 900)}` : '',
         (book.tags || []).length ? `Теги: ${book.tags.join(', ')}` : '',
       ].filter(Boolean).join('\n');
-      const system = 'Ты — профессиональный книжный критик и редактор. Пользователь дал краткое мнение о книге. На основе КОНКРЕТНОЙ книги (автор, жанр, сюжет, темы, особенности) напиши развёрнутый, яркий, живой отзыв: погрузи читателя в атмосферу, отметь сильные стороны, уместно упомяни сюжет БЕЗ спойлеров развязки. Сохрани интонацию и оценку пользователя. Объём — 150–300 слов. Верни ТОЛЬКО текст отзыва, без заголовков и пояснений.';
+      const current = [
+        r.text ? `Текущий текст отзыва: ${r.text}` : '',
+        r.pros ? `Текущие плюсы: ${r.pros}` : '',
+        r.cons ? `Текущие минусы: ${r.cons}` : '',
+        r.recommendation ? `Текущая рекомендация: ${r.recommendation}` : '',
+        r.rating ? `Текущая оценка: ${r.rating}` : '',
+      ].filter(Boolean).join('\n');
       const content = await chatXkiro({
         apiKey: S.settings.xkiroApiKey,
         model: S.settings.xkiroModel,
         messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: `Краткое мнение пользователя: ${brief}\n\nДанные о книге:\n${context}` },
+          { role: 'system', content: AI_REVIEW_SYSTEM },
+          { role: 'user', content: `Краткое мнение пользователя: ${brief}${current ? '\n\n' + current : ''}\n\nДанные о книге:\n${context}` },
         ],
         temperature: 0.7,
+        json: true,
+        maxTokens: 1600,
         baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
       });
-      const clean = (content || '').trim().replace(/^["'“«]|["'”»]$/g, '');
-      if (!clean) throw new AiApiError('AI вернул пустой отзыв');
-      outEl.innerHTML = `
-        <div class="ml-field">
-          <div class="text-small text-muted mb-8">Отзыв готов — сохраните или скопируйте:</div>
-          <div style="white-space:pre-wrap;font-size:.9rem;line-height:1.55">${esc(clean)}</div>
-        </div>
-        <div class="btn-group mt-16" style="flex-wrap:wrap">
-          <button id="ai-rw-save" class="btn-primary" style="width:auto">${icon('check', 14)} Сохранить в отзыв книги</button>
-          <button id="ai-rw-copy" class="btn-secondary" style="width:auto">${icon('quote', 13)} Скопировать</button>
-          <button id="ai-rw-retry" class="btn-secondary" style="width:auto">${icon('refresh', 13)} Перегенерировать</button>
-        </div>
-      `;
-      outEl.querySelector('#ai-rw-save').addEventListener('click', async () => {
-        try {
-          const updated = { ...book, review: { ...(book.review || {}), text: clean, updatedAt: new Date().toISOString() } };
-          await putBook(updated);
-          await refreshData();
-          close();
-          openReviewForm(book.id);
-          showToast('✅ Отзыв сохранён — проверьте и отредактируйте', 'success');
-        } catch { showToast('❌ Не удалось сохранить отзыв: база данных', 'error'); }
-      });
-      outEl.querySelector('#ai-rw-copy').addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(clean); showToast('📋 Отзыв скопирован', 'success'); }
-        catch { showToast('❌ Не удалось скопировать', 'error'); }
-      });
-      outEl.querySelector('#ai-rw-retry').addEventListener('click', generate);
+      const ai = normalizeAiReview(content);
+      if (!ai.text && !ai.pros && !ai.cons) throw new AiApiError('AI вернул пустой отзыв');
+      renderResult(ai);
     } catch (e) {
       outEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка при обращении к AI')}</div>`;
     }
   }
+
+  function renderResult(ai) {
+    outEl.innerHTML = `
+      <div class="text-small text-muted mb-8">Отзыв готов — отметьте, что применить, и сохраните:</div>
+      <div id="ai-rw-preview">${aiReviewPreviewHtml(ai)}</div>
+      <div class="btn-group mt-8" style="flex-wrap:wrap">
+        <button id="ai-rw-apply" class="btn-primary" style="width:auto">${icon('check', 14)} Применить к отзыву</button>
+        <button id="ai-rw-copy" class="btn-secondary" style="width:auto">${icon('quote', 13)} Скопировать</button>
+        <button id="ai-rw-retry" class="btn-secondary" style="width:auto">${icon('refresh', 13)} Перегенерировать</button>
+      </div>
+    `;
+    const preview = outEl.querySelector('#ai-rw-preview');
+    outEl.querySelector('#ai-rw-apply').addEventListener('click', async () => {
+      const chosen = readAiReviewChosen(preview);
+      const review = buildReviewWithAi(book.review, ai, chosen);
+      try {
+        const saved = await saveReviewForBook(book.id, review);
+        if (!saved) throw new Error('book not found');
+        await refreshData();
+        close();
+        openReviewForm(book.id);
+        showToast('✅ Отзыв сохранён — проверьте и отредактируйте', 'success');
+      } catch { showToast('❌ Не удалось сохранить отзыв: база данных', 'error'); }
+    });
+    outEl.querySelector('#ai-rw-copy').addEventListener('click', async () => {
+      const parts = [
+        ai.text ? ai.text : '',
+        ai.pros ? '👍 Плюсы: ' + ai.pros : '',
+        ai.cons ? '👎 Минусы: ' + ai.cons : '',
+        ai.recommendation ? '🎯 Рекомендация: ' + ai.recommendation : '',
+        ai.rating ? '⭐ ' + ai.rating + '/5' : '',
+      ].filter(Boolean).join('\n\n');
+      try { await navigator.clipboard.writeText(parts); showToast('📋 Отзыв скопирован', 'success'); }
+      catch { showToast('❌ Не удалось скопировать', 'error'); }
+    });
+    outEl.querySelector('#ai-rw-retry').addEventListener('click', generate);
+  }
+
   overlay.querySelector('#ai-rw-go').addEventListener('click', generate);
   briefEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) generate(); });
   setTimeout(() => briefEl.focus(), 50);
