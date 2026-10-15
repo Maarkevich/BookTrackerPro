@@ -79,9 +79,16 @@ import {
 } from './microlink.js';
 // 🔖 3.8.7: AI через xKiro исправлен — настраиваемый URL CORS-прокси
 // (xKiro не отдаёт Access-Control-Allow-*: из браузера нужен прокси).
-import {
-  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AiApiError, AI_BASE, fetchPageViaWorker
-} from './ai.js';
+// Используем namespace-импорт для совместимости с уже установленными SW/HTTP-кешами:
+// старый ai.js без fetchPageViaWorker не должен ломать загрузку всего приложения.
+import * as AiClient from './ai.js';
+const {
+  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AI_BASE
+} = AiClient;
+const AiApiError = AiClient.AiApiError || class AiApiError extends Error {};
+const fetchPageViaWorker = AiClient.fetchPageViaWorker || (async () => {
+  throw new AiApiError('AI-клиент устарел. Обновите приложение и повторите попытку.');
+});
 // 🔖 3.9.1 этап 5–6: клиентский extractor + AI-нормализация результата
 import { extractPage } from './extract.js';
 import {
@@ -4517,7 +4524,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.9.1 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.9.2 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 

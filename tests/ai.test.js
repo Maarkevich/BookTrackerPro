@@ -307,6 +307,12 @@ describe('контракт безопасности: ключей в коде н
     expect(src.match(/sk-[A-Za-z0-9]{8,}/)).toBeNull();
     expect(src.match(/[A-Za-z0-9_-]{40,}/)).toBeNull();
   });
+
+  it('app.js совместим со старым SW-кэшем без named export fetchPageViaWorker', () => {
+    const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+    expect(app).toContain("import * as AiClient from './ai.js';");
+    expect(app).toContain('const fetchPageViaWorker = AiClient.fetchPageViaWorker ||');
+  });
 });
 
 describe('isAiConfigured', () => {
