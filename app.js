@@ -4524,7 +4524,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.9.2 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.9.3 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 

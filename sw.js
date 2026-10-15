@@ -2,7 +2,7 @@
 // 🔖 v3.8.8 | 2026-09-25
 // 📝 Service Worker: оффлайн-кеш, стратегии, обновления
 //
-//    ⚠️ НОВОЕ в 3.9.2: бумп CACHE_NAME → btp-v3.9.2
+//    ⚠️ НОВОЕ в 3.9.3: бумп CACHE_NAME → btp-v3.9.3
 //    Сохранено из 3.8.7: CORS-прокси xKiro, OCR runtime-cache,
 //    нормализация URL, Background Sync, Periodic Sync, Push-заготовка
 // ─────────────────────────────────────────────
@@ -11,7 +11,7 @@ const BASE = '/BookTrackerPro';
 
 // Имя кеша — МЕНЯЕТСЯ при каждом обновлении!
 // Должно совпадать с полем "cache" в version.json
-const CACHE_NAME = 'btp-v3.9.2';
+const CACHE_NAME = 'btp-v3.9.3';
 
 const COVER_CACHE_NAME = 'btp-covers-v1';
 // 🔖 3.8.6: btp-ocr-v1 → btp-ocr-v2 — в v1 на устройствах могли

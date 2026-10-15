@@ -319,6 +319,38 @@ describe('P2-17 overlay lifecycle: contract not broken', () => {
     expect(hasOverlays()).toBe(false);
   });
 
+  it('два программных back за один тик (picker + detail → форма) не закрывают новый оверлей', () => {
+    // Баг: openDetailAiFieldPicker «Найти и показать» закрывает ДВА оверлея
+    // за один тик (picker + detail) → два history.back() → два popstate.
+    // Булев _poppingState гасил только первый popstate, второй закрывал
+    // только что открытую форму (openBookForm) — «окно закрывается, ничего
+    // не происходит». Проверяем реальный порядок событий app.js popstate.
+    const detail = makeOverlay('ov-detail');
+    const picker = makeOverlay('ov-picker');
+    trackOverlay(detail, { onClose: () => detail.remove() });
+    trackOverlay(picker, { onClose: () => picker.remove() });
+
+    untrackOverlay(picker);
+    untrackOverlay(detail);
+    expect(backSpy).toHaveBeenCalledTimes(2);
+
+    const form = makeOverlay('ov-form');
+    const onCloseForm = vi.fn(() => { form.remove(); });
+    trackOverlay(form, { onClose: onCloseForm });
+
+    // Оба отложенных popstate — программные и должны быть поглощены.
+    simulateAndroidBack();
+    simulateAndroidBack();
+    expect(onCloseForm).not.toHaveBeenCalled();
+    expect(document.getElementById('ov-form')).not.toBeNull();
+    expect(hasOverlays()).toBe(true);
+
+    // Контракт: следующий РЕАЛЬНЫЙ жест назад закрывает форму.
+    simulateAndroidBack();
+    expect(onCloseForm).toHaveBeenCalledTimes(1);
+    expect(hasOverlays()).toBe(false);
+  });
+
   it('деferred-и общего lifecycle async-safe: закрытие до отложенного onClose не ломает стек', async () => {
     const el = makeOverlay();
     const d = deferred();

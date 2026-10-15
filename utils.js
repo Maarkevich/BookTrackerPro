@@ -407,7 +407,11 @@ export function convertToDefault(price, settings) {
 
 let _backStack = [];            // открытые оверлеи (HTMLElement[])
 let _overlayMeta = new Map();   // el → { onClose, prevFocus }
-let _poppingState = false;
+// 🔖 Счётчик программных history.back(): закрытие нескольких оверлеев за один
+// тик (picker + detail) порождает несколько popstate. Булев флаг гасил только
+// первый, а второй воспринимался как реальный жест «назад» и закрывал только
+// что открытый следующий оверлей (форму).
+let _poppingState = 0;
 let _scrollLocks = 0;           // refcount блокировки скролла body
 let _trapBound = false;
 let _suppressBack = false;      // 🆕 P2-17: «жест назад» уже выполняется браузером
@@ -520,7 +524,7 @@ export function untrackOverlay(el) {
   // 🆕 P2-17: если «жест назад» уже обрабатывается браузером (popstate от
   // системной кнопки), не дублируем навигацию — иначе двойной back.
   if (_suppressBack) return;
-  _poppingState = true;
+  _poppingState += 1;
   try { history.back(); } catch (e) {}
 }
 
@@ -586,8 +590,8 @@ export function closeTopOverlay() {
  * @returns {boolean} — true если это был программный back
  */
 export function consumePoppingState() {
-  if (_poppingState) {
-    _poppingState = false;
+  if (_poppingState > 0) {
+    _poppingState -= 1;
     return true;
   }
   return false;
