@@ -83,7 +83,8 @@ import {
 // старый ai.js без fetchPageViaWorker не должен ломать загрузку всего приложения.
 import * as AiClient from './ai.js';
 const {
-  listModels, chatXkiro, searchXkiro, isAiConfigured, extractJson, AI_BASE
+  isAiConfigured, isAiModelConfigured, extractJson,
+  getAiClient, migrateAiSettings, getActiveAiProfile, AI_BASE
 } = AiClient;
 const AiApiError = AiClient.AiApiError || class AiApiError extends Error {};
 const fetchPageViaWorker = AiClient.fetchPageViaWorker || (async () => {
@@ -335,7 +336,7 @@ async function init() {
     S.tags = await loadTags();
 
     const saved = await loadSettings();
-    if (saved) Object.assign(S.settings, saved);
+    if (saved) Object.assign(S.settings, migrateAiSettings(saved));
     if (S.settings.microlinkApiKey) setMicrolinkApiKey(S.settings.microlinkApiKey);
   } catch (err) {
     console.error('[DB] init data load error:', err);
@@ -1257,8 +1258,8 @@ function renderEmptyBooks() {
 //  🔖 3.8.6: AI-РЕКОМЕНДАЦИИ (xKiro)
 // ═══════════════════════════════════════════════
 function openAiRecommendations() {
-  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+  if (!isAiModelConfigured(S.settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
   const lib = S.books.filter(b => b.id !== '__no_book__');
   if (lib.length === 0) { showToast('⚠️ Сначала добавьте книги в библиотеку', 'error'); return; }
 
@@ -1400,11 +1401,9 @@ function openAiRecommendations() {
     try {
       const system = 'Ты — рекомендатель книг. По книгам пользователя предложи 5 книг, которых НЕТ в его библиотеке. Верни ТОЛЬКО JSON без пояснений и markdown по схеме: {"recommendations":[{"title":"","author":"","genre":"","why":""}]}.' + (extra ? ' Учти пожелание: ' + extra : '');
       const user = `Книги пользователя (контекст: ${scopeLabel}):\n${listText}`;
-      const content = await chatXkiro({
-        apiKey: S.settings.xkiroApiKey, model: S.settings.xkiroModel,
+      const content = await getAiClient(S.settings).complete({
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         json: true,
-        baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
       });
       const data = extractJson(content);
       const recs = Array.isArray(data?.recommendations) ? data.recommendations : [];
@@ -2623,7 +2622,7 @@ async function loadSourcePages(results, limit = 4) {
   for (const r of results.slice(0, limit)) {
     if (!isRussianSourceUrl(r.url)) continue;
     try {
-      const env = await fetchPageViaWorker({ url: r.url, baseUrl: S.settings.xkiroBaseUrl || AI_BASE });
+      const env = await getAiClient(S.settings).fetchPage({ url: r.url });
       pages.push(extractPage(env));
     } catch { /* страница недоступна — пропускаем */ }
     if (pages.length >= limit) break;
@@ -2639,8 +2638,8 @@ async function handleAiBookSearch(fb, options = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
   const previewOptions = options.previewOptions || {};
   if (!query) { showToast('⚠️ Введите запрос', 'error'); return; }
-  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+  if (!isAiModelConfigured(S.settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
 
   // 🔖 3.8.8: ссылка http(s): обрабатывается через Microlink + AI-обогащение
   if (/^https?:\/\//i.test(query) || /^www\./i.test(query)) {
@@ -2652,7 +2651,7 @@ async function handleAiBookSearch(fb, options = {}) {
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Ищу через AI...</div>';
   try {
     // Для ISBN ищем шире: каталоги и магазины часто дают разные поля и цены.
-    let results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 10, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+    let results = await getAiClient(S.settings).search({ query, maxResults: 10 });
     // 🔖 3.9.1 §3B: поиск ограничиваем включёнными российскими источниками.
     results = filterSourceResults(results);
     if (results.length === 0) {
@@ -2727,7 +2726,7 @@ async function handleAiBookLink(fb, url, previewOptions = {}) {
   if (isRussianSourceUrl(url)) {
     resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Загружаю страницу (Worker) и извлекаю данные...</div>';
     try {
-      const env = await fetchPageViaWorker({ url, baseUrl: S.settings.xkiroBaseUrl || AI_BASE });
+      const env = await getAiClient(S.settings).fetchPage({ url });
       const page = extractPage(env);
       const queryIsbn = (page.isbnCandidates || [])[0] || '';
       const result = await aiNormalizeBookFromSources({ query: url, pages: [page], queryIsbn });
@@ -2763,7 +2762,7 @@ async function handleAiBookLink(fb, url, previewOptions = {}) {
     }
     if (!pseudo) {
       // Фолбэк: xKiro web-поиск по адресу страницы
-      const res = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query: url, maxResults: 3, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+      const res = await getAiClient(S.settings).search({ query: url, maxResults: 3 });
       if (res.length === 0) throw new AiApiError('По ссылке ничего не найдено');
       pseudo = res[0];
     }
@@ -3198,13 +3197,10 @@ async function aiExtractBookFields(query, searchResult, extraHints = '') {
     return `Источник #${i + 1}:\nНазвание: ${r.title || ''}\nURL: ${r.url || ''}\nОписание: ${r.snippet || ''}\nИсточник: ${r.source || ''}${r.publicationDate ? '\nДата: ' + r.publicationDate : ''}${thumb}`;
   }).join('\n\n');
   const user = `Запрос: ${query}\n\nДанные веб-поиска (используй ВСЕ источники):\n${blocks}${extraHints ? '\n\nДополнительно: ' + extraHints : ''}`;
-  const content = await chatXkiro({
-    apiKey: S.settings.xkiroApiKey,
-    model: S.settings.xkiroModel,
+  const content = await getAiClient(S.settings).complete({
     messages: [{ role: 'system', content: AI_BOOK_FIELDS_SYSTEM }, { role: 'user', content: user }],
     temperature: 0.2,
     json: true,
-    baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
   });
   const data = extractJson(content);
   if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
@@ -3237,13 +3233,10 @@ async function aiNormalizeBookFromSources({ query, pages = [], searchResults = [
   });
   const user = `Запрос: ${query}\n${queryIsbn ? `Запрошенный ISBN: ${queryIsbn}\n` : ''}\n` +
     `Данные (используй ВСЕ источники, каждый — отдельный источник):\n${blocks.join('\n\n')}`;
-  const content = await chatXkiro({
-    apiKey: S.settings.xkiroApiKey,
-    model: S.settings.xkiroModel,
+  const content = await getAiClient(S.settings).complete({
     messages: [{ role: 'system', content: AI_NORMALIZE_SYSTEM }, { role: 'user', content: user }],
     temperature: 0.2,
     json: true,
-    baseUrl: S.settings.xkiroBaseUrl || AI_BASE,
   });
   const raw = extractJson(content);
   if (!raw) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
@@ -3353,8 +3346,8 @@ function askAiPrompt(question) {
 
 /** Главная точка входа для кнопки «✨ AI» на карточке книги. */
 async function fillBookViaAi(bookId) {
-  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+  if (!isAiModelConfigured(S.settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
   const book = S.books.find(b => b.id === bookId);
   if (!book) return;
 
@@ -3368,7 +3361,7 @@ async function fillBookViaAi(bookId) {
   showToast('✨ Заполняю карточку через AI...', 'info');
   try {
     const hasFields = Boolean(book.title || book.author || book.genre || book.description || book.isbn);
-    const results = await searchXkiro({ apiKey: S.settings.xkiroApiKey, query, maxResults: 3, baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+    const results = await getAiClient(S.settings).search({ query, maxResults: 3 });
     const top = results[0];
     if (!top) { showToast('⚠️ AI ничего не нашёл по этому запросу', 'error'); return; }
     const data = await aiExtractBookFields(query, top, hasFields ? JSON.stringify({
@@ -3984,8 +3977,8 @@ function fabAction(id) {
 
 /** 🔖 3.8.8: подменю «AI функции» из FAB. */
 function openAiFunctionsMenu() {
-  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+  if (!isAiModelConfigured(S.settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   overlay.innerHTML = `
@@ -4083,8 +4076,8 @@ function openBookPicker(onPick, titleText = 'Выберите книгу') {
  * проверки и редактирования).
  */
 function openAiReviewWriter(book) {
-  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-  if (!S.settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+  if (!isAiConfigured(S.settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+  if (!isAiModelConfigured(S.settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
   if (!book) return;
 
   const r = book.review || {};
@@ -4139,9 +4132,7 @@ function openAiReviewWriter(book) {
         r.recommendation ? `Текущая рекомендация: ${r.recommendation}` : '',
         r.rating ? `Текущая оценка: ${r.rating}` : '',
       ].filter(Boolean).join('\n');
-      const content = await chatXkiro({
-        apiKey: S.settings.xkiroApiKey,
-        model: S.settings.xkiroModel,
+      const content = await getAiClient(S.settings).complete({
         messages: [
           { role: 'system', content: AI_REVIEW_SYSTEM },
           { role: 'user', content: `Краткое мнение пользователя: ${brief}${current ? '\n\n' + current : ''}\n\nДанные о книге:\n${context}` },
@@ -4149,7 +4140,6 @@ function openAiReviewWriter(book) {
         temperature: 0.7,
         json: true,
         maxTokens: 1600,
-        baseUrl: S.settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
       });
       const ai = normalizeAiReview(content);
       if (!ai.text && !ai.pros && !ai.cons) throw new AiApiError('AI вернул пустой отзыв');
@@ -4389,6 +4379,7 @@ function showDayContent(dateStr) {
 // ═══════════════════════════════════════════════
 function renderSettingsTab() {
   const s = S.settings;
+  const aiSettings = getActiveAiProfile(s);
   const mc = DOM.mainContent;
   mc.innerHTML = `
     <div class="settings-section">
@@ -4445,29 +4436,36 @@ function renderSettingsTab() {
       <div class="mt-8"><button id="set-microlink-clear" class="btn-secondary">Очистить кеш превью</button></div>
     </div>
     <div class="settings-section">
-      <h3>${icon('sparkles', 15)} AI (xKiro) <span class="badge">поиск книг · заполнение · отзывы</span></h3>
-      <p class="hint">Подключает AI-поиск книг, автозаполнение карточек, рекомендации и исправление текста отзывов.<br/>Ключ и модель хранятся локально (IndexedDB) и никуда, кроме сервера xKiro, не отправляются.</p>
+      <h3>${icon('sparkles', 15)} AI-провайдер <span class="badge">заполнение · отзывы · рекомендации</span></h3>
+      <p class="hint">Можно использовать xKiro или любой OpenAI-compatible endpoint, включая Ollama и LM Studio. Ключи хранятся локально в IndexedDB и не попадают в экспорт данных.</p>
       <div class="form-group">
-        <label>API-ключ</label>
-        <input type="password" id="set-xkiro-key" value="${escAttr(s.xkiroApiKey || '')}" placeholder="Ваш ключ https://docs.xkiro.com" autocomplete="off"/>
+        <label>Провайдер</label>
+        <select id="set-ai-provider">
+          <option value="xkiro" ${aiSettings.provider === 'xkiro' ? 'selected' : ''}>xKiro</option>
+          <option value="openai-compatible" ${aiSettings.provider === 'openai-compatible' ? 'selected' : ''}>OpenAI-compatible</option>
+          <option value="ollama" ${aiSettings.provider === 'ollama' ? 'selected' : ''}>Ollama (локально)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>API-ключ <span class="badge" id="set-ai-key-badge">не нужен для Ollama</span></label>
+        <input type="password" id="set-ai-key" value="${escAttr(aiSettings.apiKey || '')}" placeholder="API-ключ провайдера" autocomplete="off"/>
+      </div>
+      <div class="form-group">
+        <label>Endpoint</label>
+        <input type="url" id="set-ai-endpoint" value="${escAttr(aiSettings.endpoint === AI_BASE && aiSettings.provider === 'xkiro' ? '' : aiSettings.endpoint || '')}" placeholder="https://api.example.com или http://localhost:11434" autocomplete="off" spellcheck="false"/>
+        <div class="form-hint" id="set-ai-endpoint-hint">Для xKiro из браузера обычно нужен CORS-прокси. Для Ollama используется локальный endpoint.</div>
       </div>
       <div class="form-group">
         <label>Модель</label>
-        <select id="set-xkiro-model" disabled>
-          <option value="">— сначала сохраните ключ —</option>
-        </select>
-      </div>
-      <!-- 🔖 3.8.7: xKiro не поддерживает CORS — нужен URL прокси -->
-      <div class="form-group">
-        <label>URL CORS-прокси <span class="badge">обязательно в браузере</span></label>
-        <input type="url" id="set-xkiro-base" value="${escAttr(s.xkiroBaseUrl || '')}" placeholder="https://api.xkiro.com" autocomplete="off" spellcheck="false"/>
-        <div class="form-hint">xKiro не отдаёт CORS-заголовки: из браузера прямой запрос заблокирован. Укажите адрес вашего прокси (например, Cloudflare Worker), который пересылает /v1/* в api.xkiro.com. Пусто — прямое обращение (для внебраузерных клиентов).</div>
+        <input type="text" id="set-ai-model-input" value="${escAttr(aiSettings.model || '')}" placeholder="Введите ID модели вручную" autocomplete="off" spellcheck="false"/>
+        <select id="set-ai-model" disabled><option value="">— загрузите список моделей или введите ID —</option></select>
       </div>
       <div class="flex gap-8" style="flex-wrap:wrap">
-        <button id="set-xkiro-load" class="btn-secondary">Загрузить список моделей</button>
-        <button id="set-xkiro-clear" class="btn-secondary">Удалить ключ</button>
+        <button id="set-ai-load" class="btn-secondary">Загрузить список моделей</button>
+        <button id="set-ai-test" class="btn-secondary">Проверить подключение</button>
+        <button id="set-ai-clear" class="btn-secondary">Очистить ключ</button>
       </div>
-      <span id="set-xkiro-status" class="status-text"></span>
+      <span id="set-ai-status" class="status-text"></span>
     </div>
     <div class="settings-section">
       <h3>${icon('bookClosed', 15)} ЛитРес API <span class="badge">опционально</span></h3>
@@ -4653,79 +4651,130 @@ function renderSettingsTab() {
     showToast('🗑️ Кеш превью очищен', 'info');
   });
 
-  // ── 🔖 3.8.6: AI (xKiro) ───────────────────────────────────────────
-  const xkiroKey = mc.querySelector('#set-xkiro-key');
-  const xkiroStatus = () => mc.querySelector('#set-xkiro-status');
+  // ── Provider-agnostic AI settings ──────────────────────────────────
+  const activeAi = getActiveAiProfile(S.settings);
+  const aiProvider = mc.querySelector('#set-ai-provider');
+  const aiKey = mc.querySelector('#set-ai-key');
+  const aiEndpoint = mc.querySelector('#set-ai-endpoint');
+  const aiModelInput = mc.querySelector('#set-ai-model-input');
+  const aiModelSelect = mc.querySelector('#set-ai-model');
+  const aiStatus = () => mc.querySelector('#set-ai-status');
+  if (aiProvider) aiProvider.value = activeAi.provider;
+  if (aiKey) aiKey.value = activeAi.apiKey;
+  if (aiEndpoint) aiEndpoint.value = activeAi.endpoint === AI_BASE && activeAi.provider === 'xkiro' ? '' : activeAi.endpoint;
+  if (aiModelInput) aiModelInput.value = activeAi.model;
 
-  /** Загружает список моделей в <select> и выбирает сохранённую. */
-  const loadXkiroModels = async (withReset = false) => {
-    const select = mc.querySelector('#set-xkiro-model');
-    const key = S.settings.xkiroApiKey;
-    const status = xkiroStatus();
-    if (!key) { status.textContent = '⚠️ Сначала введите API-ключ'; return; }
+  const currentProvider = () => aiProvider?.value || 'xkiro';
+  const setProfile = (changes = {}) => {
+    const provider = currentProvider();
+    const existing = getActiveAiProfile(S.settings);
+    const profile = {
+      ...existing,
+      id: existing.id || 'default',
+      name: provider === 'xkiro' ? 'xKiro' : provider === 'ollama' ? 'Ollama' : 'OpenAI-compatible',
+      provider,
+      apiKey: aiKey?.value.trim() || '',
+      endpoint: aiEndpoint?.value.trim().replace(/\/+$/, '') || undefined,
+      model: aiModelInput?.value.trim() || '',
+      ...changes,
+    };
+    const profiles = Array.isArray(S.settings.ai?.profiles) ? [...S.settings.ai.profiles] : [];
+    const index = profiles.findIndex((item) => item?.id === profile.id);
+    if (index >= 0) profiles[index] = profile;
+    else profiles.push(profile);
+    S.settings.ai = {
+      ...(S.settings.ai || {}), activeProfileId: profile.id, profiles,
+    };
+    // Keep legacy values in sync for old application versions and old code.
+    if (provider === 'xkiro') {
+      S.settings.xkiroApiKey = profile.apiKey;
+      S.settings.xkiroModel = profile.model;
+      S.settings.xkiroBaseUrl = profile.endpoint === AI_BASE ? '' : profile.endpoint;
+    }
+    return profile;
+  };
+
+  const updateAiHints = () => {
+    const provider = currentProvider();
+    const isOllama = provider === 'ollama';
+    if (mc.querySelector('#set-ai-key-badge')) mc.querySelector('#set-ai-key-badge').textContent = isOllama ? 'не нужен для Ollama' : 'хранится локально';
+    if (aiKey) { aiKey.disabled = isOllama; aiKey.placeholder = isOllama ? 'Для Ollama ключ не нужен' : 'API-ключ провайдера'; }
+    if (aiEndpoint) aiEndpoint.placeholder = provider === 'xkiro' ? 'https://api.xkiro.com или URL прокси' : isOllama ? 'http://localhost:11434' : 'https://api.example.com';
+    const hint = mc.querySelector('#set-ai-endpoint-hint');
+    if (hint) hint.textContent = provider === 'xkiro'
+      ? 'Для xKiro из браузера обычно нужен CORS-прокси. Пустой endpoint использует api.xkiro.com.'
+      : isOllama ? 'Ollama работает локально на этом устройстве. На мобильном устройстве endpoint может быть недоступен.'
+        : 'Endpoint должен поддерживать OpenAI-compatible /v1/models и /v1/chat/completions.';
+  };
+  updateAiHints();
+
+  const loadAiModels = async () => {
+    const status = aiStatus();
+    const provider = currentProvider();
+    const profile = setProfile();
+    if (!profile.apiKey && provider !== 'ollama') { status.textContent = '⚠️ Сначала введите API-ключ'; return; }
     status.textContent = '⏳ Загружаю модели...';
-    select.disabled = true;
-    select.innerHTML = '<option value="">— загрузка —</option>';
+    aiModelSelect.disabled = true;
+    aiModelSelect.innerHTML = '<option value="">— загрузка —</option>';
     try {
-      const models = await listModels(key, { baseUrl: S.settings.xkiroBaseUrl || AI_BASE }); // 🔖 3.8.7: CORS-прокси
+      const models = await getAiClient(profile).listModels();
       if (models.length === 0) {
-        status.textContent = '⚠️ xKiro не вернул ни одной модели';
-        select.innerHTML = '<option value="">— модели не найдены —</option>';
+        status.textContent = '⚠️ Провайдер не вернул моделей — введите ID вручную';
+        aiModelSelect.innerHTML = '<option value="">— модели не найдены —</option>';
         return;
       }
-      select.disabled = false;
-      select.innerHTML = '<option value="">— выберите модель —</option>' + models.map(m =>
+      aiModelSelect.disabled = false;
+      aiModelSelect.innerHTML = '<option value="">— выберите модель —</option>' + models.map((m) =>
         `<option value="${escAttr(m.id)}">${esc(m.id)}${m.tier ? ' · ' + esc(m.tier) : ''}${m.description ? ' — ' + esc(m.description.slice(0, 60)) : ''}</option>`
       ).join('');
-      if (S.settings.xkiroModel && models.some(m => m.id === S.settings.xkiroModel)) {
-        select.value = S.settings.xkiroModel;
-      }
-      if (withReset && models.length > 0 && !S.settings.xkiroModel) S.settings.xkiroModel = models[0].id;
-      status.textContent = `✅ Доступно моделей: ${models.length}${S.settings.xkiroModel ? ' · выбрана: ' + S.settings.xkiroModel : ''}`;
-    } catch (e) {
-      select.innerHTML = '<option value="">— ошибка загрузки —</option>';
-      status.textContent = `❌ ${e instanceof AiApiError ? e.message : 'Ошибка сети'}`;
+      if (profile.model && models.some((model) => model.id === profile.model)) aiModelSelect.value = profile.model;
+      status.textContent = `✅ Доступно моделей: ${models.length}`;
+    } catch (error) {
+      aiModelSelect.innerHTML = '<option value="">— список недоступен —</option>';
+      status.textContent = `❌ ${error instanceof AiApiError ? error.message : 'Ошибка сети'}`;
     }
   };
 
-  xkiroKey?.addEventListener('change', async function() {
-    S.settings.xkiroApiKey = this.value.trim();
-    if (!S.settings.xkiroApiKey) { S.settings.xkiroModel = ''; }
+  aiProvider?.addEventListener('change', async () => {
+    const provider = currentProvider();
+    if (provider === 'ollama' && !aiEndpoint.value.trim()) aiEndpoint.value = 'http://localhost:11434';
+    if (provider === 'xkiro' && !aiEndpoint.value.trim()) aiEndpoint.value = '';
+    setProfile();
+    updateAiHints();
     await saveAppSettings();
-    await loadXkiroModels();
   });
-
-  // 🔖 3.8.7: изменение URL прокси xKiro
-  const xkiroBase = mc.querySelector('#set-xkiro-base');
-  xkiroBase?.addEventListener('change', async function() {
-    let v = this.value.trim().replace(/\/+$/, '');
-    S.settings.xkiroBaseUrl = v;
+  aiKey?.addEventListener('change', async () => { setProfile(); await saveAppSettings(); });
+  aiEndpoint?.addEventListener('change', async () => { setProfile(); await saveAppSettings(); });
+  aiModelInput?.addEventListener('change', async () => { setProfile(); await saveAppSettings(); });
+  aiModelSelect?.addEventListener('change', async () => {
+    if (aiModelSelect.value) aiModelInput.value = aiModelSelect.value;
+    setProfile();
     await saveAppSettings();
-    if (S.settings.xkiroApiKey) loadXkiroModels(); // перезагрузит модели через новый прокси
-    showToast('💾 URL прокси сохранён', 'success');
   });
-
-  bind('#set-xkiro-load', () => loadXkiroModels());
-  bind('#set-xkiro-clear', async () => {
-    S.settings.xkiroApiKey = '';
-    S.settings.xkiroModel = '';
+  bind('#set-ai-load', loadAiModels);
+  bind('#set-ai-test', async () => {
+    const status = aiStatus();
+    const profile = setProfile();
+    status.textContent = '⏳ Проверяю подключение...';
+    try {
+      const client = getAiClient(profile);
+      if (client.capabilities.models) await client.listModels();
+      else await client.complete({ messages: [{ role: 'user', content: 'Ответь одним словом: OK' }] });
+      status.textContent = '✅ Подключение работает';
+    } catch (error) {
+      status.textContent = `❌ ${error instanceof AiApiError ? error.message : 'Ошибка подключения'}`;
+    }
+  });
+  bind('#set-ai-clear', async () => {
+    aiKey.value = '';
+    setProfile({ apiKey: '' });
     await saveAppSettings();
-    mc.querySelector('#set-xkiro-key').value = '';
-    mc.querySelector('#set-xkiro-model').innerHTML = '<option value="">— сначала сохраните ключ —</option>';
-    mc.querySelector('#set-xkiro-model').disabled = true;
-    mc.querySelector('#set-xkiro-status').textContent = '🗑️ Ключ удалён';
+    aiStatus().textContent = '🗑️ Ключ удалён';
     showToast('🗑️ AI-ключ удалён', 'info');
   });
 
-  const xkiroModelSelect = mc.querySelector('#set-xkiro-model');
-  xkiroModelSelect?.addEventListener('change', function() {
-    S.settings.xkiroModel = this.value;
-    saveAppSettings();
-    loadXkiroModels(); // обновит статус «выбрана модель»
-  });
-
-  // Автозагрузка моделей при открытии, если ключ уже сохранён
-  if (S.settings.xkiroApiKey) loadXkiroModels();
+  // Автозагрузка моделей для уже настроенного профиля. Ollama может работать без ключа.
+  if (activeAi.apiKey || activeAi.provider === 'ollama') loadAiModels();
 
   bind('#set-lr-test', async () => {
     const appId = mc.querySelector('#set-lr-appid').value.trim();

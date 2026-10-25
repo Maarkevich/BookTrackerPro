@@ -19,7 +19,9 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  AiApiError, listModels, chatXkiro, searchXkiro, extractJson, isAiConfigured, AI_BASE,
+  AiApiError, AiProviderError, listModels, chatXkiro, searchXkiro, extractJson,
+  isAiConfigured, normalizeAiProfile, migrateAiSettings, getActiveAiProfile,
+  sanitizeAiSettingsForExport, mergeAiSettings, getAiClient, AI_BASE,
 } from '../ai.js';
 
 const KEY = 'test-key-123';
@@ -272,6 +274,133 @@ describe('searchXkiro', () => {
     const fn = stubFetch(() => jsonResponse({ results: [] }));
     await expect(searchXkiro({ apiKey: KEY, query: '   ' })).rejects.toThrow('Пустой поисковый запрос');
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider-agnostic AI client', () => {
+  it('OpenAI-compatible profile uses /v1 endpoints, Bearer and normalizes chat content', async () => {
+    const fn = stubFetch((url, init) => {
+      if (url === `${PROXY}/v1/models`) return jsonResponse({ data: [{ id: 'local/model', name: 'Local model' }] });
+      return jsonResponse({ choices: [{ message: { content: [{ type: 'text', text: 'готово' }] } }] });
+    });
+    const client = getAiClient({
+      provider: 'openai-compatible', endpoint: `${PROXY}/v1`, apiKey: KEY, model: MODEL,
+    });
+
+    await expect(client.listModels()).resolves.toEqual([{
+      id: 'local/model', name: 'Local model', description: '', tier: '', modality: '',
+    }]);
+    await expect(client.complete({
+      messages: [{ role: 'user', content: 'тест' }], json: true,
+    })).resolves.toBe('готово');
+
+    expect(fn).toHaveBeenNthCalledWith(1, `${PROXY}/v1/models`, expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${KEY}` }),
+    }));
+    const [, init] = fn.mock.calls[1];
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: MODEL,
+      messages: [{ role: 'user', content: 'тест' }],
+      response_format: { type: 'json_object' },
+    });
+  });
+
+  it('Ollama не требует API-ключа, но требует модель и endpoint', async () => {
+    const fn = stubFetch(() => jsonResponse({ choices: [{ message: { content: 'локальный ответ' } }] }));
+    const client = getAiClient({
+      provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2',
+    });
+    await expect(client.complete({ messages: [{ role: 'user', content: 'тест' }] }))
+      .resolves.toBe('локальный ответ');
+    expect(fn).toHaveBeenCalledWith('http://localhost:11434/v1/chat/completions', expect.anything());
+    expect(fn.mock.calls[0][1].headers.Authorization).toBeUndefined();
+  });
+
+  it('provider без web search возвращает нормализованную ошибку без сетевого запроса', async () => {
+    const fn = stubFetch(() => jsonResponse({ results: [] }));
+    const client = getAiClient({
+      provider: 'openai-compatible', endpoint: PROXY, apiKey: KEY, model: MODEL,
+    });
+    await expect(client.search({ query: 'книга' })).rejects.toMatchObject({
+      name: 'AiProviderError', provider: 'openai-compatible', operation: 'search', status: 0,
+      message: expect.stringContaining('не поддерживает'),
+    });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('legacy xkiro settings преобразуются в профиль без изменения исходных настроек', () => {
+    const settings = { xkiroApiKey: KEY, xkiroModel: MODEL, xkiroBaseUrl: `${PROXY}/` };
+    const profile = normalizeAiProfile(settings);
+    expect(profile).toMatchObject({
+      provider: 'xkiro', apiKey: KEY, model: MODEL, endpoint: PROXY,
+    });
+    expect(settings).toEqual({ xkiroApiKey: KEY, xkiroModel: MODEL, xkiroBaseUrl: `${PROXY}/` });
+    expect(isAiConfigured(settings)).toBe(true);
+  });
+
+  it('активный профиль из settings.ai имеет приоритет над legacy xkiro-полями', () => {
+    const profile = normalizeAiProfile({
+      xkiroApiKey: 'legacy', xkiroModel: 'legacy/model',
+      ai: {
+        activeProfileId: 'local',
+        profiles: [{ id: 'local', provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2' }],
+      },
+    });
+    expect(profile).toMatchObject({ provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2' });
+    expect(isAiConfigured({ ai: { profiles: [profile] } })).toBe(true);
+  });
+});
+
+describe('AI settings migration and export safety', () => {
+  it('migrateAiSettings creates a runtime profile and preserves legacy fields', () => {
+    const legacy = { xkiroApiKey: KEY, xkiroModel: MODEL, xkiroBaseUrl: `${PROXY}/` };
+    const migrated = migrateAiSettings(legacy);
+    expect(migrated).not.toBe(legacy);
+    expect(migrated).toMatchObject({ xkiroApiKey: KEY, xkiroModel: MODEL, xkiroBaseUrl: `${PROXY}/` });
+    expect(migrated.ai).toMatchObject({ activeProfileId: 'legacy-xkiro' });
+    expect(migrated.ai.profiles[0]).toMatchObject({
+      id: 'legacy-xkiro', provider: 'xkiro', apiKey: KEY, model: MODEL, endpoint: PROXY,
+    });
+    expect(getActiveAiProfile(legacy)).toMatchObject({ provider: 'xkiro', apiKey: KEY, model: MODEL });
+  });
+
+  it('sanitizeAiSettingsForExport removes key, auth and headers but keeps provider configuration', () => {
+    const safe = sanitizeAiSettingsForExport({
+      ai: {
+        activeProfileId: 'local',
+        profiles: [{
+          id: 'local', provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2',
+          apiKey: KEY, auth: { type: 'bearer' }, headers: { Authorization: `Bearer ${KEY}` }, futureSecret: 'must-not-export',
+        }],
+      },
+    });
+    expect(safe).toMatchObject({
+      activeProfileId: 'local',
+      profiles: [{ id: 'local', provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2' }],
+    });
+    expect(safe.profiles[0]).not.toHaveProperty('apiKey');
+    expect(safe.profiles[0]).not.toHaveProperty('auth');
+    expect(safe.profiles[0]).not.toHaveProperty('headers');
+    expect(safe.profiles[0]).not.toHaveProperty('futureSecret');
+  });
+
+  it('mergeAiSettings preserves local API key when imported backup omits it', () => {
+    const merged = mergeAiSettings(
+      { ai: { activeProfileId: 'main', profiles: [{ id: 'main', provider: 'openai-compatible', endpoint: PROXY, model: 'old', apiKey: KEY }] } },
+      { ai: { activeProfileId: 'main', profiles: [{ id: 'main', provider: 'openai-compatible', endpoint: `${PROXY}/v2`, model: 'new' }] } },
+    );
+    expect(merged.ai.profiles[0]).toMatchObject({ endpoint: `${PROXY}/v2`, model: 'new', apiKey: KEY });
+  });
+
+  it('активный профиль выбирается детерминированно, если activeProfileId повреждён', () => {
+    const migrated = migrateAiSettings({
+      ai: {
+        activeProfileId: 'missing',
+        profiles: [{ id: 'first', provider: 'ollama', model: 'a' }, { id: 'second', provider: 'ollama', model: 'b' }],
+      },
+    });
+    expect(migrated.ai.activeProfileId).toBe('first');
+    expect(migrated.ai.profiles).toHaveLength(2);
   });
 });
 

@@ -26,7 +26,7 @@
 // ─────────────────────────────────────────────
 import { saveReviewForBook, removeReviewFromBook, loadBooks, loadSettings } from './db.js';
 // 🔖 3.8.6: AI-исправление текста отзыва (клиент xKiro — ai.js)
-import { chatXkiro, isAiConfigured, AiApiError, AI_BASE } from './ai.js';
+import { getAiClient, isAiConfigured, isAiModelConfigured, AiApiError } from './ai.js';
 import { esc, safeUrl, showToast, trackOverlay, untrackOverlay, makeCardKeyboardAccessible } from './utils.js'; // 🆕 v3.8.4: было из './app.js'; 🆕 P2-17: lifecycle оверлеев; 🆕 P2-18: keyboard карточек
 import { captureQuoteByPhoto } from './ocr.js';
 import { icon } from './icons.js';
@@ -427,21 +427,18 @@ function renderReviewFormBody(body, book) {
       } catch {
         settings = null;
       }
-      if (!isAiConfigured(settings)) { showToast('⚠️ AI не настроен: Настройки → AI (xKiro)', 'error'); return; }
-      if (!settings.xkiroModel) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
+      if (!isAiConfigured(settings)) { showToast('⚠️ AI не настроен: откройте Настройки → AI-провайдер', 'error'); return; }
+      if (!isAiModelConfigured(settings)) { showToast('⚠️ Выберите AI-модель в Настройках', 'error'); return; }
 
       aiFixBtn.disabled = true;
       aiStatusEl.textContent = '⏳ Исправляю текст...';
       try {
-        const content = await chatXkiro({
-          apiKey: settings.xkiroApiKey,
-          model: settings.xkiroModel,
+        const content = await getAiClient(settings).complete({
           messages: [
             { role: 'system', content: 'Ты — редактор книжных отзывов. Исправь в тексте ошибки, пунктуацию и неудачные формулировки. Сохрани смысл, стиль и примерную длину. Не добавляй от себя ничего. Верни ТОЛЬКО исправленный текст без пояснений.' },
             { role: 'user', content: text },
           ],
           temperature: 0.3,
-          baseUrl: settings.xkiroBaseUrl || AI_BASE, // 🔖 3.8.7: CORS-прокси
         });
         const finalText = content.trim();
         textEl.value = finalText;

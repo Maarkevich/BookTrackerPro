@@ -36,6 +36,7 @@ describe('P1-4: sanitizeSettingsForExport() — allowlist настроек (db.j
     const out = sanitizeSettingsForExport({
       lrAppId: 'app1', lrSecret: 'sec1', lrPartnerId: 'pid1', lrPartnerSecret: 'psec1',
       microlinkApiKey: 'ml-key',
+      ai: { activeProfileId: 'x', profiles: [{ id: 'x', provider: 'xkiro', endpoint: 'https://proxy.example', model: 'model', apiKey: 'secret-ai' }] },
       confetti: true, sound: false, defaultPlatform: 'youtube', bloggerMode: true,
       defaultCurrency: 'RUB', showPriceInCards: true, showPriceInDetail: false, showPriceInStats: true,
       exchangeRates: { USD: 90 }, ratesUpdated: '01.01.2026',
@@ -55,6 +56,11 @@ describe('P1-4: sanitizeSettingsForExport() — allowlist настроек (db.j
     expect(out).not.toHaveProperty('lrPartnerId');
     expect(out).not.toHaveProperty('lrPartnerSecret');
     expect(out).not.toHaveProperty('microlinkApiKey');
+    expect(out.ai).toMatchObject({
+      activeProfileId: 'x',
+      profiles: [{ id: 'x', provider: 'xkiro', endpoint: 'https://proxy.example', model: 'model' }],
+    });
+    expect(out.ai.profiles[0]).not.toHaveProperty('apiKey');
   });
 
   it('B: неизвестный будущий секрет (whatEverSecret) удаляется', () => {
@@ -74,6 +80,7 @@ describe('P1-4: exportAll() — секреты не попадают в backup (
   const SECRET_SETTINGS = {
     lrAppId: 'app1', lrSecret: 'sec1', lrPartnerId: 'pid1', lrPartnerSecret: 'psec1',
     microlinkApiKey: 'ml-key',
+    ai: { activeProfileId: 'x', profiles: [{ id: 'x', provider: 'ollama', endpoint: 'http://localhost:11434', model: 'llama3.2', apiKey: 'secret-ai' }] },
     defaultCurrency: 'RUB', exchangeRates: { USD: 90 }, defaultPlatform: 'youtube', confetti: true,
   };
 
@@ -85,6 +92,8 @@ describe('P1-4: exportAll() — секреты не попадают в backup (
     expect(data.settings).not.toHaveProperty('lrPartnerId');
     expect(data.settings).not.toHaveProperty('lrPartnerSecret');
     expect(data.settings).not.toHaveProperty('microlinkApiKey');
+    expect(data.settings.ai.profiles[0]).not.toHaveProperty('apiKey');
+    expect(data.settings.ai.profiles[0]).toMatchObject({ provider: 'ollama', model: 'llama3.2' });
   });
 
   it('E: безопасные настройки сохраняются в backup', async () => {

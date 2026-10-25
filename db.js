@@ -26,6 +26,7 @@
 //      — Миграции v1→v6 без потери данных
 // ─────────────────────────────────────────────
 import { safeUrl, safeLinkUrl } from './utils.js'; // 🆕 P1-2: валидация URL при записи
+import { mergeAiSettings, sanitizeAiSettingsForExport } from './ai.js'; // provider profiles без секретов
 
 const DB_NAME = 'book-tracker-pro';
 const DB_VER = 6;
@@ -1036,12 +1037,17 @@ export function sanitizeSettingsForExport(settings) {
     'defaultCurrency', 'showPriceInCards', 'showPriceInDetail', 'showPriceInStats',
     // 🆕 v3.9.1: настройки видимости продажи — переносятся через экспорт/импорт
     'showSaleInCards', 'showSaleInDetail', 'showSaleInStats',
-    'exchangeRates', 'ratesUpdated',
+    'exchangeRates', 'ratesUpdated', 'ai',
   ];
   if (!settings || typeof settings !== 'object') return {};
   const out = {};
   for (const key of SAFE_SETTINGS_KEYS) {
-    if (key in settings) out[key] = settings[key];
+    if (key === 'ai') {
+      const ai = sanitizeAiSettingsForExport(settings);
+      if (ai) out.ai = ai;
+    } else if (key in settings) {
+      out[key] = settings[key];
+    }
   }
   return out;
 }
@@ -1188,7 +1194,10 @@ export async function importAll(data) {
     : {};
   // restore-merge: импортированные ключи заменяют локальные; локальные, которых
   // нет в backup, сохраняются.
-  const mergedSettings = { ...(existingSettings || {}), ...importedSettings };
+  const mergedSettings = mergeAiSettings(existingSettings || {}, importedSettings);
+  for (const [key, value] of Object.entries(importedSettings)) {
+    if (key !== 'ai') mergedSettings[key] = value;
+  }
   const settingsChanged = Object.keys(importedSettings).length > 0
     && JSON.stringify(mergedSettings) !== JSON.stringify(existingSettings || {});
 

@@ -30,7 +30,15 @@ export const AI_BASE = 'https://api.xkiro.com';
 export const AI_SEARCH_MODEL = 'xkiro/web-search';
 export const AI_MODELS_MODALITY = 'chat'; // модели, доступные для chat/completions
 
-/** Ошибка вызова xKiro API с «дружелюбным» текстом для UI. */
+/** Возможности провайдеров. Отсутствующая возможность не должна считаться ошибкой сети. */
+export const AI_PROVIDER_CAPABILITIES = Object.freeze({
+  xkiro: Object.freeze({ models: true, chat: true, json: true, search: true, pageFetch: true }),
+  'openai-compatible': Object.freeze({ models: true, chat: true, json: true, search: false, pageFetch: false }),
+  ollama: Object.freeze({ models: true, chat: true, json: true, search: false, pageFetch: false }),
+  'custom-http': Object.freeze({ models: false, chat: true, json: false, search: false, pageFetch: false }),
+});
+
+/** Ошибка вызова AI API с «дружелюбным» текстом для UI. */
 export class AiApiError extends Error {
   /**
    * @param {string} message — сообщение для пользователя
@@ -43,6 +51,20 @@ export class AiApiError extends Error {
     this.name = 'AiApiError';
     this.status = status;
     this.code = code;
+  }
+}
+
+/** Ошибка фасада с указанием провайдера и операции. */
+export class AiProviderError extends AiApiError {
+  constructor(message, {
+    provider = 'unknown', operation = '', status = 0, code = '', retryable = false, cause,
+  } = {}) {
+    super(message, { status, code });
+    this.name = 'AiProviderError';
+    this.provider = provider;
+    this.operation = operation;
+    this.retryable = Boolean(retryable);
+    if (cause) this.cause = cause;
   }
 }
 
@@ -113,6 +135,319 @@ async function requestJson(url, { method = 'GET', apiKey, body } = {}) {
   }
 
   return resp.json();
+}
+
+function providerLabel(provider) {
+  const labels = {
+    xkiro: 'xKiro',
+    'openai-compatible': 'OpenAI-compatible',
+    ollama: 'Ollama',
+    'custom-http': 'Custom HTTP',
+  };
+  return labels[provider] || provider || 'AI-провайдер';
+}
+
+function normalizeProviderBase(endpoint, fallback) {
+  return String(endpoint || fallback).replace(/\/+$/, '');
+}
+
+function providerEndpoint(base, path) {
+  const normalizedBase = normalizeProviderBase(base, '');
+  if (normalizedBase.endsWith('/v1') && path.startsWith('/v1/')) {
+    return normalizedBase + path.slice(3);
+  }
+  return normalizedBase + path;
+}
+
+function normalizeProviderMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new AiProviderError('Пустой запрос к AI.', { operation: 'chat' });
+  }
+  return messages.map((message) => ({
+    role: String(message?.role || 'user'),
+    content: typeof message?.content === 'string' ? message.content : String(message?.content ?? ''),
+  }));
+}
+
+function providerHeaders(profile, hasBody = false) {
+  const headers = {
+    Accept: 'application/json',
+    ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+  };
+  if (profile.apiKey) headers.Authorization = `Bearer ${profile.apiKey}`;
+  return headers;
+}
+
+async function requestProviderJson(profile, path, {
+  method = 'GET', body, operation = 'request', signal,
+} = {}) {
+  const provider = profile.provider || 'openai-compatible';
+  const url = providerEndpoint(profile.endpoint, path);
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: providerHeaders(profile, body !== undefined),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
+  } catch (cause) {
+    throw new AiProviderError(
+      `${providerLabel(provider)} недоступен. Проверьте соединение и endpoint.`,
+      { provider, operation, status: 0, retryable: true, cause }
+    );
+  }
+
+  let payload = null;
+  try { payload = await response.json(); } catch { /* общий ответ ниже */ }
+  if (!response.ok) {
+    const detail = typeof payload?.error?.message === 'string' ? payload.error.message
+      : typeof payload?.message === 'string' ? payload.message : '';
+    const status = response.status;
+    const retryable = status === 408 || status === 429 || status >= 500;
+    const suffix = detail ? `: ${detail}` : ` (HTTP ${status})`;
+    throw new AiProviderError(
+      `${providerLabel(provider)}: ошибка запроса${suffix}`,
+      { provider, operation, status, code: payload?.error?.code || payload?.code || '', retryable }
+    );
+  }
+  if (payload === null) {
+    throw new AiProviderError(`${providerLabel(provider)} вернул некорректный JSON.`, {
+      provider, operation, status: response.status,
+    });
+  }
+  return payload;
+}
+
+function normalizeProviderModels(json) {
+  const raw = Array.isArray(json) ? json : (json?.data || json?.models || []);
+  if (!Array.isArray(raw)) return [];
+  return raw.map((model) => ({
+    id: String(model?.id ?? model?.model ?? model?.name ?? ''),
+    name: typeof model?.display_name === 'string' ? model.display_name
+      : typeof model?.name === 'string' ? model.name : '',
+    description: typeof model?.description === 'string' ? model.description : '',
+    tier: typeof model?.access_tier === 'string' ? model.access_tier : '',
+    modality: typeof model?.modality === 'string' ? model.modality : '',
+  })).filter((model) => model.id);
+}
+
+function normalizeCompletionText(json) {
+  const content = json?.choices?.[0]?.message?.content ?? json?.choices?.[0]?.text;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((part) => part?.type === 'text' || typeof part?.text === 'string')
+      .map((part) => typeof part === 'string' ? part : part.text).join('');
+  }
+  return '';
+}
+
+function profileFromSettings(settings) {
+  const profiles = settings?.ai?.profiles;
+  if (Array.isArray(profiles) && profiles.length > 0) {
+    const activeId = settings.ai.activeProfileId;
+    return profiles.find((profile) => profile?.id === activeId) || profiles[0];
+  }
+  if (settings && (settings.xkiroApiKey || settings.xkiroModel || settings.xkiroBaseUrl)) {
+    return {
+      id: 'legacy-xkiro',
+      name: 'xKiro',
+      provider: 'xkiro',
+      apiKey: settings.xkiroApiKey || '',
+      model: settings.xkiroModel || '',
+      endpoint: settings.xkiroBaseUrl || AI_BASE,
+    };
+  }
+  return null;
+}
+
+function normalizeProfileRecord(profile, fallbackId = 'default') {
+  const normalized = normalizeAiProfile(profile);
+  return {
+    ...normalized,
+    id: String(profile?.id || fallbackId),
+    name: String(profile?.name || normalized.provider || 'AI'),
+  };
+}
+
+/**
+ * Мигрирует legacy xkiro* поля в runtime-формат профилей. Функция возвращает
+ * новый объект и не удаляет старые поля: старые версии приложения остаются
+ * совместимыми с той же записью IndexedDB.
+ */
+export function migrateAiSettings(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return settings || {};
+  const out = { ...settings };
+  const rawProfiles = settings.ai?.profiles;
+  if (Array.isArray(rawProfiles) && rawProfiles.length > 0) {
+    const profiles = rawProfiles
+      .filter((profile) => profile && typeof profile === 'object' && !Array.isArray(profile))
+      .map((profile, index) => normalizeProfileRecord(profile, `profile-${index + 1}`));
+    if (profiles.length > 0) {
+      const activeProfileId = profiles.some((profile) => profile.id === settings.ai.activeProfileId)
+        ? settings.ai.activeProfileId : profiles[0].id;
+      out.ai = { ...settings.ai, activeProfileId, profiles };
+    }
+    return out;
+  }
+  if (settings.xkiroApiKey || settings.xkiroModel || settings.xkiroBaseUrl) {
+    out.ai = {
+      activeProfileId: 'legacy-xkiro',
+      profiles: [normalizeProfileRecord({
+        id: 'legacy-xkiro', name: 'xKiro', provider: 'xkiro',
+        apiKey: settings.xkiroApiKey || '', model: settings.xkiroModel || '',
+        endpoint: settings.xkiroBaseUrl || AI_BASE,
+      }, 'legacy-xkiro')],
+    };
+  }
+  return out;
+}
+
+/** Возвращает активный нормализованный профиль без изменения настроек. */
+export function getActiveAiProfile(settings) {
+  return normalizeAiProfile(migrateAiSettings(settings));
+}
+
+/**
+ * Удаляет секреты из AI-профилей перед экспортом. Модель, endpoint и
+ * capabilities переносимы; apiKey/auth/headers никогда не экспортируются.
+ */
+export function sanitizeAiSettingsForExport(settings) {
+  const migrated = migrateAiSettings(settings);
+  const profiles = migrated?.ai?.profiles;
+  if (!Array.isArray(profiles) || profiles.length === 0) return undefined;
+  return {
+    activeProfileId: migrated.ai.activeProfileId,
+    profiles: profiles.map((profile) => {
+      // Явный allowlist профиля: нельзя экспортировать неизвестные будущие
+      // поля, которые могут оказаться секретами (password/token/headers и т.п.).
+      const safeProfile = {};
+      for (const key of ['id', 'name', 'provider', 'endpoint', 'model', 'options', 'endpoints']) {
+        if (key in profile) safeProfile[key] = profile[key];
+      }
+      return safeProfile;
+    }),
+  };
+}
+
+/** Сливает импортированные AI-профили с локальными, сохраняя локальные ключи. */
+export function mergeAiSettings(localSettings, importedSettings) {
+  const local = migrateAiSettings(localSettings || {});
+  const imported = migrateAiSettings(importedSettings || {});
+  const localProfiles = Array.isArray(local.ai?.profiles) ? local.ai.profiles : [];
+  const importedProfiles = Array.isArray(imported.ai?.profiles) ? imported.ai.profiles : [];
+  if (importedProfiles.length === 0) return local;
+  const byId = new Map(localProfiles.map((profile) => [profile.id, profile]));
+  const profiles = importedProfiles.map((profile) => {
+    const previous = byId.get(profile.id);
+    return {
+      ...(previous || {}), ...profile,
+      // Backup intentionally omits secrets. Empty/missing imported values must
+      // not erase a key configured locally on this device.
+      ...(previous?.apiKey && !profile.apiKey ? { apiKey: previous.apiKey } : {}),
+    };
+  });
+  const activeProfileId = profiles.some((profile) => profile.id === imported.ai.activeProfileId)
+    ? imported.ai.activeProfileId : (local.ai?.activeProfileId || profiles[0].id);
+  return { ...local, ai: { ...local.ai, ...imported.ai, activeProfileId, profiles } };
+}
+
+/** Преобразует старые xkiro* настройки в единый профиль без изменения IndexedDB. */
+export function normalizeAiProfile(profileOrSettings) {
+  const profile = profileFromSettings(profileOrSettings) || profileOrSettings || {};
+  const provider = String(profile.provider || (profileOrSettings?.provider ? profileOrSettings.provider : 'xkiro')).toLowerCase();
+  const endpoint = profile.endpoint || profile.baseUrl || (provider === 'xkiro' ? AI_BASE
+    : provider === 'ollama' ? 'http://localhost:11434' : '');
+  return {
+    ...profile,
+    provider,
+    endpoint: normalizeProviderBase(endpoint, ''),
+    apiKey: String(profile.apiKey || ''),
+    model: String(profile.model || ''),
+  };
+}
+
+/**
+ * Создаёт provider-agnostic клиент. xKiro использует старый проверенный код,
+ * OpenAI-compatible и Ollama — общий безопасный OpenAI-совместимый транспорт.
+ */
+export function getAiClient(profileOrSettings) {
+  const profile = normalizeAiProfile(profileOrSettings);
+  const provider = profile.provider;
+  const capabilities = AI_PROVIDER_CAPABILITIES[provider]
+    || AI_PROVIDER_CAPABILITIES['custom-http'];
+  const label = providerLabel(provider);
+
+  const requireModel = () => {
+    if (!profile.model) throw new AiProviderError('Не выбрана AI-модель.', {
+      provider, operation: 'chat',
+    });
+  };
+  const requireKey = () => {
+    if (!profile.apiKey && provider === 'xkiro') {
+      throw new AiProviderError(`Не задан API-ключ ${label}.`, { provider, operation: 'chat' });
+    }
+  };
+  const requireCapability = (name, operation) => {
+    if (!capabilities[name]) {
+      throw new AiProviderError(`${label} не поддерживает операцию «${operation}».`, {
+        provider, operation,
+      });
+    }
+  };
+
+  return {
+    profile,
+    provider,
+    capabilities,
+    async listModels({ signal } = {}) {
+      requireCapability('models', 'models');
+      requireKey();
+      if (provider === 'xkiro') return listModels(profile.apiKey, { baseUrl: profile.endpoint });
+      const json = await requestProviderJson(profile, '/v1/models', { operation: 'models', signal });
+      return normalizeProviderModels(json);
+    },
+    async complete({ messages, temperature = 0.3, maxTokens = 1024, json = false, signal } = {}) {
+      requireCapability('chat', 'chat');
+      requireModel();
+      requireKey();
+      if (provider === 'xkiro') {
+        return chatXkiro({
+          apiKey: profile.apiKey,
+          model: profile.model,
+          messages,
+          temperature,
+          maxTokens,
+          json,
+          baseUrl: profile.endpoint,
+        });
+      }
+      const body = {
+        model: profile.model,
+        messages: normalizeProviderMessages(messages),
+        temperature,
+        max_tokens: maxTokens,
+      };
+      if (json && capabilities.json) body.response_format = { type: 'json_object' };
+      const response = await requestProviderJson(profile, '/v1/chat/completions', {
+        method: 'POST', body, operation: 'chat', signal,
+      });
+      const text = normalizeCompletionText(response);
+      if (!text) throw new AiProviderError(`${label} не вернул текст ответа.`, {
+        provider, operation: 'chat',
+      });
+      return text;
+    },
+    async search({ query, maxResults = 5, signal } = {}) {
+      requireCapability('search', 'search');
+      requireKey();
+      return searchXkiro({ apiKey: profile.apiKey, query, maxResults, baseUrl: profile.endpoint });
+    },
+    async fetchPage({ url } = {}) {
+      requireCapability('pageFetch', 'fetch');
+      return fetchPageViaWorker({ url, baseUrl: profile.endpoint });
+    },
+  };
 }
 
 /**
@@ -245,7 +580,19 @@ export function extractJson(text) {
 
 /** Есть ли настроенный ключ (для UI-контроля). */
 export function isAiConfigured(settings) {
-  return Boolean(settings?.xkiroApiKey);
+  const profile = normalizeAiProfile(settings);
+  if (!profile.provider) return false;
+  // Старый контракт сохраняется: ключ означает, что настройка начата;
+  // наличие модели проверяется отдельным helper-ом перед операцией.
+  if (profile.provider === 'xkiro') return Boolean(profile.apiKey);
+  if (profile.provider === 'ollama') return Boolean(profile.endpoint);
+  return Boolean(profile.apiKey);
+}
+
+/** Проверяет, готов ли выбранный профиль выполнить запрос к модели. */
+export function isAiModelConfigured(settings) {
+  const profile = normalizeAiProfile(settings);
+  return Boolean(profile.model && (profile.provider === 'ollama' || profile.apiKey));
 }
 
 /**

@@ -173,6 +173,31 @@ describe('P2-2: старый backup без settings → настройки не 
   });
 });
 
+describe('P2-2: AI profiles import preserves local credentials', () => {
+  it('backup без API-ключа обновляет endpoint/model, но сохраняет локальный ключ', async () => {
+    await saveSettings({
+      ai: {
+        activeProfileId: 'main',
+        profiles: [{ id: 'main', provider: 'openai-compatible', endpoint: 'https://old.example', model: 'old', apiKey: 'local-secret' }],
+      },
+    });
+    const res = await importAll({
+      app: 'BookTrackerPro', version: 1, books: [], collections: [], challenges: [], tags: [], covers: [],
+      settings: {
+        ai: {
+          activeProfileId: 'main',
+          profiles: [{ id: 'main', provider: 'openai-compatible', endpoint: 'https://new.example', model: 'new' }],
+        },
+      },
+    });
+    expect(res.appliedSettings).toBe(1);
+    const settings = await loadSettings();
+    expect(settings.ai.profiles[0]).toMatchObject({
+      endpoint: 'https://new.example', model: 'new', apiKey: 'local-secret',
+    });
+  });
+});
+
 // ═══════════════════════════════════════════════
 //  АТОМАРНОСТЬ: сбой на любом put → настройки НЕ применены
 // ═══════════════════════════════════════════════
