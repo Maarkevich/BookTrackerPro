@@ -84,7 +84,8 @@ import {
 import * as AiClient from './ai.js';
 const {
   isAiConfigured, isAiModelConfigured, extractJson,
-  getAiClient, migrateAiSettings, getActiveAiProfile, AI_BASE
+  getAiClient, migrateAiSettings, getActiveAiProfile, AI_BASE,
+  AI_PROVIDER_DEFAULT_ENDPOINTS
 } = AiClient;
 const AiApiError = AiClient.AiApiError || class AiApiError extends Error {};
 const fetchPageViaWorker = AiClient.fetchPageViaWorker || (async () => {
@@ -4437,13 +4438,15 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('sparkles', 15)} AI-провайдер <span class="badge">заполнение · отзывы · рекомендации</span></h3>
-      <p class="hint">Можно использовать xKiro или любой OpenAI-compatible endpoint, включая Ollama и LM Studio. Ключи хранятся локально в IndexedDB и не попадают в экспорт данных.</p>
+      <p class="hint">Поддерживаются xKiro, Anthropic (Claude), Google Gemini, Ollama/LM Studio и любой OpenAI-compatible endpoint. Ключи хранятся локально в IndexedDB и не попадают в экспорт данных.</p>
       <div class="form-group">
         <label>Провайдер</label>
         <select id="set-ai-provider">
           <option value="xkiro" ${aiSettings.provider === 'xkiro' ? 'selected' : ''}>xKiro</option>
           <option value="openai-compatible" ${aiSettings.provider === 'openai-compatible' ? 'selected' : ''}>OpenAI-compatible</option>
           <option value="ollama" ${aiSettings.provider === 'ollama' ? 'selected' : ''}>Ollama (локально)</option>
+          <option value="anthropic" ${aiSettings.provider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option>
+          <option value="gemini" ${aiSettings.provider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
         </select>
       </div>
       <div class="form-group">
@@ -4665,13 +4668,22 @@ function renderSettingsTab() {
   if (aiModelInput) aiModelInput.value = activeAi.model;
 
   const currentProvider = () => aiProvider?.value || 'xkiro';
+  const providerNames = {
+    xkiro: 'xKiro',
+    'openai-compatible': 'OpenAI-compatible',
+    ollama: 'Ollama',
+    anthropic: 'Anthropic',
+    gemini: 'Google Gemini',
+  };
+  const providerDefaultEndpoint = (provider) =>
+    AI_PROVIDER_DEFAULT_ENDPOINTS?.[provider] || (provider === 'ollama' ? 'http://localhost:11434' : '');
   const setProfile = (changes = {}) => {
     const provider = currentProvider();
     const existing = getActiveAiProfile(S.settings);
     const profile = {
       ...existing,
       id: existing.id || 'default',
-      name: provider === 'xkiro' ? 'xKiro' : provider === 'ollama' ? 'Ollama' : 'OpenAI-compatible',
+      name: providerNames[provider] || provider || 'AI',
       provider,
       apiKey: aiKey?.value.trim() || '',
       endpoint: aiEndpoint?.value.trim().replace(/\/+$/, '') || undefined,
@@ -4699,12 +4711,18 @@ function renderSettingsTab() {
     const isOllama = provider === 'ollama';
     if (mc.querySelector('#set-ai-key-badge')) mc.querySelector('#set-ai-key-badge').textContent = isOllama ? 'не нужен для Ollama' : 'хранится локально';
     if (aiKey) { aiKey.disabled = isOllama; aiKey.placeholder = isOllama ? 'Для Ollama ключ не нужен' : 'API-ключ провайдера'; }
-    if (aiEndpoint) aiEndpoint.placeholder = provider === 'xkiro' ? 'https://api.xkiro.com или URL прокси' : isOllama ? 'http://localhost:11434' : 'https://api.example.com';
+    if (aiEndpoint) aiEndpoint.placeholder = provider === 'xkiro' ? 'https://api.xkiro.com или URL прокси'
+      : provider === 'ollama' ? 'http://localhost:11434'
+        : provider === 'anthropic' ? 'https://api.anthropic.com'
+          : provider === 'gemini' ? 'https://generativelanguage.googleapis.com'
+            : 'https://api.example.com';
     const hint = mc.querySelector('#set-ai-endpoint-hint');
     if (hint) hint.textContent = provider === 'xkiro'
       ? 'Для xKiro из браузера обычно нужен CORS-прокси. Пустой endpoint использует api.xkiro.com.'
       : isOllama ? 'Ollama работает локально на этом устройстве. На мобильном устройстве endpoint может быть недоступен.'
-        : 'Endpoint должен поддерживать OpenAI-compatible /v1/models и /v1/chat/completions.';
+        : provider === 'anthropic' ? 'Пустой endpoint использует api.anthropic.com. Запросы из браузера отправляются с официальным заголовком Anthropic.'
+          : provider === 'gemini' ? 'Пустой endpoint использует generativelanguage.googleapis.com. Ключ передаётся заголовком, не в URL.'
+            : 'Endpoint должен поддерживать OpenAI-compatible /v1/models и /v1/chat/completions.';
   };
   updateAiHints();
 
@@ -4737,8 +4755,16 @@ function renderSettingsTab() {
 
   aiProvider?.addEventListener('change', async () => {
     const provider = currentProvider();
-    if (provider === 'ollama' && !aiEndpoint.value.trim()) aiEndpoint.value = 'http://localhost:11434';
-    if (provider === 'xkiro' && !aiEndpoint.value.trim()) aiEndpoint.value = '';
+    const knownDefaults = new Set([
+      '', AI_BASE, 'http://localhost:11434',
+      'https://api.anthropic.com', 'https://generativelanguage.googleapis.com',
+    ]);
+    const current = aiEndpoint?.value.trim().replace(/\/+$/, '') || '';
+    if (aiEndpoint && knownDefaults.has(current)) {
+      const next = providerDefaultEndpoint(provider);
+      // Для xKiro пустое поле означает api.xkiro.com — оставляем его пустым.
+      aiEndpoint.value = next && next !== AI_BASE ? next : '';
+    }
     setProfile();
     updateAiHints();
     await saveAppSettings();

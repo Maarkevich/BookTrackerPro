@@ -35,7 +35,17 @@ export const AI_PROVIDER_CAPABILITIES = Object.freeze({
   xkiro: Object.freeze({ models: true, chat: true, json: true, search: true, pageFetch: true }),
   'openai-compatible': Object.freeze({ models: true, chat: true, json: true, search: false, pageFetch: false }),
   ollama: Object.freeze({ models: true, chat: true, json: true, search: false, pageFetch: false }),
+  anthropic: Object.freeze({ models: true, chat: true, json: false, search: false, pageFetch: false }),
+  gemini: Object.freeze({ models: true, chat: true, json: true, search: false, pageFetch: false }),
   'custom-http': Object.freeze({ models: false, chat: true, json: false, search: false, pageFetch: false }),
+});
+
+/** Endpoint по умолчанию для провайдеров с собственным API-протоколом. */
+export const AI_PROVIDER_DEFAULT_ENDPOINTS = Object.freeze({
+  xkiro: AI_BASE,
+  ollama: 'http://localhost:11434',
+  anthropic: 'https://api.anthropic.com',
+  gemini: 'https://generativelanguage.googleapis.com',
 });
 
 /** Ошибка вызова AI API с «дружелюбным» текстом для UI. */
@@ -142,6 +152,8 @@ function providerLabel(provider) {
     xkiro: 'xKiro',
     'openai-compatible': 'OpenAI-compatible',
     ollama: 'Ollama',
+    anthropic: 'Anthropic',
+    gemini: 'Google Gemini',
     'custom-http': 'Custom HTTP',
   };
   return labels[provider] || provider || 'AI-провайдер';
@@ -151,10 +163,18 @@ function normalizeProviderBase(endpoint, fallback) {
   return String(endpoint || fallback).replace(/\/+$/, '');
 }
 
+const API_VERSION_SUFFIXES = ['/v1beta', '/v1'];
+
+/**
+ * Собирает URL из base + path. Если base уже содержит версию API
+ * (/v1 или /v1beta), она не дублируется.
+ */
 function providerEndpoint(base, path) {
   const normalizedBase = normalizeProviderBase(base, '');
-  if (normalizedBase.endsWith('/v1') && path.startsWith('/v1/')) {
-    return normalizedBase + path.slice(3);
+  for (const suffix of API_VERSION_SUFFIXES) {
+    if (normalizedBase.toLowerCase().endsWith(suffix) && path.startsWith(`${suffix}/`)) {
+      return normalizedBase + path.slice(suffix.length);
+    }
   }
   return normalizedBase + path;
 }
@@ -170,11 +190,22 @@ function normalizeProviderMessages(messages) {
 }
 
 function providerHeaders(profile, hasBody = false) {
+  const provider = profile.provider || 'openai-compatible';
   const headers = {
     Accept: 'application/json',
     ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
   };
-  if (profile.apiKey) headers.Authorization = `Bearer ${profile.apiKey}`;
+  if (provider === 'anthropic') {
+    if (profile.apiKey) headers['x-api-key'] = profile.apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+    // Anthropic требует этот заголовок для запросов из браузера.
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  } else if (provider === 'gemini') {
+    // Ключ передаётся заголовком, а НЕ query-параметром: не попадает в логи URL.
+    if (profile.apiKey) headers['x-goog-api-key'] = profile.apiKey;
+  } else if (profile.apiKey) {
+    headers.Authorization = `Bearer ${profile.apiKey}`;
+  }
   return headers;
 }
 
@@ -238,6 +269,134 @@ function normalizeCompletionText(json) {
   if (Array.isArray(content)) {
     return content.filter((part) => part?.type === 'text' || typeof part?.text === 'string')
       .map((part) => typeof part === 'string' ? part : part.text).join('');
+  }
+  return '';
+}
+
+/** Gemini возвращает модели как {name: 'models/...', displayName, description}. */
+function normalizeGeminiModels(json) {
+  const raw = Array.isArray(json?.models) ? json.models : [];
+  return raw
+    .filter((model) => {
+      const methods = model?.supportedGenerationMethods;
+      return !Array.isArray(methods) || methods.includes('generateContent');
+    })
+    .map((model) => ({
+      id: String(model?.name || '').replace(/^models\//, ''),
+      name: typeof model?.displayName === 'string' ? model.displayName : '',
+      description: typeof model?.description === 'string' ? model.description : '',
+      tier: '',
+      modality: 'chat',
+    }))
+    .filter((model) => model.id);
+}
+
+function normalizeProviderModelsFor(provider, json) {
+  return provider === 'gemini' ? normalizeGeminiModels(json) : normalizeProviderModels(json);
+}
+
+function providerModelsPath(provider) {
+  return provider === 'gemini' ? '/v1beta/models' : '/v1/models';
+}
+
+function mergeSameRole(messages) {
+  const merged = [];
+  for (const message of messages) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === message.role) last.content += `\n\n${message.content}`;
+    else merged.push({ ...message });
+  }
+  return merged;
+}
+
+/** Anthropic и Gemini принимают system-инструкции отдельным полем. */
+function splitSystemMessages(messages) {
+  const system = [];
+  const rest = [];
+  for (const message of messages) {
+    if (message.role === 'system') system.push(message.content);
+    else rest.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content });
+  }
+  return { system: system.join('\n\n'), messages: mergeSameRole(rest) };
+}
+
+/**
+ * Строит URL и тело chat-запроса под конкретный провайдер.
+ * OpenAI-compatible/Ollama — /v1/chat/completions, Anthropic — /v1/messages,
+ * Gemini — /v1beta/models/{model}:generateContent.
+ */
+function buildProviderChatRequest(provider, profile, {
+  messages, temperature, maxTokens, json,
+}) {
+  const normalized = normalizeProviderMessages(messages);
+
+  if (provider === 'anthropic') {
+    const { system, messages: chat } = splitSystemMessages(normalized);
+    if (chat.length === 0) chat.push({ role: 'user', content: 'Продолжи.' });
+    if (chat[0].role !== 'user') chat.unshift({ role: 'user', content: 'Продолжи.' });
+    const body = {
+      model: profile.model,
+      max_tokens: maxTokens,
+      messages: chat,
+      temperature,
+    };
+    if (system) body.system = system;
+    return { path: '/v1/messages', body };
+  }
+
+  if (provider === 'gemini') {
+    const { system, messages: chat } = splitSystemMessages(normalized);
+    const contents = chat.map((message) => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    }));
+    if (contents.length === 0) contents.push({ role: 'user', parts: [{ text: 'Продолжи.' }] });
+    if (contents[0].role !== 'user') contents.unshift({ role: 'user', parts: [{ text: 'Продолжи.' }] });
+    const generationConfig = { temperature, maxOutputTokens: maxTokens };
+    if (json) generationConfig.responseMimeType = 'application/json';
+    const body = { contents, generationConfig };
+    if (system) body.systemInstruction = { parts: [{ text: system }] };
+    const modelId = String(profile.model || '').replace(/^models\//, '');
+    // Кодируем только сегменты пути: tunedModels/<id> должен сохранить слеш.
+    const modelPath = modelId.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    return { path: `/v1beta/models/${modelPath}:generateContent`, body };
+  }
+
+  const body = {
+    model: profile.model,
+    messages: normalized,
+    temperature,
+    max_tokens: maxTokens,
+  };
+  if (json) body.response_format = { type: 'json_object' };
+  return { path: '/v1/chat/completions', body };
+}
+
+/** Извлекает текст ответа из формата конкретного провайдера. */
+function normalizeProviderCompletionText(provider, json) {
+  if (provider === 'anthropic') {
+    const parts = Array.isArray(json?.content) ? json.content : [];
+    return parts
+      .filter((part) => part?.type === 'text' || typeof part?.text === 'string')
+      .map((part) => typeof part === 'string' ? part : String(part.text ?? ''))
+      .join('');
+  }
+  if (provider === 'gemini') {
+    const parts = json?.candidates?.[0]?.content?.parts;
+    if (!Array.isArray(parts)) return '';
+    return parts.filter((part) => typeof part?.text === 'string').map((part) => part.text).join('');
+  }
+  return normalizeCompletionText(json);
+}
+
+/** Причина пустого ответа (блокировка/отказ) — для понятной ошибки UI. */
+function providerBlockedReason(provider, json) {
+  if (provider === 'gemini') {
+    const reason = json?.promptFeedback?.blockReason || json?.candidates?.[0]?.finishReason;
+    return typeof reason === 'string' && reason !== 'STOP' ? reason : '';
+  }
+  if (provider === 'anthropic') {
+    return json?.stop_reason === 'refusal' ? 'refusal' : '';
   }
   return '';
 }
@@ -356,8 +515,7 @@ export function mergeAiSettings(localSettings, importedSettings) {
 export function normalizeAiProfile(profileOrSettings) {
   const profile = profileFromSettings(profileOrSettings) || profileOrSettings || {};
   const provider = String(profile.provider || (profileOrSettings?.provider ? profileOrSettings.provider : 'xkiro')).toLowerCase();
-  const endpoint = profile.endpoint || profile.baseUrl || (provider === 'xkiro' ? AI_BASE
-    : provider === 'ollama' ? 'http://localhost:11434' : '');
+  const endpoint = profile.endpoint || profile.baseUrl || AI_PROVIDER_DEFAULT_ENDPOINTS[provider] || '';
   return {
     ...profile,
     provider,
@@ -384,7 +542,9 @@ export function getAiClient(profileOrSettings) {
     });
   };
   const requireKey = () => {
-    if (!profile.apiKey && provider === 'xkiro') {
+    // Ключ обязателен для облачных протоколов. Локальные endpoint
+    // (Ollama) и OpenAI-совместимые прокси без авторизации остаются рабочими.
+    if (!profile.apiKey && (provider === 'xkiro' || provider === 'anthropic' || provider === 'gemini')) {
       throw new AiProviderError(`Не задан API-ключ ${label}.`, { provider, operation: 'chat' });
     }
   };
@@ -404,8 +564,8 @@ export function getAiClient(profileOrSettings) {
       requireCapability('models', 'models');
       requireKey();
       if (provider === 'xkiro') return listModels(profile.apiKey, { baseUrl: profile.endpoint });
-      const json = await requestProviderJson(profile, '/v1/models', { operation: 'models', signal });
-      return normalizeProviderModels(json);
+      const json = await requestProviderJson(profile, providerModelsPath(provider), { operation: 'models', signal });
+      return normalizeProviderModelsFor(provider, json);
     },
     async complete({ messages, temperature = 0.3, maxTokens = 1024, json = false, signal } = {}) {
       requireCapability('chat', 'chat');
@@ -422,20 +582,22 @@ export function getAiClient(profileOrSettings) {
           baseUrl: profile.endpoint,
         });
       }
-      const body = {
-        model: profile.model,
-        messages: normalizeProviderMessages(messages),
-        temperature,
-        max_tokens: maxTokens,
-      };
-      if (json && capabilities.json) body.response_format = { type: 'json_object' };
-      const response = await requestProviderJson(profile, '/v1/chat/completions', {
-        method: 'POST', body, operation: 'chat', signal,
+      const request = buildProviderChatRequest(provider, profile, {
+        messages, temperature, maxTokens, json: Boolean(json && capabilities.json),
       });
-      const text = normalizeCompletionText(response);
-      if (!text) throw new AiProviderError(`${label} не вернул текст ответа.`, {
-        provider, operation: 'chat',
+      const response = await requestProviderJson(profile, request.path, {
+        method: 'POST', body: request.body, operation: 'chat', signal,
       });
+      const text = normalizeProviderCompletionText(provider, response);
+      if (!text) {
+        const reason = providerBlockedReason(provider, response);
+        throw new AiProviderError(
+          reason
+            ? `${label} не вернул текст ответа (причина: ${reason}).`
+            : `${label} не вернул текст ответа.`,
+          { provider, operation: 'chat' }
+        );
+      }
       return text;
     },
     async search({ query, maxResults = 5, signal } = {}) {

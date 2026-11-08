@@ -351,6 +351,155 @@ describe('provider-agnostic AI client', () => {
   });
 });
 
+describe('Anthropic adapter', () => {
+  it('listModels: GET /v1/models с x-api-key и anthropic-version', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      data: [{ id: 'claude-sonnet-4-5', display_name: 'Claude Sonnet 4.5', type: 'model' }],
+    }));
+    const client = getAiClient({ provider: 'anthropic', apiKey: KEY, model: 'claude-sonnet-4-5' });
+    await expect(client.listModels()).resolves.toEqual([{
+      id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', description: '', tier: '', modality: '',
+    }]);
+    expect(fn).toHaveBeenCalledWith('https://api.anthropic.com/v1/models', expect.objectContaining({
+      headers: expect.objectContaining({
+        'x-api-key': KEY,
+        'anthropic-version': '2023-06-01',
+      }),
+    }));
+    expect(fn.mock.calls[0][1].headers.Authorization).toBeUndefined();
+  });
+
+  it('complete: POST /v1/messages, system вынесен отдельно, JSON-режим не отправляется', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      content: [{ type: 'text', text: 'Ответ Claude' }], stop_reason: 'end_turn',
+    }));
+    const client = getAiClient({
+      provider: 'anthropic', endpoint: `${PROXY}/v1`, apiKey: KEY, model: 'claude-sonnet-4-5',
+    });
+    await expect(client.complete({
+      messages: [
+        { role: 'system', content: 'Ты помощник' },
+        { role: 'user', content: 'Привет' },
+      ],
+      json: true,
+    })).resolves.toBe('Ответ Claude');
+    expect(fn).toHaveBeenCalledWith(`${PROXY}/v1/messages`, expect.anything());
+    const body = JSON.parse(fn.mock.calls[0][1].body);
+    expect(body).toMatchObject({
+      model: 'claude-sonnet-4-5',
+      system: 'Ты помощник',
+      messages: [{ role: 'user', content: 'Привет' }],
+    });
+    expect(body).not.toHaveProperty('response_format');
+  });
+
+  it('пустой ответ с остановкой refusal → понятная ошибка', async () => {
+    stubFetch(() => jsonResponse({ content: [], stop_reason: 'refusal' }));
+    const client = getAiClient({ provider: 'anthropic', apiKey: KEY, model: 'claude-sonnet-4-5' });
+    await expect(client.complete({ messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ name: 'AiProviderError', message: expect.stringContaining('refusal') });
+  });
+
+  it('без ключа запрос не выполняется', async () => {
+    const fn = stubFetch(() => jsonResponse({}));
+    const client = getAiClient({ provider: 'anthropic', model: 'claude-sonnet-4-5' });
+    await expect(client.complete({ messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ name: 'AiProviderError', message: expect.stringContaining('API-ключ') });
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('Google Gemini adapter', () => {
+  it('listModels: GET /v1beta/models, ключ в заголовке (не в URL), только generateContent', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      models: [
+        {
+          name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash',
+          supportedGenerationMethods: ['generateContent', 'countTokens'],
+        },
+        {
+          name: 'models/text-embedding-004', displayName: 'Embedding',
+          supportedGenerationMethods: ['embedContent'],
+        },
+      ],
+    }));
+    const client = getAiClient({ provider: 'gemini', apiKey: KEY, model: 'gemini-2.5-flash' });
+    await expect(client.listModels()).resolves.toEqual([{
+      id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: '', tier: '', modality: 'chat',
+    }]);
+    const [url, init] = fn.mock.calls[0];
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(url).not.toContain(KEY);
+    expect(init.headers['x-goog-api-key']).toBe(KEY);
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it('complete: POST /v1beta/models/{id}:generateContent, systemInstruction и JSON mime', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      candidates: [{ content: { parts: [{ text: '{"title":"Книга"}' }] }, finishReason: 'STOP' }],
+    }));
+    const client = getAiClient({
+      provider: 'gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta',
+      apiKey: KEY, model: 'models/gemini-2.5-flash',
+    });
+    await expect(client.complete({
+      messages: [
+        { role: 'system', content: 'Верни JSON' },
+        { role: 'user', content: 'Книга' },
+      ],
+      json: true,
+    })).resolves.toBe('{"title":"Книга"}');
+    const [url, init] = fn.mock.calls[0];
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({
+      contents: [{ role: 'user', parts: [{ text: 'Книга' }] }],
+      systemInstruction: { parts: [{ text: 'Верни JSON' }] },
+      generationConfig: { responseMimeType: 'application/json' },
+    });
+  });
+
+  it('assistant-сообщения маппятся в role=model и склеиваются с соседними', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+    }));
+    const client = getAiClient({ provider: 'gemini', apiKey: KEY, model: 'gemini-2.5-flash' });
+    await client.complete({
+      messages: [
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: 'b' },
+        { role: 'assistant', content: 'c' },
+        { role: 'user', content: 'd' },
+      ],
+    });
+    const body = JSON.parse(fn.mock.calls[0][1].body);
+    expect(body.contents).toEqual([
+      { role: 'user', parts: [{ text: 'a' }] },
+      { role: 'model', parts: [{ text: 'b\n\nc' }] },
+      { role: 'user', parts: [{ text: 'd' }] },
+    ]);
+  });
+
+  it('tunedModels/<id>: слеш в имени модели не кодируется', async () => {
+    const fn = stubFetch(() => jsonResponse({
+      candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+    }));
+    const client = getAiClient({
+      provider: 'gemini', apiKey: KEY, model: 'tunedModels/my-tune-123',
+    });
+    await client.complete({ messages: [{ role: 'user', content: 'x' }] });
+    expect(fn.mock.calls[0][0])
+      .toBe('https://generativelanguage.googleapis.com/v1beta/models/tunedModels/my-tune-123:generateContent');
+  });
+
+  it('блокировка ответа → понятная ошибка без пустого текста', async () => {
+    stubFetch(() => jsonResponse({ promptFeedback: { blockReason: 'SAFETY' }, candidates: [] }));
+    const client = getAiClient({ provider: 'gemini', apiKey: KEY, model: 'gemini-2.5-flash' });
+    await expect(client.complete({ messages: [{ role: 'user', content: 'x' }] }))
+      .rejects.toMatchObject({ name: 'AiProviderError', message: expect.stringContaining('SAFETY') });
+  });
+});
+
 describe('AI settings migration and export safety', () => {
   it('migrateAiSettings creates a runtime profile and preserves legacy fields', () => {
     const legacy = { xkiroApiKey: KEY, xkiroModel: MODEL, xkiroBaseUrl: `${PROXY}/` };
@@ -431,7 +580,11 @@ describe('extractJson', () => {
 
 describe('контракт безопасности: ключей в коде нет', () => {
   it('исходник ai.js не содержит захардкоженных секретов', () => {
-    const src = readFileSync(new URL('../ai.js', import.meta.url), 'utf8');
+    // anthropic-dangerous-direct-browser-access — публичный документированный
+    // заголовок Anthropic (не секрет), поэтому исключаем его из проверки
+    // «длинных случайных строк».
+    const src = readFileSync(new URL('../ai.js', import.meta.url), 'utf8')
+      .replace(/anthropic-dangerous-direct-browser-access/g, '');
     // не должно быть токенов вида sk-..., строк из 32+ hex/base64 символов-секретов
     expect(src.match(/sk-[A-Za-z0-9]{8,}/)).toBeNull();
     expect(src.match(/[A-Za-z0-9_-]{40,}/)).toBeNull();
