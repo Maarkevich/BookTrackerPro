@@ -92,10 +92,12 @@ const fetchPageViaWorker = AiClient.fetchPageViaWorker || (async () => {
   throw new AiApiError('AI-клиент устарел. Обновите приложение и повторите попытку.');
 });
 // 🔖 3.9.1 этап 5–6: клиентский extractor + AI-нормализация результата
-import { extractPage } from './extract.js';
+import { extractPage, PAGE_QUALITY_STATUSES } from './extract.js';
 import {
   AI_NORMALIZE_SYSTEM, normalizeAiResult, toPreviewData, isRussianSourceUrl, sourceTypeByDomain,
 } from './normalize.js';
+// 🔖 3.9.5: единый реестр источников для отчёта о загрузке страниц.
+import { getSourceEntry, normalizeSourceHost } from './sources.js';
 import { registerSW, setupOnlineIndicator, registerPendingSync } from './sw-register.js';
 import { showConfirm, attachCustomSelect, attachDatePicker } from './uikit.js';
 import { icon, statusIcon, contentTypeIcon, CONTENT_TYPE_ICONS, CONTENT_STATUS_ICONS } from './icons.js';
@@ -2612,23 +2614,161 @@ function filterSourceResults(results) {
   return preferred.length ? preferred : results;
 }
 
+// ═══════════════════════════════════════════════
+//  🔖 3.9.5: единый отчёт об источниках
+// ═══════════════════════════════════════════════
+/**
+ * Человекочитаемые состояния источника (source report). `tone` задаёт цвет
+ * в UI: ok — зелёный, warn — оранжевый, bad — красный, muted — серый.
+ */
+export const SOURCE_REPORT_STATUS = Object.freeze({
+  ok: Object.freeze({ icon: '✅', label: 'загружено', tone: 'ok' }),
+  partial: Object.freeze({ icon: '⚠️', label: 'неполная страница', tone: 'warn' }),
+  requires_js: Object.freeze({ icon: '⚠️', label: 'нужен JavaScript', tone: 'warn' }),
+  captcha: Object.freeze({ icon: '🚫', label: 'CAPTCHA', tone: 'bad' }),
+  cloudflare: Object.freeze({ icon: '🚫', label: 'Cloudflare', tone: 'bad' }),
+  blocked: Object.freeze({ icon: '🚫', label: 'доступ закрыт', tone: 'bad' }),
+  network_error: Object.freeze({ icon: '❌', label: 'ошибка загрузки', tone: 'bad' }),
+  unsupported: Object.freeze({ icon: '—', label: 'вне списка источников', tone: 'muted' }),
+});
+
+/** Только http(s)-URL попадают в отчёт и ссылки «открыть». */
+function reportUrl(value) {
+  const raw = String(value || '').trim();
+  return /^https?:\/\//i.test(raw) ? raw : '';
+}
+
+/** Нормализует и дедуплицирует предупреждения отчёта. */
+function reportWarnings(list) {
+  return [...new Set((Array.isArray(list) ? list : []).map((w) => String(w || '').trim()).filter(Boolean))].slice(0, 8);
+}
+
+/**
+ * Одна запись отчёта об источнике. Чистая функция: не ходит в сеть и не
+ * трогает DOM. Принимает либо распарсенную страницу (page.quality), либо
+ * ошибку загрузки, либо признак «домен вне реестра».
+ *
+ * @param {{url?:string}} result — результат поиска
+ * @param {{page?:object|null, error?:Error|null, unsupported?:boolean}} [opts]
+ * @returns {{url:string, domain:string, type:string, label:string,
+ *   status:string, httpStatus:number, usable:boolean, needsManual:boolean,
+ *   reason:string, warnings:string[]}}
+ */
+export function buildSourceReportEntry(result = {}, { page = null, error = null, unsupported = false } = {}) {
+  const url = reportUrl(result?.url || page?.url || '');
+  const directEntry = getSourceEntry(url);
+  const domain = String(page?.domain || directEntry?.domain || normalizeSourceHost(url) || '').toLowerCase();
+  const entry = getSourceEntry(domain) || directEntry;
+  const quality = page?.quality || null;
+  const type = entry?.type || sourceTypeByDomain(domain || url);
+  const label = entry?.label || domain || String(result?.source || '').trim();
+
+  let status = 'network_error';
+  let httpStatus = 0;
+  let usable = false;
+  let needsManual = true;
+  let reason = '';
+
+  if (unsupported) {
+    status = 'unsupported';
+    reason = 'Источник вне списка поддерживаемых книжных сайтов — автоматическая загрузка недоступна.';
+  } else if (error) {
+    const code = Number(error.status) || 0;
+    httpStatus = code;
+    const message = String(error.message || '').trim();
+    // 403/429/451/503 от Worker — это блокировка источника, а не сеть.
+    status = [403, 429, 451, 503].includes(code) || /captcha|блокиров|cloudflare/i.test(message)
+      ? 'blocked'
+      : 'network_error';
+    reason = message || 'Не удалось загрузить источник.';
+  } else if (page) {
+    const qStatus = String(quality?.status || '');
+    status = PAGE_QUALITY_STATUSES.includes(qStatus) ? qStatus : (page.text ? 'ok' : 'requires_js');
+    httpStatus = Number(quality?.httpStatus ?? page.status) || 0;
+    usable = quality?.usable !== false;
+    needsManual = Boolean(quality?.needsManual);
+    reason = String(quality?.reason || '').trim();
+  }
+
+  return {
+    url,
+    domain,
+    type,
+    label,
+    status,
+    httpStatus,
+    usable,
+    needsManual,
+    reason,
+    warnings: reportWarnings(page?.warnings),
+  };
+}
+
+/**
+ * HTML-отчёт об источниках: статус каждой страницы, причина и ссылка
+ * «открыть» для ручного сценария. Все данные экранируются, URL проходят
+ * через safeLinkUrl (javascript:/data: не попадают в href).
+ *
+ * @param {Array<object>} report — записи buildSourceReportEntry
+ * @param {{title?:string}} [opts]
+ * @returns {string}
+ */
+export function renderSourceReport(report, { title = 'Источники' } = {}) {
+  const list = (Array.isArray(report) ? report : []).filter(Boolean);
+  if (!list.length) return '';
+  const rows = list.map((s) => {
+    const meta = SOURCE_REPORT_STATUS[s.status] || { icon: '•', label: s.status || 'неизвестно', tone: 'muted' };
+    const label = s.label || s.domain || 'источник';
+    const href = safeLinkUrl(s.url);
+    const open = href ? ` · <a href="${escAttr(href)}" target="_blank" rel="noopener noreferrer">открыть</a>` : '';
+    const http = s.httpStatus ? ` · HTTP ${esc(String(s.httpStatus))}` : '';
+    const reason = s.reason ? `<div class="source-report-reason">${esc(s.reason)}</div>` : '';
+    return `<div class="source-report-row" data-tone="${escAttr(meta.tone)}">
+      <div class="source-report-head">
+        <span class="source-report-name">${meta.icon} ${esc(label)}</span>
+        <span class="source-report-state">${esc(meta.label)}${http}${open}</span>
+      </div>${reason}</div>`;
+  }).join('');
+  const manualCount = list.filter((s) => s.needsManual && s.status !== 'unsupported').length;
+  const hint = manualCount
+    ? `<div class="source-report-hint">${manualCount} источник(ов) недоступны автоматически — откройте страницу вручную и заполните форму.</div>`
+    : '';
+  return `<div class="source-report" role="status">
+    <div class="source-report-title">${icon('link', 12)} ${esc(title)} (${list.length})</div>
+    ${hint}${rows}
+  </div>`;
+}
+
 /**
  * 🔖 3.9.1 §3B: подгружает страницы найденных источников через Worker и
- * парсит их клиентским extractor. Недоступные страницы молча пропускаются.
+ * парсит их клиентским extractor. Возвращает пригодные для AI страницы и
+ * единый отчёт по ВСЕМ проверенным источникам (включая заблокированные):
+ * недоступные страницы больше не пропадают молча.
  * @param {Array<{url:string}>} results
  * @param {number} [limit]
+ * @returns {Promise<{pages: object[], report: object[]}>}
  */
-async function loadSourcePages(results, limit = 4) {
+export async function loadSourcePages(results, limit = 4) {
   const pages = [];
-  for (const r of results.slice(0, limit)) {
-    if (!isRussianSourceUrl(r.url)) continue;
+  const report = [];
+  const list = Array.isArray(results) ? results.slice(0, Math.max(0, limit)) : [];
+  for (const r of list) {
+    const url = String(r?.url || '');
+    if (!isRussianSourceUrl(url)) {
+      report.push(buildSourceReportEntry(r, { unsupported: true }));
+      continue;
+    }
     try {
-      const env = await getAiClient(S.settings).fetchPage({ url: r.url });
-      pages.push(extractPage(env));
-    } catch { /* страница недоступна — пропускаем */ }
-    if (pages.length >= limit) break;
+      const env = await getAiClient(S.settings).fetchPage({ url });
+      const page = extractPage(env);
+      const entry = buildSourceReportEntry(r, { page });
+      report.push(entry);
+      if (entry.usable) pages.push(page);
+    } catch (e) {
+      report.push(buildSourceReportEntry(r, { error: e }));
+    }
   }
-  return pages;
+  return { pages, report };
 }
 
 // ═══════════════════════════════════════════════
@@ -2674,7 +2814,8 @@ async function handleAiBookSearch(fb, options = {}) {
           <div class="web-result-meta">${esc(r.snippet || '').slice(0, 160)}${r.source ? ' · ' + esc(r.source) : ''}${r.publicationDate ? ' · ' + esc(r.publicationDate) : ''}</div>
         </div>
       </div>
-    `).join('')}`;
+    `).join('')}
+    <div id="bf-ai-report"></div>`;
 
     applyCoverFallback(resultsEl);
     resultsEl.querySelector('#bf-ai-merge')?.addEventListener('click', async () => {
@@ -2684,14 +2825,18 @@ async function handleAiBookSearch(fb, options = {}) {
       mergeBtn.textContent = '⏳ Собираю данные и цены...';
       try {
         const queryIsbn = isIsbnQuery ? cleanISBN(query) : '';
-        const pages = await loadSourcePages(results);
-        const result = await aiNormalizeBookFromSources({ query, searchResults: results, pages, queryIsbn });
+        const { pages, report } = await loadSourcePages(results);
+        const result = await aiNormalizeBookFromSources({ query, searchResults: results, pages, queryIsbn, sourceReport: report });
         const data = toPreviewData(result, { queryIsbn });
         const applied = await openAiDataPreview(fb, data, { fallbackCover: results.find(r => r.thumbnail)?.thumbnail || '', normalized: result, ...previewOptions });
 
-        resultsEl.querySelector('.form-hint')?.insertAdjacentHTML('afterend', applied
+        // 🔖 3.9.5: единый отчёт показывает, какие источники загрузились,
+        // а какие требуют ручного открытия.
+        const statusHtml = applied
           ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Сводные данные применены — проверьте и сохраните.</div>'
-          : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, данные не изменены.</div>');
+          : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, данные не изменены.</div>';
+        const reportEl = resultsEl.querySelector('#bf-ai-report');
+        if (reportEl) reportEl.innerHTML = renderSourceReport(report, { title: 'Источники' }) + statusHtml;
       } catch (e) {
         mergeBtn.disabled = false;
         mergeBtn.textContent = '✨ Собрать данные из всех источников';
@@ -2714,39 +2859,68 @@ async function handleAiBookSearch(fb, options = {}) {
 
 /**
  * 🔖 3.8.8: обработка ссылки на страницу книги в AI-поиске.
- * Microlink извлекает поля со страницы → AI обогащает (серия, возраст,
- * цена, теги...) → прозрачный предпросмотр. Если Microlink не справился —
- * фолбэк на xKiro web-поиск по адресу.
+ * 🔖 3.9.5: основной путь — Worker /fetch + extractor + AI-нормализация с
+ * единым отчётом об источнике. Заблокированные страницы (CAPTCHA,
+ * Cloudflare, HTTP 403) не отбрасываются молча: пользователь видит причину,
+ * ссылку «открыть» и может переключиться на резервный путь Microlink + AI.
+ * Для доменов вне реестра сразу используется резервный путь.
  */
 async function handleAiBookLink(fb, url, previewOptions = {}) {
   const resultsEl = fb.querySelector('#bf-ai-results');
 
-  // 🔖 3.9.1 §3A: основная ветка — Worker /fetch + клиентский extractor +
-  // AI-нормализация единой схемы (§6). Домен обязан входить в разрешённый
-  // список источников; иначе — мягкий фолбэк на прежний путь Microlink + AI.
-  if (isRussianSourceUrl(url)) {
-    resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Загружаю страницу (Worker) и извлекаю данные...</div>';
-    try {
-      const env = await getAiClient(S.settings).fetchPage({ url });
-      const page = extractPage(env);
-      const queryIsbn = (page.isbnCandidates || [])[0] || '';
-      const result = await aiNormalizeBookFromSources({ query: url, pages: [page], queryIsbn });
-      const preview = toPreviewData(result, { queryIsbn });
-      const applied = await openAiDataPreview(fb, preview, {
-        fallbackCover: page.meta?.['og:image'] || page.images?.[0]?.url || '',
-        normalized: result,
-        ...previewOptions,
-      });
-      resultsEl.innerHTML = applied
-        ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
-        : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
-      return;
-    } catch (e) {
-      if (!(e instanceof AiApiError)) throw e;
-      // Worker/страница недоступны — продолжаем прежним путём (Microlink + AI).
-    }
+  if (!isRussianSourceUrl(url)) {
+    await handleAiBookLinkFallback(fb, url, previewOptions);
+    return;
   }
 
+  resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Загружаю страницу (Worker) и извлекаю данные...</div>';
+  const { pages, report } = await loadSourcePages([{ url }], 1);
+  const reportHtml = renderSourceReport(report, { title: 'Источник' });
+  const page = pages[0] || null;
+
+  const showManualFallback = (messageHtml = '') => {
+    resultsEl.innerHTML = `${reportHtml}
+      ${messageHtml}
+      <div class="source-report-actions">
+        <button type="button" id="bf-ai-manual-fallback" class="btn-secondary">Попробовать Microlink + AI</button>
+      </div>
+      <div class="text-center text-muted text-small" style="padding:10px">Страница не загружена автоматически — откройте её вручную и заполните поля.</div>`;
+    resultsEl.querySelector('#bf-ai-manual-fallback')?.addEventListener('click', () => {
+      handleAiBookLinkFallback(fb, url, previewOptions);
+    });
+  };
+
+  if (!page) {
+    showManualFallback();
+    return;
+  }
+
+  try {
+    const queryIsbn = (page.isbnCandidates || [])[0] || '';
+    const result = await aiNormalizeBookFromSources({ query: url, pages: [page], queryIsbn, sourceReport: report });
+    const preview = toPreviewData(result, { queryIsbn });
+    const applied = await openAiDataPreview(fb, preview, {
+      fallbackCover: page.meta?.['og:image'] || page.images?.[0]?.url || '',
+      normalized: result,
+      ...previewOptions,
+    });
+    const statusHtml = applied
+      ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
+      : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
+    resultsEl.innerHTML = reportHtml + statusHtml;
+  } catch (e) {
+    if (!(e instanceof AiApiError)) throw e;
+    showManualFallback(`<div class="text-center text-muted text-small" style="padding:10px">❌ ${esc(e.message)}</div>`);
+  }
+}
+
+/**
+ * Резервный путь обработки ссылки: Microlink извлекает поля со страницы →
+ * AI обогащает (серия, возраст, цена, теги...) → прозрачный предпросмотр.
+ * Если Microlink не справился — фолбэк на web-поиск по адресу.
+ */
+async function handleAiBookLinkFallback(fb, url, previewOptions = {}) {
+  const resultsEl = fb.querySelector('#bf-ai-results');
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Обрабатываю ссылку (Microlink + AI)...</div>';
   try {
     const mic = await extractBookPreview(url);
@@ -2769,7 +2943,7 @@ async function handleAiBookLink(fb, url, previewOptions = {}) {
     }
     const data = await aiExtractBookFields(url, pseudo);
     if (!data) throw new AiApiError('AI вернул данные, которые не удалось разобрать');
-     const applied = await openAiDataPreview(fb, data, { fallbackCover: pseudo.thumbnail, ...previewOptions });
+    const applied = await openAiDataPreview(fb, data, { fallbackCover: pseudo.thumbnail, ...previewOptions });
 
     resultsEl.innerHTML = applied
       ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
@@ -2784,15 +2958,15 @@ async function fillAiFormFromSearch(fb, result, query, previewOptions = {}) {
   resultsEl.innerHTML = '<div class="text-center text-muted text-small" style="padding:14px"><div class="spinner" style="margin:0 auto 8px;width:26px;height:26px"></div>Извлекаю данные книги...</div>';
   try {
     const queryIsbn = /^\d{10,13}$/.test(cleanISBN(query)) ? cleanISBN(query) : '';
-    const pages = await loadSourcePages([result], 1);
-    const norm = await aiNormalizeBookFromSources({ query, searchResults: [result], pages, queryIsbn });
+    const { pages, report } = await loadSourcePages([result], 1);
+    const norm = await aiNormalizeBookFromSources({ query, searchResults: [result], pages, queryIsbn, sourceReport: report });
     const data = toPreviewData(norm, { queryIsbn });
     // 🔖 3.8.8: прозрачность — показываем, что AI нашёл, и что применить
-     const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail, normalized: norm, ...previewOptions });
-
-    resultsEl.innerHTML = applied
+    const applied = await openAiDataPreview(fb, data, { fallbackCover: result.thumbnail, normalized: norm, ...previewOptions });
+    const statusHtml = applied
       ? '<div class="text-center text-small" style="padding:10px;color:var(--green)">✅ Поля заполнены — проверьте и сохраните.</div>'
       : '<div class="text-center text-muted text-small" style="padding:10px">Предпросмотр закрыт, ничего не изменено.</div>';
+    resultsEl.innerHTML = renderSourceReport(report, { title: 'Источник' }) + statusHtml;
   } catch (e) {
     resultsEl.innerHTML = `<div class="text-center text-muted text-small" style="padding:14px">❌ ${esc(e instanceof AiApiError ? e.message : 'Ошибка')}</div>`;
   }
@@ -2997,11 +3171,17 @@ function openAiDataPreview(fb, data, opts = {}) {
       <details class="mt-16">
         <summary class="text-small text-muted" style="cursor:pointer">Источники (${sourcesInfo.length})</summary>
         <div style="margin-top:8px">
-          ${sourcesInfo.map(s => `<div class="text-small" style="padding:4px 0;border-bottom:1px solid var(--border-color,#333)">
-            <span>${confirmedSet.has(s.url) ? '✅' : '⚠️'}</span>
-            <span class="text-muted">${esc(s.domain || '')}${s.type ? ` · ${esc(s.type)}` : ''}</span>
+          ${sourcesInfo.map(s => {
+            const state = SOURCE_REPORT_STATUS[s.status];
+            const blocked = state && state.tone === 'bad';
+            const mark = confirmedSet.has(s.url) ? '✅' : blocked ? state.icon : '⚠️';
+            const stateText = state && s.status !== 'ok' ? ` · ${state.icon} ${esc(state.label)}` : '';
+            return `<div class="text-small" style="padding:4px 0;border-bottom:1px solid var(--border-color,#333)">
+            <span>${mark}</span>
+            <span class="text-muted">${esc(s.domain || '')}${s.type ? ` · ${esc(s.type)}` : ''}${stateText}</span>
             ${s.url ? ` <a href="${escAttr(safeLinkUrl(s.url))}" target="_blank" rel="noopener noreferrer">открыть</a>` : ''}
-          </div>`).join('')}
+          </div>`;
+          }).join('')}
         </div>
       </details>` : '';
     const confidenceHtml = Number(data.confidence) > 0 ? `<span class="text-small text-muted"> · уверенность ~${Math.round(Number(data.confidence) * 100)}%</span>` : '';
@@ -3212,9 +3392,12 @@ async function aiExtractBookFields(query, searchResult, extraHints = '') {
  * 🔖 3.9.1 этап 6 (§3, §6, §9): AI-нормализация по распарсенным страницам
  * и/или результатам поиска. Возвращает каноническую схему normalizeAiResult
  * с источниками (url/domain/тип/ISBN), кандидатами цен и обложек.
- * @param {{query:string, pages?:object[], searchResults?:object[], queryIsbn?:string}} p
+ * 🔖 3.9.5: sourceReport добавляет в §9 недоступные источники (CAPTCHA,
+ * Cloudflare, HTTP-блокировка, сеть) — они видны в предпросмотре, а не
+ * исчезают молча.
+ * @param {{query:string, pages?:object[], searchResults?:object[], queryIsbn?:string, sourceReport?:object[]}} p
  */
-async function aiNormalizeBookFromSources({ query, pages = [], searchResults = [], queryIsbn = '' }) {
+async function aiNormalizeBookFromSources({ query, pages = [], searchResults = [], queryIsbn = '', sourceReport = [] }) {
   const blocks = [];
   pages.filter(Boolean).forEach((pg, i) => {
     const isbns = (pg.isbnCandidates || []).slice(0, 5).join(', ');
@@ -3254,10 +3437,29 @@ async function aiNormalizeBookFromSources({ query, pages = [], searchResults = [
     fields: ['page'],
     warnings: pg.warnings || [],
   }));
+  // 🔖 3.9.5: источники, которые не удалось прочитать автоматически, тоже
+  // попадают в §9 — с причиной и предупреждением. Это делает предпросмотр
+  // честным: пользователь видит, что часть источников пропущена.
+  const reportSources = (Array.isArray(sourceReport) ? sourceReport : [])
+    .filter((r) => r && r.url && r.usable === false)
+    .map((r) => ({
+      url: r.url,
+      originalUrl: r.url,
+      domain: r.domain,
+      type: r.type || sourceTypeByDomain(r.domain),
+      status: r.status || 'network_error',
+      snippet: String(r.reason || '').slice(0, 300),
+      fields: [],
+      warnings: [r.reason, ...(r.warnings || [])].filter(Boolean),
+    }));
   const combined = {
     ...raw,
     book: raw.book || raw,
-    sources: [...(Array.isArray(raw.sources) ? raw.sources : []), ...pageSources],
+    sources: [
+      ...(Array.isArray(raw.sources) ? raw.sources : []),
+      ...pageSources,
+      ...reportSources,
+    ],
   };
   return normalizeAiResult(combined);
 }
@@ -4525,7 +4727,7 @@ function renderSettingsTab() {
     </div>
     <div class="settings-section">
       <h3>${icon('gear', 15)} О приложении</h3>
-      <p class="hint">Book Tracker Pro v3.9.4 · Трекер книг для бук-блогера · Работает оффлайн</p>
+      <p class="hint">Book Tracker Pro v3.9.5 · Трекер книг для бук-блогера · Работает оффлайн</p>
     </div>
   `;
 
