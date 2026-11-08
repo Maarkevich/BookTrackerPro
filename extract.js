@@ -419,6 +419,119 @@ export function findPriceCandidates(container) {
 }
 
 // ═══════════════════════════════════════════════
+//  Качество страницы: блокировки, CAPTCHA, SPA
+// ═══════════════════════════════════════════════
+/** Статусы качества страницы (envelope.quality.status). */
+export const PAGE_QUALITY_STATUSES = [
+  'ok', 'partial', 'requires_js', 'captcha', 'cloudflare', 'blocked',
+];
+
+// Cloudflare — только сильные маркеры challenge-страницы. Обычный сайт
+// за Cloudflare может содержать слово "cloudflare" в служебных скриптах,
+// поэтому одиночное совпадение само по себе не считается блокировкой.
+const CLOUDFLARE_RE = /(just a moment|checking your browser|cf-browser-verification|cf_chl_|attention required[^\n]{0,40}cloudflare|cloudflare ray id|enable javascript and cookies to continue)/i;
+// CAPTCHA/анти-бот. Проверяется с ограничением по «тонкому» контенту,
+// чтобы скрипт reCAPTCHA в форме отзывов на нормальной странице не давал
+// ложную блокировку.
+const CAPTCHA_RE = /(captcha|recaptcha|hcaptcha|я не робот|подтвердите,?\s+что\s+вы\s+не\s+робот|введите\s+(?:код|символы)\s+с\s+картинки|robot check|verify\s+(?:that\s+)?you\s+are\s+human)/i;
+const BLOCK_RE = /(access denied|доступ\s+(?:ограничен|запрещ[её]н)|403 forbidden|request forbidden|unusual traffic|too many requests|слишком много запросов|verify\s+you\s+are\s+human)/i;
+
+const BAD_HTTP_STATUSES = new Set([401, 403, 404, 410, 429, 451, 503]);
+const LOW_CONTENT_CHARS = 1500;
+
+const QUALITY_WARNINGS = {
+  cloudflare: ['Источник защищён Cloudflare — автоматическая загрузка невозможна. Откройте страницу вручную.'],
+  captcha: ['Источник требует проверки CAPTCHA — автоматическая загрузка невозможна. Откройте страницу вручную.'],
+  requires_js: ['Страница содержит мало данных — возможно, содержимое подгружается JavaScript.'],
+};
+
+function blockedWarning(httpStatus) {
+  return `Источник заблокировал автоматический доступ${httpStatus ? ` (HTTP ${httpStatus})` : ''}. Откройте страницу вручную.`;
+}
+
+function qualityReason(status, httpStatus) {
+  switch (status) {
+    case 'partial': return 'Страница загружена не полностью — часть данных может отсутствовать.';
+    case 'requires_js': return 'Мало видимого текста — содержимое может подгружаться JavaScript.';
+    case 'captcha': return 'Требуется проверка CAPTCHA.';
+    case 'cloudflare': return 'Защита Cloudflare блокирует автоматическую загрузку.';
+    case 'blocked': return httpStatus ? `Источник вернул HTTP ${httpStatus}.` : 'Источник ограничил автоматический доступ.';
+    default: return '';
+  }
+}
+
+/**
+ * Классифицирует качество страницы (envelope extractor или сырой ответ
+ * Worker): ok / partial / requires_js / captcha / cloudflare / blocked.
+ *
+ * Чистая функция: ничего не исполняет и не ходит в сеть. CAPTCHA/Cloudflare
+ * определяются по заголовку и «тонкому» контенту; на страницах с достаточным
+ * видимым текстом или Book/Product JSON-LD служебные скрипты не считаются
+ * блокировкой (защита от ложных срабатываний).
+ *
+ * @param {object} page — {status, title, text, html, jsonLd, hasBookSchema,
+ *   requiresJs, truncated, warnings}
+ * @returns {{status:string, httpStatus:number, blocked:boolean, captcha:boolean,
+ *   cloudflare:boolean, requiresJs:boolean, partial:boolean, empty:boolean,
+ *   truncated:boolean, usable:boolean, needsManual:boolean,
+ *   reason:string, warnings:string[]}}
+ */
+export function classifyPageQuality(page = {}) {
+  const httpStatus = Number(page.status) || 0;
+  const title = String(page.title || '').trim();
+  const text = normalizeText(page.text || '');
+  // Для envelope html уже очищен; для сырого ответа Worker — исходный HTML.
+  const htmlHead = String(page.html || '').slice(0, 50000);
+  const warnings = Array.isArray(page.warnings) ? page.warnings.map(String).filter(Boolean) : [];
+  const jsonLd = Array.isArray(page.jsonLd) ? page.jsonLd : [];
+  const hasSchema = page.hasBookSchema === true
+    || (jsonLd.length > 0 && hasBookSchema(jsonLd));
+  const truncated = Boolean(page.truncated);
+  const textLen = text.length;
+  const thin = textLen < MIN_TEXT_FOR_JS;
+  const lowContent = !hasSchema && textLen < LOW_CONTENT_CHARS;
+  const empty = textLen === 0 && !hasSchema && !title;
+
+  const probe = `${title}\n${text.slice(0, 6000)}`;
+  const cloudflare = CLOUDFLARE_RE.test(title)
+    || (lowContent && (CLOUDFLARE_RE.test(text) || CLOUDFLARE_RE.test(htmlHead)));
+  const captcha = CAPTCHA_RE.test(title)
+    || (lowContent && (CAPTCHA_RE.test(text) || CAPTCHA_RE.test(htmlHead)));
+  const blockedHttp = BAD_HTTP_STATUSES.has(httpStatus);
+  const blockedMarker = BLOCK_RE.test(title) || (lowContent && BLOCK_RE.test(probe));
+  const requiresJs = typeof page.requiresJs === 'boolean'
+    ? page.requiresJs
+    : thin || (!hasSchema && textLen < 600);
+
+  let status = 'ok';
+  if (cloudflare) status = 'cloudflare';
+  else if (captcha) status = 'captcha';
+  else if (blockedHttp || blockedMarker) status = 'blocked';
+  else if (empty || requiresJs) status = 'requires_js';
+  else if (truncated || warnings.length > 0 || (!hasSchema && textLen < 600)) status = 'partial';
+
+  const qualityWarnings = status === 'blocked'
+    ? [blockedWarning(httpStatus)]
+    : [...(QUALITY_WARNINGS[status] || [])];
+
+  return {
+    status,
+    httpStatus,
+    blocked: status === 'blocked',
+    captcha: status === 'captcha',
+    cloudflare: status === 'cloudflare',
+    requiresJs: status === 'requires_js' || requiresJs,
+    partial: status === 'partial',
+    empty,
+    truncated,
+    usable: !['blocked', 'captcha', 'cloudflare'].includes(status),
+    needsManual: ['blocked', 'captcha', 'cloudflare', 'requires_js'].includes(status),
+    reason: qualityReason(status, httpStatus),
+    warnings: qualityWarnings,
+  };
+}
+
+// ═══════════════════════════════════════════════
 //  Главная функция
 // ═══════════════════════════════════════════════
 function absolutize(url, base) {
@@ -464,7 +577,7 @@ export function extractPage(worker = {}) {
   if (!title) warnings.push('Не удалось определить заголовок страницы.');
   if (jsonLd.length === 0) warnings.push('На странице нет JSON-LD — данные могут быть неполными.');
 
-  return {
+  const envelope = {
     url: worker.url || '',
     canonicalUrl,
     domain,
@@ -481,9 +594,21 @@ export function extractPage(worker = {}) {
     isbnCandidates,
     priceCandidates,
     requiresJs,
+    truncated: Boolean(worker.truncated),
     warnings,
     extractedAt: new Date().toISOString(),
   };
+
+  // 🔖 3.9.4: единая классификация качества страницы. Сырой HTML передан
+  // отдельно — после cleanContent служебные маркеры Cloudflare/CAPTCHA
+  // могут быть уже удалены. Предупреждения классификатора добавляются к
+  // warnings без дублей.
+  const quality = classifyPageQuality({ ...envelope, html: htmlRaw });
+  for (const w of quality.warnings) {
+    if (!warnings.includes(w)) warnings.push(w);
+  }
+  envelope.quality = quality;
+  return envelope;
 }
 
 function safeHost(url) {

@@ -19,7 +19,8 @@ import { describe, expect, it } from 'vitest';
 import {
   extractPage, cleanContent, extractJsonLd, extractMeta, extractImages,
   extractLinks, findIsbnCandidates, findPriceCandidates, stripTracking,
-  canonicalizeUrl, normalizeText, hasBookSchema,
+  canonicalizeUrl, normalizeText, hasBookSchema, classifyPageQuality,
+  PAGE_QUALITY_STATUSES,
 } from '../extract.js';
 
 const BASE = 'https://www.litres.ru/book/author/master-i-margarita-123456/';
@@ -291,5 +292,127 @@ describe('extractPage — полный envelope (§4)', () => {
     } finally {
       globalThis.DOMParser = saved;
     }
+  });
+});
+
+describe('classifyPageQuality — качество страницы (3.9.4)', () => {
+  const CONTENT = 'Описание книги и характеристики издания. '.repeat(80); // > 1500 символов
+
+  it('контракт статусов: ok / partial / requires_js / captcha / cloudflare / blocked', () => {
+    expect(PAGE_QUALITY_STATUSES).toEqual([
+      'ok', 'partial', 'requires_js', 'captcha', 'cloudflare', 'blocked',
+    ]);
+  });
+
+  it('полноценная книга с JSON-LD → ok, usable, без ручного flow', () => {
+    const env = extractPage(workerEnvelope(bookPage()));
+    expect(env.quality.status).toBe('ok');
+    expect(env.quality.usable).toBe(true);
+    expect(env.quality.needsManual).toBe(false);
+    expect(env.quality.warnings).toEqual([]);
+  });
+
+  it('SPA-оболочка без текста → requires_js, empty, needsManual', () => {
+    const env = extractPage(workerEnvelope('<html><head><title>Загрузка…</title></head><body><div id="root"></div></body></html>'));
+    expect(env.quality.status).toBe('requires_js');
+    expect(env.quality.requiresJs).toBe(true);
+    expect(env.quality.usable).toBe(true);
+    expect(env.quality.needsManual).toBe(true);
+    // предупреждение о JavaScript не дублируется (dedupe с envelope)
+    expect(env.warnings.filter((w) => /JavaScript/i.test(w))).toHaveLength(1);
+  });
+
+  it('Cloudflare challenge → cloudflare, usable=false, ручной flow', () => {
+    const html = '<html><head><title>Just a moment...</title></head>'
+      + '<body><p>Checking your browser before accessing litres.ru.</p></body></html>';
+    const env = extractPage(workerEnvelope(html));
+    expect(env.quality.status).toBe('cloudflare');
+    expect(env.quality.cloudflare).toBe(true);
+    expect(env.quality.usable).toBe(false);
+    expect(env.quality.needsManual).toBe(true);
+    expect(env.warnings.join(' ')).toMatch(/Cloudflare/i);
+  });
+
+  it('CAPTCHA-страница → captcha, usable=false, ручной flow', () => {
+    const html = '<html><head><title>Ой!</title></head><body>'
+      + '<p>Подтвердите, что вы не робот</p><div class="g-recaptcha" data-sitekey="x"></div></body></html>';
+    const env = extractPage(workerEnvelope(html));
+    expect(env.quality.status).toBe('captcha');
+    expect(env.quality.captcha).toBe(true);
+    expect(env.quality.usable).toBe(false);
+    expect(env.warnings.join(' ')).toMatch(/CAPTCHA/);
+  });
+
+  it('HTTP 403/429 на нормальной разметке → blocked с кодом статуса', () => {
+    for (const status of [403, 429]) {
+      const env = extractPage(workerEnvelope(bookPage(), { status }));
+      expect(env.quality.status, `HTTP ${status}`).toBe('blocked');
+      expect(env.quality.blocked).toBe(true);
+      expect(env.quality.usable).toBe(false);
+      expect(env.warnings.join(' ')).toContain(`HTTP ${status}`);
+    }
+  });
+
+  it('ложное срабатывание исключено: reCAPTCHA-скрипт на содержательной странице', () => {
+    const html = '<html><head><title>Мастер и Маргарита</title></head><body><main>'
+      + `<h1>Мастер и Маргарита</h1><p>${CONTENT}</p>`
+      + '<form><script src="https://www.google.com/recaptcha/api.js"></script></form>'
+      + '</main></body></html>';
+    const env = extractPage(workerEnvelope(html));
+    expect(env.quality.captcha).toBe(false);
+    expect(env.quality.blocked).toBe(false);
+    expect(['captcha', 'blocked', 'cloudflare']).not.toContain(env.quality.status);
+    expect(env.quality.usable).toBe(true);
+  });
+
+  it('обрезанный HTML → partial, но страница остаётся usable', () => {
+    const env = extractPage(workerEnvelope(bookPage(), { truncated: true }));
+    expect(env.quality.status).toBe('partial');
+    expect(env.quality.partial).toBe(true);
+    expect(env.quality.truncated).toBe(true);
+    expect(env.quality.usable).toBe(true);
+  });
+
+  it('классификатор работает на сыром ответе Worker (без envelope)', () => {
+    const q = classifyPageQuality({
+      status: 200,
+      title: '',
+      text: '',
+      html: '<html><body><div id="app"></div><script>boot()</script></body></html>',
+      warnings: [],
+    });
+    expect(q.status).toBe('requires_js');
+    expect(q.empty).toBe(true);
+    expect(q.usable).toBe(true);
+
+    const cf = classifyPageQuality({
+      status: 200,
+      title: '',
+      text: '',
+      html: '<html><title>Checking your browser</title><body>Just a moment...</body></html>',
+    });
+    expect(cf.status).toBe('cloudflare');
+  });
+
+  it('содержательная страница без предупреждений → ok (не partial)', () => {
+    const q = classifyPageQuality({
+      status: 200,
+      title: 'Книга',
+      text: CONTENT,
+      hasBookSchema: false,
+      jsonLd: [],
+      warnings: [],
+      truncated: false,
+    });
+    expect(q.status).toBe('ok');
+    expect(q.usable).toBe(true);
+  });
+
+  it('легитимный пустой статус/битые поля не бросают исключений', () => {
+    const q = classifyPageQuality();
+    expect(q.status).toBe('requires_js');
+    expect(q.httpStatus).toBe(0);
+    expect(q.empty).toBe(true);
+    expect(q.reason).toBeTruthy();
   });
 });

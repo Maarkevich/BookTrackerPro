@@ -31,6 +31,7 @@
 // ═══════════════════════════════════════════════════════════════════
 import { cleanISBN, isbn10to13, validateISBN } from './isbn.js';
 import { PRICE_TYPES, SOURCE_TYPES } from './db.js';
+import { getSourceEntry, isRegisteredSource } from './sources.js';
 
 export const AI_NORMALIZE_SYSTEM = [
   'Ты — библиографический нормализатор BookTrackerPro. Тебе дают данные',
@@ -58,13 +59,6 @@ const BOOK_TEXT_FIELDS = ['title', 'author', 'isbn', 'genre', 'publisher', 'publ
 const NUMERIC_FIELDS = ['pageCount', 'seriesNumber', 'seriesTotal'];
 const CONFLICT_FIELDS = ['title', 'author', 'isbn', 'publisher', 'publishedDate', 'pageCount', 'series'];
 
-const DOMAIN_TYPE_MAP = [
-  { re: /(^|\.)(eksmo|ast|rosman|mann-ivanov-ferber)\.ru$/i, type: 'publisher' },
-  { re: /(^|\.)rsl\.ru$/i, type: 'library' },
-  { re: /(^|\.)(findbook)\.ru$/i, type: 'catalog' },
-  { re: /(^|\.)(litres|chitai-gorod|bookvoed)\.ru$/i, type: 'shop' },
-];
-
 // ═══════════════════════════════════════════════
 //  Хелперы
 // ═══════════════════════════════════════════════
@@ -88,17 +82,17 @@ function hostOf(url) {
   try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; }
 }
 
-/** Тип источника по домену (§9). */
+/**
+ * Тип источника по домену (§9). Делегирует единому реестру sources.js;
+ * неизвестный домен → 'catalog' (прежний контракт сохранён).
+ */
 export function sourceTypeByDomain(domain) {
-  const d = String(domain || '').toLowerCase();
-  for (const { re, type } of DOMAIN_TYPE_MAP) if (re.test(d)) return type;
-  return 'catalog';
+  return getSourceEntry(domain)?.type || 'catalog';
 }
 
-/** URL входит в разрешённые книжные домены? */
+/** URL входит в разрешённые книжные домены? (единый реестр sources.js) */
 export function isRussianSourceUrl(url) {
-  const host = hostOf(url);
-  return DOMAIN_TYPE_MAP.some(({ re }) => re.test(host));
+  return isRegisteredSource(url);
 }
 
 // ═══════════════════════════════════════════════
